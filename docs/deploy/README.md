@@ -258,3 +258,13 @@ docker inspect --format='{{index .RepoDigests 0}}' postgres:16.4
 | 备份与恢复演练 | 待签字 | 演练记录 | |
 
 > 以上任一项未完成，不得进入生产发布；生产发布仍须 `release.yml` 与院方书面确认。
+
+## 13. 已知安全发现（Semgrep，2026-11-12）
+
+- `web` 容器使用官方 `nginx:1.27-alpine` 镜像，**master 进程以 root 启动**（绑定 80/443 所需），
+  worker 进程以 `nginx` 用户运行；Semgrep `dockerfile.security.missing-user` 会报此问题。
+  当前按"官方镜像最小权限工作进程 + 只读静态资源 + 无写挂载"接受为**部署评审例外**，
+  已登记 `docs/ci/README.md` §10 与 `docs/ci/audit-exceptions.md`。
+- 加固路径（M6 上线准备）：改用 `nginxinc/nginx-unprivileged`（监听 8080，映射 80/8080）
+  或自建非 root 镜像；Docker 可用后实测再切换，切换前不得开启公网暴露。
+- 该问题不影响代码验收，但生产上线前必须关闭（列入 M6 检查单）。

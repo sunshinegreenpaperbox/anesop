@@ -2,7 +2,7 @@
 
 > 状态：**远端 GitHub 组织与仓库尚未建立**，本文件是保护规则的唯一书面约定，待远端建立后按第 5、7 节落地为 GitHub Ruleset / Branch protection。
 > 规则来源：`AGENTS.md`「提交、PR 与评审」、`docs/ai/corpus/CONTEXT_CORE.md` 第 5 节。
-> 维护：S0-01 起草；S0-04 落地 CI 后核对必需检查名称。
+> 维护：S0-01 起草；S0-04 已把必需检查名与 `.github/workflows/ci.yml` 的 job `name` 对齐（2026-11-12）。
 
 ## 1. 基本约束
 
@@ -21,9 +21,10 @@
 
 ## 2. 必需状态检查（Required status checks）
 
-以下检查全部为必需，任一失败、跳过或超时即阻断合并。检查名称以 S0-04 工作流 job 名为准，落地时同步本表：
+以下检查全部为必需，任一失败、跳过或超时即阻断合并。检查名称已与 S0-04 工作流
+（`.github/workflows/ci.yml`）的 job `name` 对齐；GitHub 分支保护按该名称匹配：
 
-| # | 检查名（建议） | 内容 | 阻断条件 |
+| # | 检查名（Workflow job name） | 内容 | 阻断条件 |
 |---|---|---|---|
 | 1 | `ci/lint` | ESLint + Prettier + Checkstyle + ShellCheck | 任一 error |
 | 2 | `ci/typecheck` | `vue-tsc --noEmit` + Java 编译 | 类型/编译错误 |
@@ -35,6 +36,12 @@
 | 8 | `ci/secret-scan` | gitleaks / GitHub secret scanning | 命中密钥或凭据 |
 | 9 | `ci/image-scan` | 镜像 Trivy 扫描 | HIGH/CRITICAL 可修复漏洞（Docker 不可用期间标记 `EXT-08`，不阻断合入但记录豁免） |
 | 10 | `ci/e2e-smoke` | Playwright 冒烟（至少 E2E-01/02/03/04/05 子集） | 冒烟用例失败 |
+
+工作流内部 job id → 检查名映射（仅实现细节；分支保护只勾选上表 10 个 name）：
+`lint`→`ci/lint`、`typecheck`→`ci/typecheck`、`unit-test`→`ci/unit-test`、
+`contract`→`ci/contract`、`build`→`ci/build`、`sast`→`ci/sast`、
+`deps-license`→`ci/deps-license`、`secret-scan`→`ci/secret-scan`、
+`image-scan`→`ci/image-scan`、`e2e-smoke`→`ci/e2e-smoke`。
 
 补充要求：
 
@@ -88,18 +95,20 @@
 
 ## 6. 远端未建时的本地等价检查
 
-在 GitHub 组织、Actions 与分支保护可用之前，用以下本地流程做等价把关（结果贴入 PR 或交接单）：
+在 GitHub 组织、Actions 与分支保护可用之前，用以下本地流程做等价把关（结果贴入 PR 或交接单）。
+S0-04 起用 `bash scripts/ci-local.sh [--fast]` 按 CI job 逐项等价执行，也可用
+`--job ci/<name>` 只跑单项；`SKIP` 仅代表本机工具不可用（见 `docs/ci/README.md`）：
 
 | 远端门禁 | 本地等价操作 |
 |---|---|
-| lint / typecheck | `./scripts/check.sh`（S0-03 起）；或 `pnpm lint` + `pnpm -C apps/web exec vue-tsc --noEmit` |
-| 单测与覆盖率 | `./scripts/mvn.sh -B verify`；`pnpm test:unit --coverage` |
-| 契约 | `npx spectral lint packages/contracts/openapi/*.yaml`；`oasdiff breaking <base> <head>`（S0-05 起） |
-| 构建 | `./scripts/mvn.sh -B -DskipTests package`；`pnpm build` |
-| 密钥扫描 | `gitleaks detect --no-banner`（若本机可用）；不可用时人工检查 `git diff` 是否含密钥、`.env`、`*.pem` |
-| 依赖与许可证 | 核对 `docs/deps/allowlist.md`，`git diff --stat pnpm-lock.yaml pom.xml` |
-| 镜像扫描 | Docker 不可用（EXT-08），记录豁免并在 CI 恢复后补扫 |
-| E2E 冒烟 | 环境就绪前以集成测试 + 手工冒烟清单替代，记录命令与结果 |
+| lint / typecheck | `bash scripts/ci-local.sh --job ci/lint`；`--job ci/typecheck`（或 `./scripts/check.sh`） |
+| 单测与覆盖率 | `bash scripts/ci-local.sh --job ci/unit-test`（`./scripts/mvn.sh -B verify` + `pnpm test:unit`） |
+| 契约 | `bash scripts/ci-local.sh --job ci/contract`（spectral + oasdiff + 生成物漂移） |
+| 构建 | `bash scripts/ci-local.sh --job ci/build`（`mvn package` + `pnpm build`） |
+| 密钥扫描 | `bash scripts/ci-local.sh --job ci/secret-scan`（gitleaks 不可用时 SKIP）；同时人工检查 `git diff` 是否含密钥、`.env`、`*.pem` |
+| 依赖与许可证 | `bash scripts/ci-local.sh --job ci/deps-license`（白名单 + `pnpm audit` + `pnpm licenses`）；并核对 `docs/deps/allowlist.md` 与 lockfile diff |
+| 镜像扫描 | `bash scripts/ci-local.sh --job ci/image-scan`：Docker 不可用（EXT-08）时按设计 SKIP，CI 恢复后补扫 |
+| E2E 冒烟 | `bash scripts/ci-local.sh --job ci/e2e-smoke`；浏览器未安装时 SKIP，环境就绪前以集成测试 + 手工冒烟清单替代并记录 |
 | 直推保护 | 合入前 `git log --oneline main..HEAD` 自检；只允许 squash，`git merge --squash` |
 | 改动规模 | `git diff --stat main...HEAD` 人工核对 ≤400 行 |
 | 分支存活 | `git for-each-ref --sort=committerdate --format='%(refname:short) %(committerdate:short)' refs/heads` 检查超期分支 |

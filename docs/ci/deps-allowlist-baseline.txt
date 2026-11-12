@@ -1,0 +1,17 @@
+# 依赖白名单历史缺口（S0-04 ratchet，禁止新增）
+
+> 规则：新依赖必须先进 `docs/deps/allowlist.md`（AGENTS H-05）；本文件只登记 S0-04
+> 落地时已存在、但 allowlist 尚未逐条列出的**直接依赖**。每行必须带
+> `expires=YYYY-MM-DD`，到期后 `docs/ci/check-deps-license.py` 会失败。
+>
+> 到期：2026-12-18（M1 前与 JaCoCo ratchet 同批清理）。
+> 维护：S0-04；清除动作 = 在 `docs/deps/allowlist.md` 补行后删除对应行。
+
+# Spring Framework 基础模块（Apache-2.0，由 Spring Boot BOM 锁定版本）
+org.springframework:spring-context      # expires=2026-12-18 owner=架构师 reason=Boot 传递基础模块，模块 pom 显式声明用于编译
+org.springframework:spring-aop          # expires=2026-12-18 owner=架构师 reason=审计切面 @Aspect 支撑，Boot BOM 管理版本
+# AspectJ weaver（EPL-2.0，随 spring-boot-starter-aop 传递；仅构建/运行期织入，不修改交付源码）
+org.aspectj:aspectjweaver               # expires=2026-12-18 owner=架构师 reason=EPL-2.0 需在 allowlist 登记法务结论
+# jackson JSR-310：allowlist 以 "com.fasterxml.jackson.core:jackson-databind / datatype-jsr310"
+# 合并登记，实际 groupId 为 com.fasterxml.jackson.datatype，待按真实坐标补行
+com.fasterxml.jackson.datatype:jackson-datatype-jsr310  # expires=2026-12-18 owner=架构师 reason=allowlist 合并单元格坐标待补

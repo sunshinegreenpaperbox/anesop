@@ -151,13 +151,19 @@ E2E-01–05 每条落地时必须在 PR 附带失败截图/trace，并接入 CI 
 
 ## 9. CI 对应关系（S0-04 落地）
 
-| 本地步骤 | CI job | 产物/缓存 |
+| 本地步骤 | CI job（实际名） | 产物/缓存 |
 |---|---|---|
-| `./scripts/mvn.sh -B verify` | `backend-test` | JaCoCo HTML/XML、Surefire 报告；缓存 `.m2repo` |
-| `pnpm test:unit` | `frontend-test` | `apps/web/coverage/`；缓存 pnpm store |
-| `pnpm e2e` | `e2e` | Playwright report/trace；缓存 `.playwright` |
-| `./scripts/contract-check.sh` | `contract` | spectral/oasdiff 输出 |
-| `./scripts/check-rules.sh` | `rules` | 适配层漂移/临时条款过期 |
+| `./scripts/mvn.sh -B verify` | `ci/unit-test` | JaCoCo HTML/XML、Surefire 报告；缓存 `.m2repo` |
+| `pnpm test:unit` | `ci/unit-test` | `apps/web/coverage/`；缓存 pnpm store |
+| `pnpm e2e` | `ci/e2e-smoke` | Playwright report/trace；缓存 `.playwright` |
+| `./scripts/contract-check.sh` | `ci/contract` | spectral/oasdiff 输出 |
+| `pnpm lint` + Prettier | `ci/lint` | — |
+| `vue-tsc --noEmit` + `mvn compile` | `ci/typecheck` | — |
+| `mvn -DskipTests package` + `pnpm build` | `ci/build` | jar/dist artifact |
+| Semgrep | `ci/sast` | SARIF |
+| 依赖漏洞/许可证 | `ci/deps-license` | audit 输出 |
+| gitleaks | `ci/secret-scan` | SARIF |
+| Trivy（镜像） | `ci/image-scan` | SARIF（EXT-08 受限豁免） |
 
 CI 建议把后端、前端、E2E 拆 job 并行（本地 `check.sh` 仍串行全量），总时长目标 ≤10 分钟；
 覆盖率报告作为 artifact 上传，JaCoCo 门禁失败即阻断合并。

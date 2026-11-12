@@ -1,0 +1,46 @@
+# Dependabot（S0-04，可选但推荐）
+#
+# 目的：把 pnpm/Maven/Actions 的依赖升级变成可评审的小 PR，兑现
+# docs/ci/audit-exceptions.md 中 devDependencies 漏洞例外的"到期前修复"承诺。
+# 约定：
+#   - 每周一 09:00（Asia/Shanghai）检查，最多同时 5 个 PR，避免挤占评审带宽；
+#   - 提交信息必须满足 commitlint 的 scope 枚举 -> 统一用 chore(repo)；
+#   - 依赖升级仍须遵守 AGENTS「技术栈锁定」：新增/升级依赖先写 ADR、同步
+#     docs/deps/allowlist.md，因此 Dependabot PR 不自动合并，必须人工评审。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(repo)
+      include: none
+
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(repo)
+      include: none
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(repo)
+      include: none

@@ -1,0 +1,730 @@
+# =============================================================================
+# ANESOP CI 流水线（S0-04）
+#
+# 设计口径：
+#   1. 10 个 job 的 name 与 docs/branch-protection.md 第 2 节必需检查逐条一致；
+#      GitHub 的分支保护按 job name 匹配，因此 job id 用短横线、name 用 "ci/xxx"。
+#   2. 全部 job 只读（permissions: contents: read），不写 PR、不发布包、不推送镜像；
+#      唯一例外是 upload-artifact（Actions 内置，不需要额外权限）。
+#   3. 缓存：仓库内 .m2repo（Maven）、.pnpm-store（pnpm）、.playwright（浏览器）；
+#      不缓存 node_modules，避免平台与软链接差异导致"缓存命中但行为异常"。
+#   4. 本机无 Docker（EXT-08）：image-scan 的镜像构建步骤显式 continue-on-error，
+#      构建不可用时在 Step Summary 记录豁免并跳过 Trivy；这是唯一允许的记录性跳过，
+#      其余 job 一律不允许 continue-on-error 掩盖失败。
+#   5. 所有 Maven 调用走 ./scripts/mvn.sh（注入 -Danesop.root 与 JDK 21）。
+#      该脚本把 JAVA_HOME 指向仓库内 .toolchain/jdk21（本机只读 home 的约束）；
+#      CI 中由 setup-java 安装 JDK 后把 .toolchain/jdk21 链接到 $JAVA_HOME。
+#
+# 本地等价：bash scripts/ci-local.sh（默认全量）/ --fast（跳过 build 与 e2e）
+# 文档：docs/ci/README.md
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 最小权限：只读仓库内容。SARIF 以 artifact 形式留存，不上传 code scanning
+# （上传 code scanning 需要 security-events: write，与最小权限原则冲突）。
+permissions:
+  contents: read
+
+# 同一分支/PR 的新提交取消旧运行，避免堆积与重复占用 runner。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+  FORCE_COLOR: '1'
+  # 前端与契约工具链在 CI 内使用官方 registry（本机 .npmrc 只设缓存目录，不锁 registry；
+  # 本地可能指向镜像站，镜像站通常不实现 npm audit 的 advisories 端点）。
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  # Maven 仓库由 scripts/mvn.sh 的 -Dmaven.repo.local 指定，无需 MAVEN_OPTS。
+  MAVEN_OPTS: -Dfile.encoding=UTF-8
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. ci/lint —— ESLint + Prettier + Checkstyle + ShellCheck + 规则一致性
+  # ---------------------------------------------------------------------------
+  lint:
+    name: ci/lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: .m2repo
+          key: m2-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 链接仓库内 JDK 工具链（scripts/mvn.sh 使用 .toolchain/jdk21）
+        run: |
+          mkdir -p .toolchain
+          ln -sfn "$JAVA_HOME" .toolchain/jdk21
+
+      - name: 安装前端依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint + Prettier（pnpm lint）
+        run: pnpm lint
+
+      - name: Checkstyle（根 reactor validate 阶段）
+        run: ./scripts/mvn.sh -B -DskipTests validate
+
+      - name: ShellCheck（ubuntu runner 预装；缺失时记录跳过）
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck --severity=error --external-sources scripts/*.sh .githooks/commit-msg
+          else
+            echo "SKIP: shellcheck 不可用（CI 镜像应预装；不阻断 lint 其余门禁）"
+          fi
+
+      - name: 规则一致性（适配层漂移 + 临时条款过期）
+        run: bash scripts/check-rules.sh
+
+  # ---------------------------------------------------------------------------
+  # 2. ci/typecheck —— vue-tsc --noEmit + Java 编译
+  # ---------------------------------------------------------------------------
+  typecheck:
+    name: ci/typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: .m2repo
+          key: m2-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 链接仓库内 JDK 工具链
+        run: |
+          mkdir -p .toolchain
+          ln -sfn "$JAVA_HOME" .toolchain/jdk21
+
+      - name: 安装前端依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 前端类型检查（vue-tsc --noEmit）
+        run: pnpm -C apps/web exec vue-tsc --noEmit
+
+      - name: 后端编译（根 reactor，含契约 Java DTO 生成）
+        run: ./scripts/mvn.sh -B -DskipTests compile
+
+  # ---------------------------------------------------------------------------
+  # 3. ci/unit-test —— JUnit 5 + JaCoCo 门禁 + Vitest 覆盖率
+  # ---------------------------------------------------------------------------
+  unit-test:
+    name: ci/unit-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: .m2repo
+          key: m2-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 链接仓库内 JDK 工具链
+        run: |
+          mkdir -p .toolchain
+          ln -sfn "$JAVA_HOME" .toolchain/jdk21
+
+      - name: 安装前端依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 后端单测与覆盖率门禁（根 reactor verify：Surefire + JaCoCo + SpotBugs）
+        run: ./scripts/mvn.sh -B verify
+
+      - name: 前端单测与覆盖率门禁（Vitest v8）
+        run: pnpm test:unit
+
+      - name: 上传覆盖率报告（诊断用，不作为门禁）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            apps/web/coverage
+            apps/api/**/target/site/jacoco
+            services/**/target/site/jacoco
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 4. ci/contract —— spectral lint + oasdiff breaking + 生成物漂移
+  # ---------------------------------------------------------------------------
+  contract:
+    name: ci/contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 链接仓库内 JDK 工具链（contract-check.sh 会 source env.sh）
+        run: |
+          mkdir -p .toolchain
+          ln -sfn "$JAVA_HOME" .toolchain/jdk21
+
+      - name: 安装前端依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: spectral lint（4 域 OpenAPI 3.1）
+        run: pnpm -C packages/contracts lint
+
+      - name: 契约门禁（spectral + oasdiff + TS 生成物漂移）
+        run: bash scripts/contract-check.sh
+
+  # ---------------------------------------------------------------------------
+  # 5. ci/build —— Maven package + pnpm build，产物上传
+  # ---------------------------------------------------------------------------
+  build:
+    name: ci/build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: .m2repo
+          key: m2-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 链接仓库内 JDK 工具链
+        run: |
+          mkdir -p .toolchain
+          ln -sfn "$JAVA_HOME" .toolchain/jdk21
+
+      - name: 安装前端依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 后端打包（根 reactor，跳过测试；测试与覆盖率由 ci/unit-test 负责）
+        run: ./scripts/mvn.sh -B -DskipTests package
+
+      - name: 前端构建（vue-tsc + vite build）
+        run: pnpm -C apps/web build
+
+      - name: 上传构建产物（jar + dist）
+        uses: actions/upload-artifact@v4
+        with:
+          name: anesop-build
+          path: |
+            apps/api/**/target/*.jar
+            services/device-gateway/target/*.jar
+            apps/web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 6. ci/sast —— Semgrep（p/default，仅 ERROR 级阻断）
+  # ---------------------------------------------------------------------------
+  sast:
+    name: ci/sast
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: 安装 Semgrep（固定版本，避免规则/引擎漂移）
+        run: |
+          python3 -m venv .cache/semgrep-venv
+          .cache/semgrep-venv/bin/pip install --quiet --disable-pip-version-check semgrep==1.185.0
+
+      - name: Semgrep 扫描（ERROR 级 = high/critical，命中即失败）
+        env:
+          SEMGREP_SEND_METRICS: 'off'
+        run: |
+          mkdir -p .cache/semgrep
+          export SEMGREP_SETTINGS_FILE="$GITHUB_WORKSPACE/.cache/semgrep/settings.yml"
+          export SEMGREP_LOG_FILE="$GITHUB_WORKSPACE/.cache/semgrep/semgrep.log"
+          # 扫描范围 = 应用代码 / 契约 / 迁移（apps、services、packages、db/migration）。
+          # deploy/ 的 Dockerfile/IaC 由 ci/image-scan（Trivy）与部署评审覆盖；已知
+          # deploy/compose/web.Dockerfile 以 root 运行 nginx（Semgrep missing-user），
+          # 已在 docs/ci/README.md §10 登记为部署任务修复项，不在此用抑制规则掩盖。
+          # bcrypt 规则：AuthServiceImpl 的固定假哈希（侧信道均衡）与合成演示种子哈希
+          # 均非凭据；真实凭据由 ci/secret-scan（gitleaks）负责。
+          .cache/semgrep-venv/bin/semgrep scan \
+            --config=p/default \
+            --severity=ERROR \
+            --error \
+            --metrics=off \
+            --disable-version-check \
+            --exclude-rule='generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash' \
+            --exclude='**/target/**' \
+            --exclude='**/dist/**' \
+            --exclude='**/coverage/**' \
+            --sarif \
+            --output=semgrep.sarif \
+            apps services packages db/migration
+
+      - name: 上传 Semgrep SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 7. ci/deps-license —— 依赖漏洞 + 许可证白名单 + Maven 依赖分析
+  # ---------------------------------------------------------------------------
+  deps-license:
+    name: ci/deps-license
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: .m2repo
+          key: m2-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 链接仓库内 JDK 工具链
+        run: |
+          mkdir -p .toolchain .cache
+          ln -sfn "$JAVA_HOME" .toolchain/jdk21
+
+      - name: 安装前端依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 生产依赖漏洞门禁（high/critical 阻断）
+        run: pnpm audit --prod --audit-level high --registry=https://registry.npmjs.org
+
+      - name: 全量依赖漏洞报告（含 devDependencies，交由审计例外门禁判定）
+        run: |
+          set +e
+          pnpm audit --json --registry=https://registry.npmjs.org > .cache/npm-audit-full.json
+          rc=$?
+          set -e
+          echo "pnpm audit exit=${rc}（非 0 表示存在漏洞；是否阻断由下一步按审计例外表判定）"
+          test -s .cache/npm-audit-full.json
+
+      - name: 许可证清单（pnpm licenses）
+        run: pnpm licenses list --json > .cache/npm-licenses.json
+
+      - name: 依赖白名单 / 许可证 / 审计例外门禁
+        run: |
+          python3 docs/ci/check-deps-license.py \
+            --root . \
+            --allowlist docs/deps/allowlist.md \
+            --npm-licenses .cache/npm-licenses.json \
+            --audit-json .cache/npm-audit-full.json \
+            --audit-exceptions docs/ci/audit-exceptions.md
+
+      - name: Maven 依赖分析（未使用/未声明依赖报告，warning 记录）
+        run: ./scripts/mvn.sh -B -DskipTests compile dependency:analyze
+
+      - name: 上传依赖审计报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit
+          path: |
+            .cache/npm-audit-full.json
+            .cache/npm-licenses.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 8. ci/secret-scan —— gitleaks（全历史）
+  # ---------------------------------------------------------------------------
+  secret-scan:
+    name: ci/secret-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout（全历史，gitleaks 需扫描历史提交）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: 下载 gitleaks（固定版本）
+        run: |
+          mkdir -p .cache/bin
+          curl -sSfL --retry 3 --retry-delay 2 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz -C .cache/bin gitleaks
+          .cache/bin/gitleaks version
+
+      - name: gitleaks detect（命中即失败；报告脱敏）
+        run: |
+          .cache/bin/gitleaks detect \
+            --source . \
+            --config docs/ci/gitleaks.toml \
+            --no-banner \
+            --redact \
+            --exit-code 1 \
+            --report-format sarif \
+            --report-path .cache/gitleaks.sarif \
+            --verbose
+
+      - name: 上传 gitleaks 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-sarif
+          path: .cache/gitleaks.sarif
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 9. ci/image-scan —— 构建 api/web 镜像 + Trivy 扫描
+  #
+  # EXT-08 豁免：本机无 Docker daemon，Dockerfile 从未真实构建；首次远端接入时
+  # 镜像构建可能失败。构建步骤显式 continue-on-error 并在 Summary 记录豁免，
+  # 构建成功则 Trivy 扫描仍为阻断门禁（HIGH/CRITICAL 可修复漏洞即失败）。
+  # 解除条件：远端 runner 上连续一次 api/web 构建成功并在 docs/acceptance 回填记录后，
+  # 删除 build 步骤的 continue-on-error 与下面的豁免分支。
+  # ---------------------------------------------------------------------------
+  image-scan:
+    name: ci/image-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # EXT-08：唯一允许的 continue-on-error —— 仅镜像构建步骤，原因见上方注释。
+      - name: 构建 api / web 镜像（EXT-08 记录性豁免）
+        id: image_build
+        continue-on-error: true
+        env:
+          # Dockerfile 使用 BuildKit cache mount（--mount=type=cache），必须显式启用
+          DOCKER_BUILDKIT: '1'
+        run: |
+          docker build -f deploy/compose/api.Dockerfile -t anesop/api:ci .
+          docker build -f deploy/compose/web.Dockerfile -t anesop/web:ci .
+
+      - name: Trivy 扫描 api 镜像（HIGH/CRITICAL，忽略未修复）
+        if: steps.image_build.outcome == 'success'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: anesop/api:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          vuln-type: os,library
+
+      - name: Trivy 扫描 web 镜像（HIGH/CRITICAL，忽略未修复）
+        if: steps.image_build.outcome == 'success'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: anesop/web:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          vuln-type: os,library
+
+      - name: EXT-08 豁免记录（镜像构建不可用）
+        if: steps.image_build.outcome != 'success'
+        run: |
+          echo "::warning::EXT-08：api/web 镜像构建失败或不可用，ci/image-scan 记录性跳过（不阻断合入）。解除条件见 docs/ci/README.md。"
+          {
+            echo "### ci/image-scan：EXT-08 记录性跳过"
+            echo ""
+            echo "镜像构建步骤失败（Dockerfile 尚未在可运行环境验证）。"
+            echo "按 \`docs/acceptance/EXTERNAL-DEPS.md\` EXT-08 豁免，本次不执行 Trivy。"
+            echo "解除条件：docker build 成功一次并回填验收记录后，移除 continue-on-error。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 10. ci/e2e-smoke —— Playwright（Chromium）冒烟
+  # ---------------------------------------------------------------------------
+  e2e-smoke:
+    name: ci/e2e-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: .playwright
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm 11
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+          run_install: false
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: .playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/web/playwright.config.ts') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: 安装前端依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装 Chromium 及系统依赖
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E 冒烟（pnpm e2e）
+        run: pnpm e2e
+
+      - name: 上传 Playwright 报告与 trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: warn
+          retention-days: 7

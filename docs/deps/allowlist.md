@@ -25,6 +25,10 @@
 | jakarta.validation:jakarta.validation-api | Boot BOM | Apache-2.0 | Bean Validation（生成物注解） | 后端负责人 |
 | jakarta.annotation:jakarta.annotation-api | Boot BOM | EPL-2.0 / GPL-2.0 with CPE（Jakarta 标准 API，仅注解） | @Generated 注解 | 后端负责人 |
 | org.openapitools:openapi-generator-maven-plugin | 7.10.0 | Apache-2.0 | 契约 → Java DTO（构建期，S0-07） | 架构师 |
+| org.springframework:spring-context | Boot BOM | Apache-2.0 | 模块上下文（S0-02 起直接依赖，S0-12 补登记） | 后端负责人 |
+| org.springframework:spring-aop | Boot BOM | Apache-2.0 | AOP 切面（S0-07 直接依赖，S0-12 补登记） | 后端负责人 |
+| org.aspectj:aspectjweaver | Boot BOM | EPL-1.0（构建/运行期织入库，AGENTS LGPL 条款不适用；登记为待法务确认） | 审计切面织入（S0-07） | 安全负责人 |
+| com.fasterxml.jackson.datatype:jackson-datatype-jsr310 | Boot BOM | Apache-2.0 | Java 8 时间序列化（S0-07，S0-11 allowlist 缺口补齐） | 后端负责人 |
 | org.postgresql:postgresql | Boot BOM 管理 | BSD-2-Clause | PG JDBC 驱动 + PGobject（jsonb/inet TypeHandler） | 后端负责人 |
 | org.springdoc:springdoc-openapi-starter-webmvc-ui | 2.7.0 | Apache-2.0 | OpenAPI 3.1 文档 | 后端负责人 |
 | com.tngtech.archunit:archunit-junit5 | 1.3.0 | Apache-2.0 | 模块边界用例 | 架构师 |

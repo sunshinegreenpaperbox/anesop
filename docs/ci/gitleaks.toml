@@ -1,0 +1,23 @@
+# gitleaks 配置（S0-04，ci/secret-scan 使用）
+#
+# 继承 gitleaks 内置规则集，只对"已登记的合成凭据"做精确豁免。
+# 禁止在此大范围放行目录（只允许与合成数据/示例相关的窄路径）。
+# 任何真实凭据（口令、token、私钥、连接串）都必须修复并从历史中清除，不得加白名单。
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "SYNTHETIC 测试凭据与演示种子（非生产凭据；见 docs/db/seed.md、AGENTS 数据闸门）"
+regexTarget = "match"
+regexes = [
+  '''SYNTHETIC-PASSWORD''',
+  '''Anesop@2026''',
+]
+
+[[allowlists]]
+description = "演示种子与合成账号文档（仅 dev/test，生产 profile 启动即拒绝 demo_* 账号）"
+paths = [
+  '''db/seed/demo/.*''',
+  '''docs/db/seed\.md''',
+]
