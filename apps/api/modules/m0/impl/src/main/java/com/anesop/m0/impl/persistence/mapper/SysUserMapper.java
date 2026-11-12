@@ -4,6 +4,8 @@ import com.anesop.m0.impl.persistence.entity.SysUser;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import java.util.List;
 import java.util.UUID;
+import org.apache.ibatis.annotations.Delete;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -87,4 +89,50 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
             WHERE id = #{userId} AND deleted = false
             """)
     int updatePassword(@Param("userId") UUID userId, @Param("passwordHash") String passwordHash);
+
+    /**
+     * 管理员重置口令（M2-M0-02）：写入新的 BCrypt 哈希并**强制**下次登录改密。
+     *
+     * <p>与 {@link #updatePassword} 的区别：自助改密清除强制标记，管理员重置重新置 true；
+     * 同时清零失败计数与锁定，避免用户拿着一次性口令仍被旧计数锁住。
+     *
+     * @return 影响行数（1=成功；0=用户不存在/已删除）
+     */
+    @Update("""
+            UPDATE m0_platform.sys_user
+            SET password_hash = #{passwordHash},
+                must_change_password = true,
+                failed_attempts = 0,
+                locked_until = NULL,
+                updated_at = now(),
+                updated_by = #{actorId},
+                version = version + 1
+            WHERE id = #{userId} AND deleted = false
+            """)
+    int adminResetPassword(@Param("userId") UUID userId,
+            @Param("passwordHash") String passwordHash,
+            @Param("actorId") UUID actorId);
+
+    /**
+     * 清空用户角色绑定（用户管理改角色时先删后插，事务内保证不出现半套角色）。
+     *
+     * @return 删除行数
+     */
+    @Delete("DELETE FROM m0_platform.sys_user_role WHERE user_id = #{userId}")
+    int deleteUserRoles(@Param("userId") UUID userId);
+
+    /**
+     * 按角色编码绑定用户角色（编码由服务层先校验存在，避免授予不存在的角色）。
+     *
+     * @return 影响行数（1=绑定成功；0=角色编码不存在）
+     */
+    @Insert("""
+            INSERT INTO m0_platform.sys_user_role (user_id, role_id, created_by)
+            SELECT #{userId}, r.id, #{actorId}
+            FROM m0_platform.sys_role r
+            WHERE r.code = #{roleCode}
+            """)
+    int insertUserRoleByCode(@Param("userId") UUID userId,
+            @Param("roleCode") String roleCode,
+            @Param("actorId") UUID actorId);
 }

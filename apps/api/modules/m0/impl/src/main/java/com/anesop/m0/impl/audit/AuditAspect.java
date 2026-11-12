@@ -1,7 +1,9 @@
 package com.anesop.m0.impl.audit;
 
 import com.anesop.contracts.auth.model.LoginRequest;
+import com.anesop.contracts.auth.model.PasswordResetResponse;
 import com.anesop.contracts.auth.model.TokenResponse;
+import com.anesop.contracts.auth.model.UserSummary;
 import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m0.api.audit.Audited;
 import com.anesop.m0.api.security.AuthPrincipal;
@@ -80,7 +82,7 @@ public class AuditAspect {
         auditWriter.record(
                 audited.action(),
                 audited.resourceType(),
-                resourceId(joinPoint.getArgs()),
+                resourceId(joinPoint.getArgs(), result),
                 failure == null,
                 detail(joinPoint, failure),
                 actorId(joinPoint.getArgs(), result),
@@ -166,11 +168,37 @@ public class AuditAspect {
         return null;
     }
 
-    private static String resourceId(Object[] args) {
+    /**
+     * 审计资源标识（S-5）：UUID 优先、session 兜底。
+     *
+     * <p>顺序：① 方法参数中的目标对象 UUID（USER_UPDATE / PASSWORD_RESET 的 {@code userId}）；
+     * ② 方法返回值中的目标对象 UUID（USER_CREATE 的新用户 id，避免落成操作人会话）；
+     * ③ 会话 ID（登出/刷新等会话动作）。只取标识，不取手机号、姓名等业务字段。
+     */
+    private static String resourceId(Object[] args, Object result) {
+        for (Object arg : args) {
+            if (arg instanceof UUID targetId) {
+                return targetId.toString();
+            }
+        }
+        String createdUserId = resultUserId(result);
+        if (createdUserId != null) {
+            return createdUserId;
+        }
         for (Object arg : args) {
             if (arg instanceof AuthPrincipal principal && principal.sessionId() != null) {
                 return principal.sessionId();
             }
+        }
+        return null;
+    }
+
+    private static String resultUserId(Object result) {
+        if (result instanceof UserSummary summary) {
+            return summary.getUserId();
+        }
+        if (result instanceof PasswordResetResponse response) {
+            return response.getUserId();
         }
         return null;
     }

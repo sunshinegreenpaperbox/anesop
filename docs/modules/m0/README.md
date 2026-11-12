@@ -1,10 +1,13 @@
-# M0 公共支撑 — 认证与权限骨架（S0-07）
+# M0 公共支撑 — 认证、权限与用户管理（S0-07 / M2-M0-02）
 
-> 状态：S0-07 完成（安全评审 B-1/B-2/B-3 与 S-1…S-11 已修）+ M2-M0-01 数据范围绑定（V5）。
-> 依据：`packages/contracts/openapi/auth.yaml` 0.4.0、方案书 §2.1.2（角色 R1–R11）、
-> §2.4.1（M0 公共支撑）、§3.9.1（等保身份鉴别/审计）、§3.9.2（RBAC 与数据权限）、§3.9.5（OAuth2/JWT）。
+> 状态：S0-07 完成（安全评审 B-1/B-2/B-3 与 S-1…S-11 已修）+ M2-M0-01 数据范围绑定（V5）
+> + M2-M0-02 手机号加解密与用户管理（V6，契约 0.5.0）。
+> 依据：`packages/contracts/openapi/auth.yaml` 0.5.0、方案书 §2.1.2（角色 R1–R11）、
+> §2.4.1（M0 公共支撑）、§3.9.1（等保身份鉴别/审计）、§3.9.2（RBAC 与数据权限）、
+> §3.9.3（字段加密与脱敏）、§3.9.5（OAuth2/JWT）。
 > 迁移：`db/migration/V1`（结构）、`V2`（平台预置）、`V3__m0_auth_token.sql`（刷新令牌 + `m0:auth:read`/`m0:auth:write` + `phone_hash`）、
-> `V5__m0_data_scope.sql`（`sys_org`/`sys_user_org`/`sys_user_room` + `m0:org:read`/`m0:org:write`，M2-M0-01）。
+> `V5__m0_data_scope.sql`（`sys_org`/`sys_user_org`/`sys_user_room` + `m0:org:read`/`m0:org:write`，M2-M0-01）、
+> `V6__m0_user_phone_crypto.sql`（`phone_key_id`/`phone_updated_at` + 四列一致性约束 + `m0:user:read`/`m0:user:write`，M2-M0-02）。
 
 ## 0. 使用方式（本文档怎么用）
 
@@ -28,6 +31,11 @@
 | GET | `/v1/auth/me` | authenticated | 角色、权限点、数据范围、`mustChangePassword` 快照（实时查库） |
 | GET | `/v1/auth/sessions` | `PERM_m0:auth:read` | 当前用户会话分页（page/size），越权 403 |
 | GET | `/v1/auth/data-scope/users` | authenticated + `PERM_m0:org:read` + 数据范围 | 数据范围示例接口：按 `orgId`/`roomId` 过滤可见用户标识；缺功能权限、范围为空或越权 403 + `ACCESS_DENIED` 审计 |
+| GET | `/v1/auth/users` | `PERM_m0:user:read` | 用户分页（page/size/keyword）；关键字支持账号/显示名模糊与 11 位手机号哈希精确匹配；只返回 `phoneMasked` |
+| GET | `/v1/auth/users/{userId}` | `PERM_m0:user:read` | 用户详情（脱敏）；不存在/已删除 404 |
+| POST | `/v1/auth/users` | `PERM_m0:user:write` | 创建用户：账号大小写不敏感唯一（409）、手机号可选、BCrypt 口令、强制首次改密 |
+| PUT | `/v1/auth/users/{userId}` | `PERM_m0:user:write` | 更新显示名/工号/手机号/状态/角色；手机号空串=清除；不允许停用当前登录账号、不允许改自身角色、不得授予超出操作人权限点的角色（403）；改工号撞唯一键 409 |
+| POST | `/v1/auth/users/{userId}/password-reset` | `PERM_m0:user:write` | 管理员重置口令：一次性初始口令仅本次响应返回，强制改密，旧口令立即失效，同事务撤销该用户全部刷新令牌（旧刷新令牌 401） |
 
 错误响应统一 `{code,message,traceId,details}`：`AUTH_UNAUTHORIZED`(401)、`AUTH_FORBIDDEN`(403)、
 `PARAM_INVALID`(400)、`BUSINESS_RULE_VIOLATION`(422)、`RATE_LIMITED`(429)。
@@ -122,14 +130,64 @@
   `m0:org:write` 仅 `SYS_ADMIN`）与 MyBatis 数据权限拦截器自动注入条件在 M1/M2 落地；
   多院区 `siteIds` 收窄在 M1 组织主数据完成后启用。
 
-## 5. 审计
+## 5. 手机号加密与脱敏（M2-M0-02，方案书 §3.9.3）
+
+- **存储格式**：`sys_user.phone_enc` = `Base64(iv || ciphertext || tag)`，AES-256-GCM、
+  随机 12 字节 IV、128 位认证标签；每条记录独立 IV（同一明文两次加密结果不同），
+  改 IV/改密文都会导致解密失败（GCM 认证标签）。
+- **检索哈希**：`sys_user.phone_hash` = HMAC-SHA-256(pepper, 规范化手机号) 的小写十六进制
+  （64 字符），只用于等值查询/去重；手机号取值空间小（约 10^10），禁止用无密钥 SHA-256
+  （可被彩虹表反推）。
+- **密钥版本**：`sys_user.phone_key_id`（V6，≤32 字符，默认 `v1`）记录该行所用字段密钥版本，
+  `phone_updated_at` 记录手机号最后写入时间。四列由库层约束 `ck_sys_user_phone_crypto`
+  强制同生同灭（全空或全非空），杜绝“只有密文没有哈希”“换了明文但 key_id 未更新”等脏数据。
+- **写路径**（`UserAdminServiceImpl`）：规范化（去空格/短横线/括号、去 `+86`/`0086`，
+  校验 `1[3-9]` + 9 位）→ `PhoneCrypto.encrypt` → `PhoneHasher.hash` → 同事务写四列；
+  修改手机号重写四列，显式清除时四列同时置空。
+- **读路径**：只在 M0 服务内部解密并立即脱敏为 `138****5678`（保留前 3/后 4，≤7 位整体 `****`）；
+  DTO、日志、审计、异常信息只出现 `phoneMasked`，**永不返回**明文、`phone_enc`、`phone_hash`
+  或口令哈希。密文损坏或 `key_id` 不匹配时降级为不展示并记 WARN（日志不含密文/明文）。
+- **密钥配置**（`anesop.security.*` / 环境变量）：`field-key`（`ANESOP_FIELD_KEY`，Base64，
+  解码后必须恰好 32 字节；生成 `openssl rand -base64 32`）、`phone-pepper`（`ANESOP_PHONE_PEPPER`，
+  Base64，≥32 字节；生成 `openssl rand -base64 48`）、`field-key-id`（默认 `v1`）。
+  校验口径与 JWT 密钥一致（拒绝占位值、非 Base64、长度不符、低熵）；**两者解码后相同即拒绝启动**
+  （否则一把密钥同时承担加密与检索哈希，破坏“泄露 pepper 不能解密密文”的隔离假设）。
+  **prod 缺失/非法即拒绝启动**；仅 dev/test 的 `crypto.allow-dev-generated=true` 生成进程内随机密钥
+  并 WARN（重启后旧密文不可解密，仅本地演示可接受）。两个值必须分开生成、不得复用。
+- **密钥轮换（如实说明，当前未实现在线轮换）**：本应用运行期**只持一把**字段密钥
+  （`field-key` + 当前 `field-key-id`）。解密时行内 `phone_key_id` 与当前 `field-key-id`
+  不等即抛 `PhoneCryptoException`，读路径降级为不展示并记 WARN；应用内**没有** `key_id → 旧密钥`
+  的映射，也没有“用旧密钥解密后再用新密钥重加密”的能力。因此直接更换 `field-key` 并递增
+  `field-key-id` 会让旧密文不可解密（列表 `phoneMasked` 变空），**不是**可用的在线轮换。
+  真正的轮换需 **M1 交付的离线双密钥重加密工具（尚未实现）**：在受控环境用旧密钥+新密钥
+  离线重加密并重算 `phone_hash`，分批、可重入、记录进度，全量校验后再统一切换 `field-key-id`
+  并下线旧密钥；上线前须演练与备份。密钥丢失 = 密文永久不可解密；密钥不得入库、入日志、
+  入工单与截图。
+- **权限点**：`m0:user:read`（列表/详情）、`m0:user:write`（创建/更新/重置口令），V6 仅授予
+  `SYS_ADMIN`；V2 历史 `user:read`/`user:write` 保留不动（兼容期），M1 完成权限码三段式收敛后
+  再以新 V 版本删除授权。
+- **接口**：`GET/POST /v1/auth/users`、`GET/PUT /v1/auth/users/{userId}`、
+  `POST /v1/auth/users/{userId}/password-reset`（契约 auth.yaml 0.5.0）：创建与重置都强制
+  `must_change_password=true`，重置的一次性初始口令只在本次响应出现一次（不入库/日志/审计）。
+- **M1 待办**：字段密钥轮换（`key_id → key` 映射**或**离线双密钥重加密工具，二者至少其一；
+  当前应用只持单把密钥，改 `field-key-id` 即旧密文不可解）、手机号唯一性策略（同院去重口径
+  【待确认】）、手机号变更二次确认与通知（短信/CA 为外部依赖 EXT-05）、用户管理乐观锁版本
+  （当前服务端最后写入 + 版本自增）、密钥托管对接院方 KMS、
+  `docs/data-dictionary/core-entities.md` 的 phone 字段口径同步。
+
+## 6. 审计
 
 - 分层（S-10）：`@Audited` 注解与 `AuditWriter` 接口在 **m0-api**，`AuditAspect` 与
   `JdbcAuditWriter`（append-only，DB 触发器拒绝改写）在 m0-impl；api-bootstrap 只依赖 m0-api。
 - 覆盖动作：`LOGIN`（成功/失败）、`TOKEN_REFRESH`（成功/失败）、`LOGOUT`、`PASSWORD_CHANGE`、
-  `AUTH_UNAUTHORIZED`（401）、`ACCESS_DENIED`（403，URL 级由 `RestAccessDeniedHandler`、
-  方法级由异常处理器写入）。登录/刷新/登出/改密的切面标注在 **AuthService 实现**上，
-  能取得 `AuthPrincipal`，登出审计的 `actor_id/actor_name/resource_id`（会话 ID）非空（S-1）。
+  `USER_CREATE`、`USER_UPDATE`、`PASSWORD_RESET`、`AUTH_UNAUTHORIZED`（401）、`ACCESS_DENIED`
+  （403，URL 级由 `RestAccessDeniedHandler`、方法级由异常处理器写入）。登录/刷新/登出/改密/用户管理的
+  切面标注在服务实现上，能取得 `AuthPrincipal`；`resource_id` 规则为 **UUID 优先、session 兜底**：
+  先取方法参数中的目标对象 UUID（USER_UPDATE / PASSWORD_RESET 的 `userId`），再取方法返回值中的
+  目标对象 UUID（USER_CREATE 的新用户 id），最后才回退到会话 ID（登出/刷新等会话动作）；
+  `actor_id/actor_name` 为操作人。
+- 用户管理审计（M2-M0-02）：`USER_CREATE`/`USER_UPDATE`/`PASSWORD_RESET` 的 `detail` 只含
+  操作名与固定文案，**不含手机号明文、密文、哈希与口令**；越权由 `ACCESS_DENIED` 单独留痕。
 - 记录字段：`action/resource_type/resource_id/result(1|0)/detail(jsonb)/ip(inet)/user_agent/trace_id/occurred_at`。
 - `detail` 只含白名单字段（操作名、尝试登录账号、**异常类名 + 固定短文案**）；
   异常 message 一律不入审计（防 SQL 实参/内部路径泄漏，S-5）；
@@ -140,7 +198,7 @@
   401 响应本身不受影响。
 - `traceId` 由 `TraceIdFilter` 生成/透传（`X-Trace-Id`），日志 MDC 与审计、错误响应共用。
 
-## 6. 运行时装配
+## 7. 运行时装配
 
 - `api-bootstrap`：`@MapperScan("com.anesop.m0.impl.persistence.mapper")`、Spring Security
   （`spring-boot-starter-security` + `oauth2-resource-server` + `aop` + `jdbc`）、
@@ -155,7 +213,7 @@
 - MyBatis-Plus 下划线转驼峰 + 乐观锁；`UuidTypeHandler` 全局注册
   （jsonb/inet 由实体 `@TableField` 精确绑定）。
 
-## 7. 测试与验证
+## 8. 测试与验证
 
 ```bash
 source scripts/env.sh
@@ -172,7 +230,7 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
   401 审计采样、springdoc 路径。
 - `SecureDefaultsIntegrationTest`（2）：prod 上下文 springdoc 404、actuator 仅 health/info。
 - `DefaultProfileSecureTest`（2）：不激活任何 profile 时 springdoc 404、actuator 仅 health/info。
-- `ProductionStartupFailureTest`（2）：prod 缺密钥启动失败、含 demo_* 账号启动失败。
+- `ProductionStartupFailureTest`（4）：prod 缺 JWT 密钥 / 缺字段密钥 / 缺 pepper 启动失败、含 demo_* 账号启动失败。
 - `ProductionDemoAccountGuardTest`（3）：真实 PG 验证 `demo\_%` 转义（demo_admin 命中、demouser 不命中）。
 - `RateLimitIntegrationTest`（2）：低阈值验证登录/刷新 429。
 - `AuthAuditFailOpenTest`（1）：审计故障时登录仍 200 且 `auth.audit.failures` 递增。
@@ -185,10 +243,27 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
   撤销绑定/停用组织 fail-closed、停用用户不出现在 DEPT/ROOM、跨科室 403、8 线程并发解析一致。
 - `DataScopeApiIntegrationTest`（9）：`/me` 返回真实 scopeIds、DEPT 只看本科室、未绑定 403 + 审计、
   ROOM 越权 403、缺 `m0:org:read` 403、admin 全院可见、springdoc 暴露新路径。
-- 全量 122 个测试（api-contracts 4、m0-impl 59、api-bootstrap 59），Checkstyle 0 / SpotBugs 0。
+- `FieldCryptoKeyProviderTest`（12）：字段密钥/pepper 长度与各自生成命令提示、占位值、低熵、非 Base64、
+  key_id 校验、prod 缺失拒绝启动与 dev 自动生成、**field-key 与 pepper 解码后相同拒绝启动（S-8）**。
+- `PhoneCryptoTest`（9）：AES-256-GCM 往返、随机 IV、篡改密文拒绝、错误 key_id 拒绝、
+  **同 key_id 不同密钥解密失败（S-9）**、脱敏规则。
+- `PhoneHasherTest`（5）：HMAC-SHA-256 确定性、不同 pepper 不同哈希、规范化同号同哈希。
+- `UserAdminApiIntegrationTest`（11，真实 PG）：创建带手机号后库内无明文且密文可解密、hash 精确查询命中、
+  列表/详情仅 `phoneMasked`、改号重加密与清除四列、非法手机号 400、账号大小写不敏感唯一 409、
+  **改工号撞唯一键 409（S-9）**、**带格式手机号（`+86`/空格/短横线）检索命中（S-11）**、
+  缺 read/write 权限 403 + ACCESS_DENIED 审计、重置口令后旧口令失效且强制改密、
+  **重置同事务撤销全部刷新令牌、旧 refresh 401（S-4）**、
+  **USER_CREATE/USER_UPDATE/PASSWORD_RESET 审计 resource_id 指向目标用户（S-5）**、
+  **修改自身角色与越权授予角色 403 + 审计（S-10）**、审计 detail 不含手机号。
+- 全量 162 个测试（api-contracts 4、m0-impl 86、api-bootstrap 72，Docker 用例按 `@Tag("docker")` 排除），
+  Checkstyle 0 / SpotBugs 0。
+- 覆盖率口径：`UserAdminServiceImpl`（及 `AuthServiceImpl`/`DataScopeQueryServiceImpl`）位于 m0-impl，
+  但由 api-bootstrap 的 MockMvc + 真实 PG 集成测试覆盖，因此按 api-bootstrap 的
+  `jacoco-aggregate` 报告评估；m0-impl 自身的加密单测覆盖 `PhoneCrypto`/`PhoneHasher`/
+  `FieldCryptoKeyProvider` 的主要分支（含篡改、密钥版本不匹配、缺失拒绝启动等失败路径）。
 - 集成测试共用嵌入式 PostgreSQL 16（Docker 不可用 EXT-08），不使用 Docker、不使用真实患者数据。
 
-## 8. 遗留与风险
+## 9. 遗留与风险
 
 | 项 | 说明 | 归属 |
 |---|---|---|
@@ -198,7 +273,10 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 | 组织 CRUD 与术间主数据 | `m0:org:read` 已授权 SYS_ADMIN/SYS_OR_MANAGER、`m0:org:write` 仅 SYS_ADMIN，但组织维护接口未建；术间主数据由 M2-M2-01 在 `m1_sched` 建立 | M2 |
 | 数据权限自动注入 | 当前由服务显式校验（示例接口）；MyBatis 拦截器自动注入 WHERE 条件待 M1 排程/记录查询落地 | M1 |
 | 并发会话上限 / 强制下线 | 仅按会话撤销刷新令牌，未限制同一账号并发会话数 | M1 |
-| phone 写路径 | V3 已加 `phone_hash varchar(128)`，实体已映射；`phone_enc`/`phone_hash` 的加密与 HMAC 写入（PhoneHashing + 密钥配置）未实现 | M1 |
+| phone 写路径 | **已完成**（M2-M0-02 / V6）：AES-256-GCM + HMAC-SHA-256 + key_id/updated_at + 脱敏返回 | — |
+| 字段密钥轮换 | 应用只持单把字段密钥，`key_id` 不等于当前值即拒绝解密；**未实现**在线轮换，需 M1 交付 `key_id→key` 映射或离线双密钥重加密工具（二者至少其一） | M1 |
+| 手机号唯一性 / 变更通知 | 未做同院手机号去重与变更通知（短信为 EXT-05）；口径【待确认】 | M1 |
+| 用户管理乐观锁 | 更新按服务端最后写入 + `version` 自增，未把 `version` 暴露到契约（列表/详情字段按任务卡收敛） | M1 |
 | 跨服务 trace 透传 | `X-Trace-Id` 由本服务生成，网关跨服务透传未做 | M1 |
 | 契约 drift（springdoc → baseline） | 当前只断言 auth 路径存在，未做 springdoc 全量导出与 baseline diff | M1 前补 |
 | 限流集群化 | 内存令牌桶为单实例语义，多实例需 Redis 令牌桶 | M1/部署前 |
@@ -206,4 +284,12 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 
 > `phone_enc`（密文，供展示前解密）与 `phone_hash`（HMAC-SHA-256，供精确检索/去重）
 > 的字段名与口径已在本文件、`docs/db/README.md`、`docs/data-dictionary/core-entities.md` 统一；
-> V3 只做 expand 加列，写路径 M1。
+> V3 只做 expand 加列，写路径由 M2-M0-02（V6）落地；密钥轮换仍待 M1 离线工具，见第 5 节。
+
+## 附：`@SuppressFBWarnings` 的来源说明
+
+为避免引入 LGPL-2.1 的 `spotbugs-annotations` 依赖（AGENTS 要求 LGPL 先有法务结论），
+仓库在 `apps/api/modules/m0/api/src/main/java/edu/umd/cs/findbugs/annotations/` 下提供了
+**同 FQN、CLASS retention、无运行时依赖**的最小注解，仅用于 SpotBugs 识别字段/构造器注入的
+`EI_EXPOSE_REP2` 误报；不使用它改变任何运行时语义。M1 评估改为官方依赖（需法务）或改用
+`@SuppressWarnings` 不可行时保留并登记 allowlist。该做法已记录于 docs/deps/allowlist.md。

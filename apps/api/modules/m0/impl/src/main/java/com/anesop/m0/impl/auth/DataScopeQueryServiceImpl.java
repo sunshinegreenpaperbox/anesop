@@ -8,6 +8,7 @@ import com.anesop.m0.api.security.DataScopeResolver;
 import com.anesop.m0.impl.persistence.mapper.SysUserMapper;
 import com.anesop.m0.impl.persistence.mapper.SysUserOrgMapper;
 import com.anesop.m0.impl.persistence.mapper.SysUserRoomMapper;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -42,6 +43,8 @@ public class DataScopeQueryServiceImpl implements DataScopeQueryService {
     private final SysUserOrgMapper userOrgMapper;
     private final SysUserRoomMapper userRoomMapper;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+            justification = "Spring 单例注入的 MyBatis Mapper 代理，生命周期由容器管理，服务不对外暴露该引用（评审 Q-1）")
     public DataScopeQueryServiceImpl(DataScopeResolver dataScopeResolver,
             SysUserMapper userMapper,
             SysUserOrgMapper userOrgMapper,

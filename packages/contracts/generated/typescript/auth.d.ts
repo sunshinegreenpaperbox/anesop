@@ -156,6 +156,96 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/auth/users': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询用户列表（管理员）
+     * @description 用户管理只读接口（M2-M0-02）：除认证外还要求功能权限点 `m0:user:read`
+     *     （Spring Security 授权表达式 `PERM_m0:user:read`），缺失时返回 403。
+     *     按 `keyword` 检索登录账号/显示名（模糊），关键字为 11 位手机号时改用 HMAC-SHA-256 哈希
+     *     精确匹配（与 `sys_user.phone_hash` 等值），不参与明文比较。
+     *     返回 `UserSummary`：手机号只以 `phoneMasked`（如 `138****5678`）返回，
+     *     永不返回手机号明文、`phone_enc` 密文、`phone_hash` 哈希或口令哈希。
+     */
+    get: operations['listUsers']
+    put?: never
+    /**
+     * 创建用户（管理员）
+     * @description 创建本地账号（M2-M0-02）：需要功能权限点 `m0:user:write`（`PERM_m0:user:write`）。
+     *     登录账号大小写不敏感全局唯一（`uk_sys_user_username` 为 `lower(username)` 唯一索引），
+     *     重复返回 409。手机号可选：提供时在同一事务内写入
+     *     `phone_enc`（AES-256-GCM，随机 IV）、`phone_hash`（HMAC-SHA-256）、
+     *     `phone_key_id`（字段密钥版本）与 `phone_updated_at`，库层一致性约束保证四列同生同灭。
+     *     口令使用 BCrypt 存储，创建后强制首次登录改密（`mustChangePassword=true`）。
+     *     响应只返回脱敏手机号，不回显初始口令、密文或哈希；操作写 USER_CREATE 审计（不含手机号明文）。
+     */
+    post: operations['createUser']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/auth/users/{userId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询用户详情（管理员）
+     * @description 按标识查询单个用户（M2-M0-02）：需要 `m0:user:read`。返回 `UserSummary`，
+     *     手机号只给 `phoneMasked`；账号不存在或已软删除返回 404，不泄露内部字段。
+     */
+    get: operations['getUser']
+    /**
+     * 更新用户（管理员）
+     * @description 更新显示名、工号、手机号、账号状态与角色（M2-M0-02）：需要 `m0:user:write`。
+     *     字段缺省表示不变更；`phone` 传空字符串表示清除手机号（同时清空
+     *     `phone_enc`/`phone_hash`/`phone_key_id`/`phone_updated_at`），传新号码时四列同事务重写。
+     *     登录账号不可修改（避免审计指向歧义）。不允许停用当前登录账号；不允许修改当前登录账号
+     *     自身的角色；只能授予操作人自身权限点集合内的角色（超集 403）。改工号撞院内唯一
+     *     （`uk_sys_user_employee_no`）返回 409。操作写 USER_UPDATE 审计（不含手机号明文）。
+     *     响应只返回脱敏手机号。
+     */
+    put: operations['updateUser']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/auth/users/{userId}/password-reset': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 重置用户口令（管理员）
+     * @description 管理员重置指定账号口令（M2-M0-02）：需要 `m0:user:write`。
+     *     服务端生成一次性初始口令，仅在本响应中返回一次（不写库明文、不入日志/审计）；库内只存
+     *     BCrypt 哈希，并把 `must_change_password` 置 true、失败计数与锁定清零。
+     *     重置后旧口令立即失效，同一事务内撤销目标用户的全部刷新令牌（既有会话立即失效，
+     *     旧刷新令牌返回 401）。操作写 PASSWORD_RESET 审计（不含口令与手机号明文）。
+     */
+    post: operations['resetUserPassword']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -333,6 +423,97 @@ export interface components {
       items: components['schemas']['Session'][]
       meta: components['schemas']['PageMeta']
     }
+    /**
+     * @description 账号状态：ACTIVE=启用（sys_user.status=1），DISABLED=停用（0，等保离职停用）。
+     * @enum {string}
+     */
+    UserStatus: 'ACTIVE' | 'DISABLED'
+    /**
+     * @description 用户摘要（用户管理列表/详情/创建/更新返回）。只含脱敏手机号 `phoneMasked`；
+     *     永不返回手机号明文、`phone_enc` 密文、`phone_hash` 哈希或口令哈希。
+     */
+    UserSummary: {
+      /** @description 用户标识（UUID 字符串）。 */
+      userId: string
+      /** @description 登录账号（创建后不可修改）。 */
+      username: string
+      /** @description 显示名；示例统一使用“演示新用户（合成）”等合成称谓。 */
+      displayName: string
+      status: components['schemas']['UserStatus']
+      /**
+       * @description 脱敏手机号（保留前 3 位与后 4 位，如 `138****5678`）；未登记手机号为 null。
+       *     该字段由服务端解密后在内存中脱敏生成，密文与哈希不出服务端。
+       */
+      phoneMasked?: string | null
+      /** @description 角色编码列表（如 SYS_ADMIN）；用户管理写入时按编码解析。 */
+      roles: string[]
+      /** @description 是否必须先修改初始口令；创建与管理员重置后强制为 true。 */
+      mustChangePassword: boolean
+      /**
+       * Format: date-time
+       * @description 创建时间（服务端时间，Asia/Shanghai 展示）。
+       */
+      createdAt: string
+    }
+    /** @description 用户分页结果；items 只含脱敏字段。 */
+    UserSummaryPage: {
+      /** @description 当前页用户摘要列表。 */
+      items: components['schemas']['UserSummary'][]
+      meta: components['schemas']['PageMeta']
+    }
+    /**
+     * @description 创建用户请求。登录账号大小写不敏感唯一；手机号可选，提供时同时写入密文/哈希/密钥版本
+     *     与更新时间；口令使用 BCrypt 存储，创建后强制首次登录改密。
+     */
+    UserCreateRequest: {
+      /** @description 登录账号（工号或域账号），大小写不敏感全局唯一；非患者标识。 */
+      username: string
+      /** @description 显示名（中文姓名或合成称谓）；不得写入患者标识。 */
+      displayName: string
+      /** @description 员工工号（可选，非空时院内唯一）；与 M3 人员档案按工号对齐。 */
+      employeeNo?: string
+      /**
+       * @description 手机号（可选）：中国内地 11 位（`1[3-9]` 开头），允许 `+86`/空格/短横线书写，
+       *     服务端规范化后加密与哈希。仅用于院内通讯，不返回明文。
+       */
+      phone?: string
+      /** @description 初始口令；12–128 字符，至少包含大写、小写、数字、符号四类中的三类；不得包含登录账号。 */
+      initialPassword: string
+      /** @description 初始角色编码列表（可空）；未知编码返回 400。 */
+      roles?: string[]
+    }
+    /**
+     * @description 更新用户请求；字段缺省表示不变更。登录账号不可修改。`phone` 传空字符串表示清除手机号，
+     *     传新号码时同时重写密文/哈希/密钥版本/更新时间。不允许停用当前登录账号。
+     */
+    UserUpdateRequest: {
+      /** @description 显示名。 */
+      displayName?: string
+      /** @description 员工工号；传空字符串表示清除。 */
+      employeeNo?: string
+      /** @description 手机号；缺省不变、空字符串清除、非空则规范化后重写密文与哈希。 */
+      phone?: string
+      status?: components['schemas']['UserStatus']
+      /** @description 角色编码列表；缺省不变，传空数组表示清空全部角色。 */
+      roles?: string[]
+    }
+    /**
+     * @description 管理员重置口令结果。初始口令为一次性明文，仅本次响应返回；服务端只存 BCrypt 哈希，
+     *     并把 mustChangePassword 强制置 true。客户端不得缓存、打印或写入日志。
+     */
+    PasswordResetResponse: {
+      /** @description 被重置的用户标识。 */
+      userId: string
+      /** @description 一次性初始口令（12–128 字符，满足口令强度规则）；仅本次响应返回。 */
+      initialPassword: string
+      /** @description 恒为 true：重置后首次登录必须先改密。 */
+      mustChangePassword: boolean
+      /**
+       * Format: date-time
+       * @description 重置时间（服务端时间）。
+       */
+      passwordResetAt: string
+    }
   }
   responses: {
     /** @description 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。 */
@@ -396,6 +577,45 @@ export interface components {
         'application/json': components['schemas']['Error']
       }
     }
+    /** @description 资源不存在，或存在但不在当前用户可见范围内（不泄露存在性）。 */
+    NotFound: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "RESOURCE_NOT_FOUND",
+         *       "message": "资源不存在或不可见",
+         *       "traceId": "SYNTH-TRACE-0003",
+         *       "details": []
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
+    /** @description 业务状态冲突：登录账号已存在（大小写不敏感）或并发写入冲突。 */
+    Conflict: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "STATE_CONFLICT",
+         *       "message": "登录账号已存在或数据已被修改",
+         *       "traceId": "SYNTH-TRACE-0004",
+         *       "details": [
+         *         {
+         *           "field": "username",
+         *           "reason": "登录账号大小写不敏感唯一，已存在同名账号"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
     /** @description 同一来源 IP 的登录/刷新请求超过限流阈值，稍后重试。 */
     TooManyRequests: {
       headers: {
@@ -431,7 +651,10 @@ export interface components {
       }
     }
   }
-  parameters: never
+  parameters: {
+    /** @description 用户标识（UUID 字符串）。 */
+    UserId: string
+  }
   requestBodies: never
   headers: never
   pathItems: never
@@ -749,6 +972,249 @@ export interface operations {
       400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
+    }
+  }
+  listUsers: {
+    parameters: {
+      query?: {
+        /** @description 页码，从 1 开始。 */
+        page?: number
+        /** @description 每页条数，服务端上限 200。 */
+        size?: number
+        /**
+         * @description 检索关键字：登录账号或显示名（模糊），或完整 11 位手机号（按 HMAC 哈希精确匹配）。
+         *     不得传入患者姓名、身份证、住院号等患者标识。
+         */
+        keyword?: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 用户分页列表（仅脱敏字段）；无匹配时 items 为空数组。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "userId": "10000000-0000-4000-8000-000000000001",
+           *           "username": "demo.newuser",
+           *           "displayName": "演示新用户（合成）",
+           *           "status": "ACTIVE",
+           *           "phoneMasked": "138****5678",
+           *           "roles": [
+           *             "SYS_ANESTHESIOLOGIST"
+           *           ],
+           *           "mustChangePassword": true,
+           *           "createdAt": "2026-11-13T09:00:00+08:00"
+           *         }
+           *       ],
+           *       "meta": {
+           *         "page": 1,
+           *         "size": 20,
+           *         "total": 1,
+           *         "totalPages": 1
+           *       }
+           *     }
+           */
+          'application/json': components['schemas']['UserSummaryPage']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  createUser: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "username": "demo.newuser",
+         *       "displayName": "演示新用户（合成）",
+         *       "employeeNo": "SYN-DEMO-0004",
+         *       "phone": "13800005678",
+         *       "initialPassword": "Synth-Init-2026#A",
+         *       "roles": [
+         *         "SYS_ANESTHESIOLOGIST"
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['UserCreateRequest']
+      }
+    }
+    responses: {
+      /** @description 创建成功，返回脱敏用户摘要（不含初始口令、密文与哈希）。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "userId": "10000000-0000-4000-8000-000000000001",
+           *       "username": "demo.newuser",
+           *       "displayName": "演示新用户（合成）",
+           *       "status": "ACTIVE",
+           *       "phoneMasked": "138****5678",
+           *       "roles": [
+           *         "SYS_ANESTHESIOLOGIST"
+           *       ],
+           *       "mustChangePassword": true,
+           *       "createdAt": "2026-11-13T09:00:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['UserSummary']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+    }
+  }
+  getUser: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 用户标识（UUID 字符串）。 */
+        userId: components['parameters']['UserId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 用户详情（仅脱敏字段）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "userId": "10000000-0000-4000-8000-000000000001",
+           *       "username": "demo.newuser",
+           *       "displayName": "演示新用户（合成）",
+           *       "status": "ACTIVE",
+           *       "phoneMasked": "138****5678",
+           *       "roles": [
+           *         "SYS_ANESTHESIOLOGIST"
+           *       ],
+           *       "mustChangePassword": false,
+           *       "createdAt": "2026-11-13T09:00:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['UserSummary']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  updateUser: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 用户标识（UUID 字符串）。 */
+        userId: components['parameters']['UserId']
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "displayName": "演示新用户（合成，已改名）",
+         *       "phone": "13900001234",
+         *       "status": "ACTIVE",
+         *       "roles": [
+         *         "SYS_ANESTHESIOLOGIST",
+         *         "SYS_OR_MANAGER"
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['UserUpdateRequest']
+      }
+    }
+    responses: {
+      /** @description 更新成功，返回脱敏用户摘要。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "userId": "10000000-0000-4000-8000-000000000001",
+           *       "username": "demo.newuser",
+           *       "displayName": "演示新用户（合成，已改名）",
+           *       "status": "ACTIVE",
+           *       "phoneMasked": "139****1234",
+           *       "roles": [
+           *         "SYS_ANESTHESIOLOGIST",
+           *         "SYS_OR_MANAGER"
+           *       ],
+           *       "mustChangePassword": false,
+           *       "createdAt": "2026-11-13T09:00:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['UserSummary']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  resetUserPassword: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 用户标识（UUID 字符串）。 */
+        userId: components['parameters']['UserId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 重置成功；一次性初始口令仅本次响应返回，客户端不得缓存或记录。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "userId": "10000000-0000-4000-8000-000000000001",
+           *       "initialPassword": "Synth-Reset-2026#B",
+           *       "mustChangePassword": true,
+           *       "passwordResetAt": "2026-11-13T09:30:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['PasswordResetResponse']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
     }
   }
 }

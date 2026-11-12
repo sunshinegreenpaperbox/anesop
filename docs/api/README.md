@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围（`info.version=0.4.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理（`info.version=0.5.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -22,11 +22,11 @@ packages/contracts/
 
 | 契约 | 路径数 | operationId 数 | 覆盖能力 | 方案书对应 |
 |---|---:|---:|---|---|
-| `auth.yaml` | 7 | 7 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例 | §2.4.1、§3.9.2、§3.9.5 |
+| `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 6 | 6 | 患者查询/详情、患者手术申请、申请接收/详情/取消 | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
 | `scheduling.yaml` | 6 | 7 | 术间列表、排程查询/创建/详情、冲突检测、急诊加台、停台 | §2.4.2、§2.3.2、§3.4.2 |
 | `anesthesia.yaml` | 6 | 10 | 术前访视读写、记录单读写、锁单、三方核查读写、随访创建/查询/列表 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **25** | **30** | 4 个限界上下文骨架 | — |
+| **合计** | **28** | **35** | 4 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -47,6 +47,11 @@ packages/contracts/
 - 访问令牌短时效（示例 1800 秒），刷新令牌轮换；默认会话 30 分钟无操作失效，连续 5 次失败锁定 30 分钟（§3.9.1）。
 - 权限粒度到“菜单 + 操作”（如 `anesthesia.record.lock`）；数据权限四类：`ALL`、`DEPARTMENT`、`ROOM`、`OWN_PATIENTS`（§3.9.2）。
 - 令牌与日志不得包含姓名、身份证、住院号、手机号；审计日志保留 ≥6 个月，业务角色不可删除（§3.9.1）。
+- **用户管理（M2-M0-02，0.5.0 additive）**：`/v1/auth/users` 系列端点需要 `m0:user:read` /
+  `m0:user:write`（V6 仅授予 `SYS_ADMIN`）。手机号只以 `phoneMasked`（如 `138****5678`）返回，
+  契约中**没有**手机号明文、`phone_enc` 密文、`phone_hash` 哈希字段；创建与管理员重置口令都强制
+  `mustChangePassword=true`，重置的一次性初始口令仅本次响应返回，并在同一事务撤销该用户全部
+  刷新令牌；更新工号撞院内唯一键返回 409。示例全部为 SYNTHETIC。
 
 ## 4. 错误模型
 
@@ -65,7 +70,7 @@ packages/contracts/
 | 401 | 未认证/令牌失效（`Unauthorized`） | 所有 operation 必备 |
 | 403 | 无权限/超出数据范围（`Forbidden`） | 需认证的 operation 必备；`security: []` 的登录/刷新与 `logout` 除外 |
 | 404 | 资源不存在或不可见（`NotFound`） | 仅路径含 `{资源参数}` 的单资源 operation；集合查询、创建接口不声明 |
-| 409 | 状态/版本/排程/锁单冲突（`Conflict`） | 仅状态变更操作（带 `requestBody`）声明；`logout`、登录/刷新不声明 |
+| 409 | 状态/版本/排程/锁单/唯一键冲突（`Conflict`） | 仅状态变更操作（带 `requestBody`）声明；`logout`、登录/刷新不声明。用户管理：创建账号重复、更新工号撞 `uk_sys_user_employee_no` |
 | 422 | 语义不合法（`UnprocessableEntity`） | 字段格式正确但业务规则拒绝（如患者不在主索引、术间不满足隔离要求） |
 | 201 | 创建成功 | 创建类接口；响应体返回创建后的实体（`POST three-way-checks` 首次创建为 201，更新为 200） |
 | 204 | 成功无响应体 | `POST /v1/auth/logout` |
@@ -101,7 +106,7 @@ packages/contracts/
 
 ## 7. 版本与破坏性变更流程
 
-- `info.version` 采用语义化版本；当前 `0.4.0`（M2-M0-01：新增数据范围示例接口与 `DataScope.scopeIds`，兼容新增）。路径主版本为 `/v1`。
+- `info.version` 采用语义化版本；当前 `0.5.0`（M2-M0-02：新增用户管理与 `phoneMasked`，`PUT /v1/auth/users/{userId}` 增加 409，compatible additive）。路径主版本为 `/v1`。
 - **兼容变更**（只增不删）：新增可选字段、新增接口、新增响应字段、新增枚举值（调用方需容忍未知值）；更新 `minor`/`patch`，评审通过后同步 baseline。
 - **阻断性变更**（oasdiff `--fail-on WARN` 即失败）：删除路径或 operation；请求体新增必填字段；请求字段类型变更；响应必填字段删除；响应字段类型变更。删除/收紧枚举值、改变字段语义同样按破坏性变更处理。
 - **兼容例外（M2 契约冻结前）**：响应新增必填字段按 warning 处理、不阻断，但必须在 PR 说明调用方兼容方案，并在下表登记；M2 契约冻结前清零。

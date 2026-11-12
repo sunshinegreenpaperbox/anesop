@@ -32,6 +32,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
@@ -95,6 +96,8 @@ public class AuthServiceImpl implements AuthService {
     private final Duration refreshTtl;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+            justification = "Spring 单例注入的 MyBatis Mapper 代理，生命周期由容器管理，服务不对外暴露该引用（评审 Q-1）")
     public AuthServiceImpl(SysUserMapper userMapper,
             SysRoleMapper roleMapper,
             SysPermissionMapper permissionMapper,

@@ -5,13 +5,17 @@ import com.anesop.api.web.RequestContexts;
 import com.anesop.contracts.auth.model.Error;
 import com.anesop.contracts.auth.model.ErrorDetail;
 import com.anesop.m0.api.security.AuthRequestContext;
+import com.anesop.m0.api.security.UserConflictException;
+import com.anesop.m0.api.security.UserValidationException;
 import com.anesop.m0.api.audit.AuditWriter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -71,6 +75,43 @@ public class ApiExceptionHandler {
         // 口令强度等业务校验：文案由 PasswordPolicy 固定提供，不含用户输入。
         return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
                 List.of(ErrorResponses.detail("newPassword", exception.getMessage())));
+    }
+
+    /**
+     * 用户管理字段级校验（M2-M0-02）：字段名由异常携带，避免把所有 400 都标成 newPassword。
+     * 文案由服务端固定提供，不含手机号明文、口令或密文。
+     */
+    @ExceptionHandler(UserValidationException.class)
+    public ResponseEntity<Error> handleUserValidation(UserValidationException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 用户不存在或已软删除（M2-M0-02）：统一 404 {@code RESOURCE_NOT_FOUND}，不回显查询细节。
+     */
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<Error> handleNotFound(NoSuchElementException exception, HttpServletRequest request) {
+        return response(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "资源不存在或不可见", request);
+    }
+
+    /**
+     * 用户管理唯一性冲突（M2-M0-02）：登录账号（大小写不敏感）或工号重复 → 409。
+     * 返回固定文案，不回显冲突值。
+     */
+    @ExceptionHandler(UserConflictException.class)
+    public ResponseEntity<Error> handleUserConflict(UserConflictException exception, HttpServletRequest request) {
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "登录账号或工号已存在，或数据已被修改", request);
+    }
+
+    /**
+     * 数据库唯一约束兜底（并发创建，M2-M0-02）：同样映射为 409。
+     * 返回固定文案，不回显数据库约束名、SQL 实参或冲突值。
+     */
+    @ExceptionHandler(DuplicateKeyException.class)
+    public ResponseEntity<Error> handleDuplicateKey(DuplicateKeyException exception, HttpServletRequest request) {
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "登录账号或工号已存在，或数据已被修改", request);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
