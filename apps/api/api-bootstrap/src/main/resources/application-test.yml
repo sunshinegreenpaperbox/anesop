@@ -1,0 +1,29 @@
+# 测试环境（CI / 本地自动化测试）：与 dev 一样追加演示种子与开启文档，
+# 数据源指向嵌入式 PostgreSQL 16（由测试基类 @DynamicPropertySource 注入）。
+spring:
+  flyway:
+    locations:
+      - classpath:db/migration
+      - classpath:db/seed/demo
+
+anesop:
+  security:
+    demo-accounts-allowed: true
+    jwt:
+      allow-dev-generated: true
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    com.anesop: INFO

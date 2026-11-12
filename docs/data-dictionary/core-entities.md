@@ -17,8 +17,8 @@
 | `birth_date` | date | 【待确认】 | 出生日期 | 契约仅详情返回，列表不返回；精度【待确认】 |
 | `id_card_cipher` | text | 否 | 证件号密文（AES-256-GCM） | §3.9.3；接口返回 `idCardMasked`（前 3 + 11\* + 后 4，不含出生日期段） |
 | `id_card_hash` | varchar | 否 | 证件号哈希，供精确匹配 | §3.9.3 |
-| `phone_cipher` | text | 否 | 手机号密文 | §3.9.3 |
-| `phone_hash` | varchar | 否 | 手机号哈希 | §3.9.3 |
+| `phone_enc` | text | 否 | 手机号密文 | §3.9.3 |
+| `phone_hash` | varchar(128) | 否 | 手机号 HMAC-SHA-256 哈希（精确检索/去重） | §3.9.3；字段口径与 `sys_user.phone_hash` 一致 |
 | `inpatient_no` | varchar | 否 | 住院号（直接标识） | §2.7.1、§3.4.2；按数据权限控制并记审计 |
 | `department_id` | bigint | 是 | 所属科室 | §3.9.2 |
 | `site_id` | bigint | 是 | 院区 | §3.4.5 |
@@ -48,7 +48,7 @@
 
 | 实体 | 关键字段 | 说明 | 来源/备注 |
 |---|---|---|---|
-| `sys_user` | `user_id`、`username`、`display_name`、`staff_id`、`status`、`password_hash`、审计字段、`deleted_at` | 账号；与 M3 人员档案关联 | §2.4.1、§3.9.2；口令哈希算法【待确认】 |
+| `sys_user` | `user_id`、`username`、`display_name`、`staff_id`、`status`、`password_hash`、`phone_enc`、`phone_hash`、`must_change_password`、审计字段、`deleted_at` | 账号；与 M3 人员档案关联；`phone_enc` 密文、`phone_hash` 精确检索（V3 已加列，写路径 M1） | §2.4.1、§3.9.2、§3.9.3；口令哈希算法【待确认】 |
 | `sys_role` | `role_id`、`role_code`、`role_name`、`status`、审计字段 | 角色 | §3.9.2 |
 | `sys_permission` | `permission_id`、`permission_code`、`permission_type`、`parent_id`、审计字段 | 权限点，粒度到“菜单 + 操作” | §3.9.2；编码规范【待确认】 |
 | `sys_role_permission` | `role_id`、`permission_id` | 角色—权限点关联 | §3.9.2 |

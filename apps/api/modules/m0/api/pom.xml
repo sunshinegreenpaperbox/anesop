@@ -14,4 +14,13 @@
   <artifactId>m0-api</artifactId>
   <name>ANESOP :: M0 公共支撑 API</name>
   <description>M0 公共支撑 对外接口、DTO 与领域事件；其他模块唯一可依赖的层</description>
+
+  <dependencies>
+    <!-- 契约生成的 Java 类型（auth 域的 LoginRequest/TokenResponse/CurrentUser/SessionPage） -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>api-contracts</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies>
 </project>

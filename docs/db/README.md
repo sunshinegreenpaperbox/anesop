@@ -11,6 +11,7 @@ db/
 ├── migration/                           # 生产 locations：只允许本目录
 │   ├── V1__m0_platform_init.sql         # M0 结构基线（表/约束/索引/触发器）
 │   ├── V2__m0_platform_seed_synthetic.sql  # 平台预置基线（角色/权限/字典，无账号）
+│   ├── V3__m0_auth_token.sql               # 刷新令牌表 + m0:auth:* 权限点 + sys_user.phone_hash（S0-07）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin（SYNTHETIC，禁止进入生产）
@@ -131,9 +132,12 @@ SPRING_FLYWAY_TABLE=flyway_schema_history
   # 生产（不得追加任何 seed 目录）
   SPRING_FLYWAY_LOCATIONS=filesystem:/opt/anesop/db/migration
   ```
-- **生产启动断言（S0-07）**：prod profile 启动时校验 `m0_platform.sys_user` 中不存在
-  `demo_*` 账号（`lower(username) LIKE 'demo%'`），命中即拒绝启动并告警。生产首次部署
-  迁移后 `sys_user` 应为 0；后续账号只能来自院方身份源或实施管理员创建，不得来自演示种子。
+- **启动安全守卫（S0-07，B-2）**：`anesop.security.demo-accounts-allowed` 默认 **false**
+  （不依赖 profile），启动时校验 `m0_platform.sys_user` 中不存在 `demo_*` 账号
+  （`username LIKE 'demo\_%'`，精确转义，`demouser` 不命中），命中即拒绝启动并告警。
+  dev/test 的 `application-dev.yml` / `application-test.yml` 显式置 true 才允许演示账号。
+  生产首次部署迁移后 `sys_user` 应为 0；后续账号只能来自院方身份源或实施管理员创建，
+  不得来自演示种子。JWT 密钥同理（`anesop.security.jwt.allow-dev-generated` 默认 false）。
 - 发布窗口内先跑迁移再启应用；迁移失败即停止发布，禁止应用“带病启动”。
 - 迁移前必须有一次可验证的备份；跨大版本升级先在 staging 用同规模数据演练。
 
@@ -178,7 +182,7 @@ V1 使用的 PG 特性**集中在 `m0_platform` 一个 schema**，避免扩散�
 |---|---|---|
 | S-1 | user → dept/room 绑定表（用户与科室/术间的数据范围绑定） | S0-07 / M1 |
 | S-2 | `SYS_ADMIN` 权限拆分（平台管理员与业务管理员分离） | M1 实施基线 |
-| S-5 | `phone_hash`（手机号检索/去重，配合 `phone_enc`） | M1 |
+| S-5 | `phone_hash` 列已由 V3 expand 就绪（varchar(128)，与 `phone_enc` 配套）；加密/HMAC 写路径 | M1 |
 | S-9 | 数据库最小权限 GRANT / initdb 脚本（迁移账号与应用账号分离） | S0-07 或 S0-10 |
 | Q-2 | 患者/术间表归属哪个 schema（M1 与 M2 边界） | M1 |
 | Q-3 | 多院区 `tenant_id`/`site_id` 字段引入时点（expand-contract） | M1 前 |

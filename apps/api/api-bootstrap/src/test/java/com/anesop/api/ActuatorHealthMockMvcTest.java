@@ -4,18 +4,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.anesop.api.support.AbstractApiIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * 健康检查可观测：GET /actuator/health 返回 200 且 status=UP。
+ * 健康检查可观测：GET /actuator/health 返回 200 且 status=UP（security 放行）。
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-class ActuatorHealthMockMvcTest {
+class ActuatorHealthMockMvcTest extends AbstractApiIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;

@@ -14,8 +14,8 @@
   <artifactId>api-bootstrap</artifactId>
   <name>ANESOP :: API Bootstrap</name>
   <description>
-    唯一可执行装配点：Web/Actuator/OpenAPI 基础设施 + 各模块 API。
-    impl 的装配在 S0-07（M0 认证权限骨架）引入，本任务不依赖任何 impl。
+    唯一可执行装配点：Web/Actuator/OpenAPI 基础设施 + 各模块 API，
+    S0-07 起叠加 M0 认证权限运行时（Security、JWT、MyBatis、Flyway、审计）。
   </description>
 
   <dependencies>
@@ -66,6 +66,13 @@
       <version>${project.version}</version>
     </dependency>
 
+    <!-- M0 认证与权限运行时（S0-07）：bootstrap 是唯一允许依赖 impl 的装配点 -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m0-impl</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
     <!-- 基础设施 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -84,6 +91,25 @@
       <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
     </dependency>
 
+    <!-- 认证与权限（S0-07）：JWT 资源服务器（Nimbus）、方法级 RBAC、审计 AOP -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-aop</artifactId>
+    </dependency>
+    <!-- 数据源 + Flyway 运行时（m0-impl 提供 flyway-core/pg 方言，本模块提供 JDBC 池） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+
     <!-- 测试 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -95,9 +121,54 @@
       <artifactId>archunit-junit5</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!-- 集成测试用嵌入式 PostgreSQL 16（Docker 不可用，EXT-08），版本由根 pom 锁定 -->
+    <dependency>
+      <groupId>io.zonky.test</groupId>
+      <artifactId>embedded-postgres</artifactId>
+      <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-windows-amd64</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-darwin-amd64</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-linux-amd64-alpine</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.zonky.test.postgres</groupId>
+      <artifactId>embedded-postgres-binaries-linux-amd64</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
+    <!--
+      数据库迁移脚本进入 classpath：production locations = classpath:db/migration；
+      dev/test profile 额外追加 classpath:db/seed/demo（仅演示账号，prod 不加载）。
+      由 maven-resources-plugin 在 process-resources 阶段复制。
+    -->
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <resource>
+        <directory>${project.basedir}/../../../db/migration</directory>
+        <targetPath>db/migration</targetPath>
+      </resource>
+      <resource>
+        <directory>${project.basedir}/../../../db/seed/demo</directory>
+        <targetPath>db/seed/demo</targetPath>
+      </resource>
+    </resources>
+
     <plugins>
       <plugin>
         <groupId>org.springframework.boot</groupId>

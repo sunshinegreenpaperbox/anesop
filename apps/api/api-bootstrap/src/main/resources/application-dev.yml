@@ -1,0 +1,30 @@
+# 开发环境：显式开启文档/指标并追加演示账号种子（仅 SYNTHETIC）。
+# 安全收紧项在此逐条放开，便于代码评审时一眼看到差异。
+spring:
+  flyway:
+    locations:
+      - classpath:db/migration
+      - classpath:db/seed/demo
+
+anesop:
+  security:
+    demo-accounts-allowed: true
+    jwt:
+      # 未配置 ANESOP_JWT_SECRET 时生成进程内随机密钥（重启后旧令牌失效）。
+      allow-dev-generated: true
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    com.anesop: DEBUG

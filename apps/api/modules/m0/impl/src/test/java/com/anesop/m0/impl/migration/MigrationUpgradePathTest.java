@@ -61,15 +61,16 @@ class MigrationUpgradePathTest {
         MigrateResult upgradeResult = latest.migrate();
 
         assertThat(upgradeResult.success).isTrue();
-        assertThat(upgradeResult.migrationsExecuted).isEqualTo(1);
-        assertThat(latest.info().current().getVersion().getVersion()).isEqualTo("2");
-        assertThat(latest.info().current().getInstalledRank()).isEqualTo(2);
+        // V1 之后至少还有 V2/V3（其他模块的 V4+ 也一并升级）。
+        assertThat(upgradeResult.migrationsExecuted).isGreaterThanOrEqualTo(2);
+        assertThat(latest.info().current().getVersion().getVersion()).isNotEqualTo("1");
+        assertThat(latest.info().current().getInstalledRank()).isGreaterThanOrEqualTo(3);
         assertThat(latest.info().pending()).isEmpty();
 
-        assertThat(historyCount()).isEqualTo(2);
+        assertThat(historyCount()).isEqualTo(1 + upgradeResult.migrationsExecuted);
         assertThat(jdbc.queryForList(
                 "SELECT version FROM public.flyway_schema_history ORDER BY installed_rank", String.class))
-                .containsExactly("1", "2");
+                .containsSubsequence("1", "2", "3");
         assertThat(countRows("sys_role")).isEqualTo(6);
         assertThat(countRows("sys_dict_item")).isEqualTo(22);
         // 生产路径升级后仍无账号：演示账号只能来自独立 location。

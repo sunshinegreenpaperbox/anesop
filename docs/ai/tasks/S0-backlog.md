@@ -13,7 +13,7 @@
 | S0-04 | CI 流水线 | `.github/workflows/`、`scripts/` | S0-02/03/11 | 1.5 天 | Ready |
 | S0-05 | 契约基线（OpenAPI 3.1） | `packages/contracts/`、`docs/api/` | S0-02 | 2 天 | Done（评审 B-1/B-2 已修，Java 生成延至 S0-07） |
 | S0-06 | 数据库迁移基线 | `db/migration/`、`db/seed/`、`apps/api/modules/m0/` | S0-02 | 1.5 天 | Done（评审 B-1 已修） |
-| S0-07 | 认证与权限骨架 | `apps/api/modules/m0/`、`apps/web/src/modules/m0/`、`api-bootstrap/`、`packages/contracts/{java,generated/java}/` | S0-05/06 | 3 天 | Ready（下一批） |
+| S0-07 | 认证与权限骨架 | `apps/api/modules/m0/`、`apps/web/src/modules/m0/`、`api-bootstrap/`、`apps/api/api-contracts/` | S0-05/06 | 3 天 | Done（76 测试；评审 B-1/B-2/B-3 与 S-1…S-11 已修） |
 | S0-08 | 前端壳与设计令牌 | `apps/web/src/{layout,router,stores,api}/`、`packages/ui/` | S0-05/07 | 3 天 | Ready |
 | S0-09 | 采集网关 POC | `services/device-gateway/`、`db/migration/`（V4） | S0-02/06 | 3 天 | Done |
 | S0-10 | 部署环境（Compose） | `deploy/compose/`、`scripts/` | S0-02 | 1.5 天 | Done |
@@ -68,13 +68,14 @@
 - 目标：JWT/SSO 占位、RBAC + 数据权限、审计切面、登录接口、越权用例。
 - 验收：登录→拿 token→访问受保护接口；越权返回 403 且记审计；单测覆盖正常/越权/过期。
 - 追加验收（评审后扩展）：
-  1. **Java 类型生成补齐**（ADR-0003 第 5 条，M1 前必须完成）：`scripts/gen-contracts.sh --java` 用 openapi-generator 从 4 份契约生成 DTO 到 `packages/contracts/generated/java/`，并有可编译校验（Maven 模块或 javac 两种方式择一，产出随仓库入库、禁止手改）；TS 生成保持可复现。
+  1. **Java 类型生成补齐**（ADR-0003 第 5 条，M1 前必须完成）：已在 S0-07 落地——新建 `apps/api/api-contracts` Maven 模块，`openapi-generator-maven-plugin 7.10.0` 在构建期从 4 份契约生成 Java DTO 到 `target/generated-sources/openapi`（**生成物不入库**，避免双源漂移），`scripts/gen-contracts.sh --java` 提供显式生成/校验；TS 生成保持可复现。
   2. auth 端点（login/refresh/logout/me）严格按 `packages/contracts/openapi/auth.yaml` 实现，springdoc 导出的 OpenAPI 与 baseline 做漂移比对（0 破坏性）。
   3. 角色/权限码按 §2.1.2 角色 R1–R11 与 §3.9.2 数据范围定稿，回写契约与 `docs/data-dictionary/`（目前标【待确认】）。
   4. m0-impl 的 MapperScan、Flyway 运行时装配（locations 含 `db/migration`，dev/test 追加 `db/seed/demo`）、审计字段自动填充、UUID 主键赋值、事务边界。
   5. 审计切面写 `sys_audit_log`（jsonb/inet TypeHandler 已由 S0-06 提供），越权/失败操作也留痕。
   6. 生产 profile 启动断言：`prod` 下不得存在 `demo_*` 账号与演示种子（否则拒绝启动）。
   7. 敏感字段：`phone_enc` 加密写读、`phone_hash` 精确检索（若 S0-06 遗留未加列，先在本任务 V3 补）。
+     **状态：V3 已加 `phone_hash varchar(128)`（expand），字段口径三处文档已统一；写路径（PhoneHashing + 密钥配置）M1。**
 - 写域（评审后扩展）：`apps/api/modules/m0/`、`apps/web/src/modules/m0/`、`apps/api/api-bootstrap/`（pom/resources/启动断言）、`packages/contracts/generated/java/`、`packages/contracts/java/`、`scripts/gen-contracts.sh`；根 `pom.xml` 的 modules 一行由主会话集成。
 - 依赖：S0-05、S0-06。
 

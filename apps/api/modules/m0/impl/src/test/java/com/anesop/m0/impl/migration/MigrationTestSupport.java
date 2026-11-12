@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
@@ -83,11 +84,28 @@ final class MigrationTestSupport {
                 .load();
     }
 
-    /** 清空测试库中的 schema 与 Flyway 历史，保证每个用例从真正的空库开始。 */
+    /**
+     * 清空测试库中的 schema 与 Flyway 历史，保证每个用例从真正的空库开始。
+     *
+     * <p>按 information_schema 动态清理全部非系统 schema：本模块之外（如 S0-09 的
+     * m2_anes）也会新增迁移与 schema，硬编码单一 schema 会让后续迁移撞上残留表。
+     */
     static void resetDatabase(DataSource dataSource) throws SQLException {
         try (Connection connection = dataSource.getConnection();
                 Statement statement = connection.createStatement()) {
-            statement.execute("DROP SCHEMA IF EXISTS " + SCHEMA + " CASCADE");
+            List<String> schemas = new java.util.ArrayList<>();
+            try (ResultSet resultSet = statement.executeQuery(
+                    "SELECT schema_name FROM information_schema.schemata "
+                            + "WHERE schema_name <> 'public' "
+                            + "AND schema_name NOT LIKE 'pg\\_%' ESCAPE '\\' "
+                            + "AND schema_name NOT IN ('information_schema')")) {
+                while (resultSet.next()) {
+                    schemas.add(resultSet.getString(1));
+                }
+            }
+            for (String schema : schemas) {
+                statement.execute("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE");
+            }
             statement.execute("DROP TABLE IF EXISTS public.flyway_schema_history");
         }
     }

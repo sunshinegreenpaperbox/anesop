@@ -87,6 +87,29 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/auth/password': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 修改当前用户口令
+     * @description 校验旧口令并设置新口令；成功后 `must_change_password` 置 false。
+     *     首次登录（`must_change_password=true`）时服务端只允许调用 `/v1/auth/me`、
+     *     `/v1/auth/logout` 与本接口，调用其他接口返回 403；改密后需重新登录取得新令牌。
+     *     新口令强度：12–128 字符，至少包含大写、小写、数字、符号四类中的三类。
+     */
+    post: operations['changePassword']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/v1/auth/sessions': {
     parameters: {
       query?: never
@@ -172,6 +195,13 @@ export interface components {
        */
       authType: 'LOCAL' | 'LDAP' | 'SSO'
     }
+    /** @description 修改口令请求；旧口令用于二次确认，新口令需满足强度规则。 */
+    ChangePasswordRequest: {
+      /** @description 当前口令；仅通过 TLS 传输，日志与审计不得记录明文。 */
+      oldPassword: string
+      /** @description 新口令；12–128 字符，至少包含大写、小写、数字、符号四类中的三类。 */
+      newPassword: string
+    }
     /** @description 刷新令牌请求。 */
     RefreshRequest: {
       /** @description 未过期的刷新令牌；轮换后旧值立即失效。 */
@@ -192,19 +222,23 @@ export interface components {
       expiresIn: number
       user: components['schemas']['CurrentUser']
     }
-    /** @description 数据权限范围，对应 §3.9.2 的全院/科室/术间/本人患者四类。 */
+    /**
+     * @description 数据权限范围，对应 §3.9.2 的全院/院区/科室/术间/本人患者五类。
+     *     与 sys_role.data_scope 一一映射：ALL→ALL、SITE→SITE、DEPT→DEPARTMENT、
+     *     ROOM→ROOM、SELF→OWN_PATIENTS；M1 起 scopeIds 由范围绑定表填充。
+     */
     DataScope: {
       /**
-       * @description 数据范围类型。
+       * @description 数据范围类型（SITE=院区，对应 sys_role.data_scope 的 SITE）。
        * @enum {string}
        */
-      type: 'ALL' | 'DEPARTMENT' | 'ROOM' | 'OWN_PATIENTS'
+      type: 'ALL' | 'SITE' | 'DEPARTMENT' | 'ROOM' | 'OWN_PATIENTS'
       /** @description 范围对象标识；ALL 时为空数组。 */
       scopeIds: string[]
     }
     /** @description 当前用户、角色、权限点与数据范围快照。 */
     CurrentUser: {
-      /** @description 用户标识（雪花 ID 字符串）。 */
+      /** @description 用户标识（UUID 字符串）。 */
       userId: string
       /** @description 登录账号。 */
       username: string
@@ -212,9 +246,26 @@ export interface components {
       displayName: string
       /** @description 关联人员档案标识；纯系统账号可为 null。 */
       staffId?: string | null
-      /** @description 角色编码列表。 */
+      /**
+       * @description 是否必须先修改初始口令。为 true 时服务端仅允许 /v1/auth/me、
+       *     /v1/auth/logout 与 /v1/auth/password，其余接口返回 403。
+       */
+      mustChangePassword?: boolean
+      /**
+       * @description 角色编码列表。预置角色码：SYS_ADMIN（R9 信息科管理员）、
+       *     SYS_ANESTHESIOLOGIST（R2 麻醉医师）、SYS_NURSE_ANESTHETIST（R3 麻醉护士）、
+       *     SYS_SURGEON（R10 手术科室医师）、SYS_OR_MANAGER（R4 手术室护士/管理员）、
+       *     SYS_QC_MANAGER（R8 质控专员）。R1/R5/R6/R7/R11 由院方岗位矩阵在 M1 按同一
+       *     编码规范（SYS_ 前缀 + 上划线大写）落库，映射表见 docs/modules/m0/README.md。
+       */
       roles: string[]
-      /** @description 权限点列表，粒度到“菜单 + 操作”，如 anesthesia.record.lock。 */
+      /**
+       * @description 权限点列表，粒度到“菜单 + 操作”，编码为冒号分隔的 `<模块>:<资源>:<动作>`
+       *     （如 m0:auth:read、anesthesia:record:read；V2 历史权限点为
+       *     `<模块>:<动作>` 形式，如 auth:login，M1 起新增权限点统一三段式）。
+       *     服务端 Spring Security 授权表达式使用加前缀形式
+       *     `PERM_<code>`（如 PERM_m0:auth:read）；角色授权使用 `ROLE_<code>`。
+       */
       permissions: string[]
       /** @description 数据权限范围列表。 */
       dataScopes: components['schemas']['DataScope'][]
@@ -238,7 +289,8 @@ export interface components {
       loginAt: string
       /**
        * Format: date-time
-       * @description 会话过期时间；默认 30 分钟无操作失效。
+       * @description 会话（刷新令牌）过期时间：登录后 7 天（anesop.security.jwt.refresh-ttl）。
+       *     当前无空闲超时；若 M1 启用空闲超时，在此补充口径。
        */
       expiresAt: string
       /**
@@ -316,7 +368,24 @@ export interface components {
         'application/json': components['schemas']['Error']
       }
     }
-    /** @description 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。 */
+    /** @description 同一来源 IP 的登录/刷新请求超过限流阈值，稍后重试。 */
+    TooManyRequests: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "RATE_LIMITED",
+         *       "message": "请求过于频繁，请稍后重试",
+         *       "traceId": "SYNTH-TRACE-0007",
+         *       "details": []
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
+    /** @description 请求语义不合法：字段格式正确但业务规则拒绝，message 使用统一模糊文案，不暴露账号状态。 */
     UnprocessableEntity: {
       headers: {
         [name: string]: unknown
@@ -327,12 +396,7 @@ export interface components {
          *       "code": "BUSINESS_RULE_VIOLATION",
          *       "message": "账号状态或认证方式不允许登录",
          *       "traceId": "SYNTH-TRACE-0006",
-         *       "details": [
-         *         {
-         *           "field": "authType",
-         *           "reason": "该账号未开通所选认证方式"
-         *         }
-         *       ]
+         *       "details": []
          *     }
          */
         'application/json': components['schemas']['Error']
@@ -377,17 +441,17 @@ export interface operations {
            *       "accessToken": "SYNTH-ACCESS-TOKEN",
            *       "refreshToken": "SYNTH-REFRESH-TOKEN",
            *       "tokenType": "Bearer",
-           *       "expiresIn": 1800,
+           *       "expiresIn": 900,
            *       "user": {
            *         "userId": "1000000000000000001",
            *         "username": "demo.anesthesiologist",
            *         "displayName": "演示医师",
            *         "roles": [
-           *           "ANESTHESIOLOGIST"
+           *           "SYS_ANESTHESIOLOGIST"
            *         ],
            *         "permissions": [
-           *           "anesthesia.record.read",
-           *           "anesthesia.record.write"
+           *           "anesthesia:record:read",
+           *           "anesthesia:record:write"
            *         ],
            *         "dataScopes": [
            *           {
@@ -409,6 +473,7 @@ export interface operations {
       400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       422: components['responses']['UnprocessableEntity']
+      429: components['responses']['TooManyRequests']
     }
   }
   refreshToken: {
@@ -440,16 +505,16 @@ export interface operations {
            *       "accessToken": "SYNTH-ACCESS-TOKEN-2",
            *       "refreshToken": "SYNTH-REFRESH-TOKEN-2",
            *       "tokenType": "Bearer",
-           *       "expiresIn": 1800,
+           *       "expiresIn": 900,
            *       "user": {
            *         "userId": "1000000000000000001",
            *         "username": "demo.anesthesiologist",
            *         "displayName": "演示医师",
            *         "roles": [
-           *           "ANESTHESIOLOGIST"
+           *           "SYS_ANESTHESIOLOGIST"
            *         ],
            *         "permissions": [
-           *           "anesthesia.record.read"
+           *           "anesthesia:record:read"
            *         ],
            *         "dataScopes": [
            *           {
@@ -470,6 +535,7 @@ export interface operations {
       }
       400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
+      429: components['responses']['TooManyRequests']
     }
   }
   logout: {
@@ -512,12 +578,12 @@ export interface operations {
            *       "username": "demo.anesthesiologist",
            *       "displayName": "演示医师",
            *       "roles": [
-           *         "ANESTHESIOLOGIST"
+           *         "SYS_ANESTHESIOLOGIST"
            *       ],
            *       "permissions": [
-           *         "anesthesia.record.read",
-           *         "anesthesia.record.write",
-           *         "anesthesia.record.lock"
+           *         "anesthesia:record:read",
+           *         "anesthesia:record:write",
+           *         "anesthesia:record:lock"
            *       ],
            *       "dataScopes": [
            *         {
@@ -535,6 +601,37 @@ export interface operations {
           'application/json': components['schemas']['CurrentUser']
         }
       }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  changePassword: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "oldPassword": "SYNTHETIC-OLD-PASSWORD",
+         *       "newPassword": "SYNTHETIC-NEW-PASSWORD-2026"
+         *     }
+         */
+        'application/json': components['schemas']['ChangePasswordRequest']
+      }
+    }
+    responses: {
+      /** @description 口令修改成功，无响应体；客户端应重新登录。 */
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
     }
@@ -568,7 +665,7 @@ export interface operations {
            *           "clientIp": "10.0.0.10",
            *           "userAgent": "SYNTHETIC-BROWSER/1.0",
            *           "loginAt": "2026-11-12T08:00:00+08:00",
-           *           "expiresAt": "2026-11-12T08:30:00+08:00",
+           *           "expiresAt": "2026-11-19T08:00:00+08:00",
            *           "status": "ACTIVE",
            *           "createdAt": "2026-11-12T08:00:00+08:00",
            *           "createdBy": "1000000000000000001",

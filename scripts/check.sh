@@ -35,9 +35,10 @@ step() {
   echo "------------------------------------------------------------"
 }
 
-# 1. 后端：编译、单测、覆盖率、Checkstyle(validate)、SpotBugs(verify)
-step "1/7 后端 mvn verify（含 Checkstyle + SpotBugs）"
-./scripts/mvn.sh -B -f apps/api/pom.xml verify
+# 1. 后端：根 reactor（apps/api + services/device-gateway + api-contracts）
+#    编译、单测、Checkstyle(validate)、SpotBugs(verify)
+step "1/7 后端 mvn verify（根 reactor：api + gateway + contracts）"
+./scripts/mvn.sh -B verify
 
 # 2. 前端依赖：lockfile 必须与 package.json 一致
 step "2/7 前端依赖安装（pnpm install --frozen-lockfile）"

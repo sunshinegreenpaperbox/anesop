@@ -5,7 +5,8 @@
 ## 数据归属
 
 - schema：`m0_platform`（本模块独占；其他模块只能经 `m0-api` 访问，禁止直连本 schema 的表）
-- 迁移：`db/migration/V1__m0_platform_init.sql`（结构）、`V2__m0_platform_seed_synthetic.sql`（平台预置基线，无账号）
+- 迁移：`db/migration/V1__m0_platform_init.sql`（结构）、`V2__m0_platform_seed_synthetic.sql`（平台预置基线，无账号）、
+  `V3__m0_auth_token.sql`（刷新令牌表 + `m0:auth:read`/`m0:auth:write` 权限点 + `sys_user.phone_hash`，S0-07）
 - 演示种子：`db/seed/demo/V100__demo_admin_synthetic.sql`（仅 dev/test 独立 location）
 - 规范与运行方式：`docs/db/README.md`；演示账号：`docs/db/seed.md`
 
@@ -13,12 +14,13 @@
 
 | 表 | 说明 |
 |---|---|
-| `sys_user` | 用户、口令哈希、失败锁定、软删除、乐观锁 |
+| `sys_user` | 用户、口令哈希、`phone_enc`/`phone_hash`、强制改密、失败锁定、软删除、乐观锁 |
 | `sys_role` | 角色 + 数据范围（ALL/SITE/DEPT/ROOM/SELF） |
 | `sys_permission` | 菜单/API/按钮权限点，树形 `parent_id` |
 | `sys_user_role` / `sys_role_permission` | 多对多关联，复合主键 + FK + 反向索引 |
 | `sys_audit_log` | 只追加审计；触发器拒绝 UPDATE/DELETE/TRUNCATE；留存 ≥ 6 个月 |
 | `sys_dict_type` / `sys_dict_item` | 字典；同类型内 code 唯一 |
+| `sys_refresh_token` | 刷新令牌（SHA-256 哈希、有效期、撤销时间、客户端信息）；V3 |
 
 ## 结构
 
@@ -57,8 +59,11 @@ source scripts/env.sh
 - S0-02：空模块占位（`package-info.java`）已完成。
 - S0-06：V1/V2 迁移、演示种子独立 location、6 个实体、6 个 Mapper、
   uuid/jsonb/inet TypeHandler、迁移与持久层集成测试完成。
-- S0-07 待办：认证服务、RBAC/数据权限拦截器、审计写入服务、`@Version` 与
-  审计字段自动填充、`api-bootstrap` 运行时装配（本任务不写控制器/认证逻辑）；
-  MyBatis 配置需注册 `UuidTypeHandler`（全局）并按实体 `@TableField` 生效 jsonb/inet。
+- S0-07（已完成）：`AuthService` 实现（登录/刷新轮换/登出/当前用户/会话分页）、
+  `AccessTokenIssuer` 适配（JWT 由 api-bootstrap 签发）、刷新令牌 SHA-256 落库与撤销、
+  BCrypt 口令校验与原子失败锁定、强制改密、口令修改、`DataScopeResolver`（读 data_scope，
+  fail-closed）、`@Audited` 审计切面与 `AuditWriter`（接口在 m0-api、实现在 impl）、
+  `api-bootstrap` 装配 Security/JWT/MyBatis（`MapperScan`、`UuidTypeHandler`、乐观锁）、
+  Flyway 运行时与 prod 启动断言。接口与权限点详见 `docs/modules/m0/README.md`。
   注意：实体主键为 `UUID` + `IdType.INPUT`，插入前由应用层赋值
   （MyBatis-Plus `ASSIGN_UUID` 只支持 String 主键；DB `gen_random_uuid()` 仅兜底直连 SQL）。

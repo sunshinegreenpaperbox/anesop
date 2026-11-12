@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.anesop</groupId>
+    <artifactId>anesop-api</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>api-contracts</artifactId>
+  <name>ANESOP :: API Contracts（契约生成的 Java 类型）</name>
+  <description>
+    由 packages/contracts/openapi/*.yaml 生成的 Java DTO（ADR-0003 第 5 条）。
+    生成物在 target/generated-sources/openapi 下，禁止手改；改契约后运行
+    `bash scripts/gen-contracts.sh --java` 重新生成。
+  </description>
+
+  <dependencies>
+    <!-- 生成模型依赖：Jackson 序列化注解；版本由 Spring Boot BOM 管理 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+    </dependency>
+
+    <!-- spring 生成器为 date-time 字段生成 @DateTimeFormat；版本由 Boot BOM 管理 -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+    </dependency>
+
+    <!-- Bean Validation 注解（@NotNull/@Size 由 useBeanValidation 生成）；版本由 Boot BOM 管理 -->
+    <dependency>
+      <groupId>jakarta.validation</groupId>
+      <artifactId>jakarta.validation-api</artifactId>
+    </dependency>
+
+    <!-- 生成物文件头的 @Generated（useJakartaEe=true）；版本由 Boot BOM 管理 -->
+    <dependency>
+      <groupId>jakarta.annotation</groupId>
+      <artifactId>jakarta.annotation-api</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        契约 → Java 模型。每份契约一个 execution，输出到独立包，避免共享模型
+        （Error/PageMeta/AuditFields）跨域重名。
+        generateModels=true / generateApis=false / generateSupportingFiles=false：
+        只生成 DTO，不生成 Controller、pom 或 README 等支撑文件。
+      -->
+      <plugin>
+        <groupId>org.openapitools</groupId>
+        <artifactId>openapi-generator-maven-plugin</artifactId>
+        <version>${openapi-generator.version}</version>
+        <executions>
+          <execution>
+            <id>generate-auth-models</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <configuration>
+              <inputSpec>${project.basedir}/../../../packages/contracts/openapi/auth.yaml</inputSpec>
+              <generatorName>spring</generatorName>
+              <output>${project.build.directory}/generated-sources/openapi/auth</output>
+              <modelPackage>com.anesop.contracts.auth.model</modelPackage>
+              <generateModels>true</generateModels>
+              <generateApis>false</generateApis>
+              <generateSupportingFiles>false</generateSupportingFiles>
+              <generateModelTests>false</generateModelTests>
+              <generateModelDocumentation>false</generateModelDocumentation>
+              <!--
+                契约的结构/风格门禁由 spectral（scripts/contract-check.sh）负责；
+                openapi-generator 内置的 Swagger 解析器对 3.1 的 license.identifier 等
+                元数据要求更严，会与已评审契约冲突，故关闭其重复校验。
+              -->
+              <skipValidateSpec>true</skipValidateSpec>
+              <configOptions>
+                <useJakartaEe>true</useJakartaEe>
+                <useBeanValidation>true</useBeanValidation>
+                <openApiNullable>false</openApiNullable>
+                <dateLibrary>java8</dateLibrary>
+                <!-- 模型只依赖 Jackson + Jakarta Validation；不引入 swagger 注解库 -->
+                <annotationLibrary>none</annotationLibrary>
+                <documentationProvider>none</documentationProvider>
+              </configOptions>
+            </configuration>
+          </execution>
+          <execution>
+            <id>generate-patient-models</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <configuration>
+              <inputSpec>${project.basedir}/../../../packages/contracts/openapi/patient.yaml</inputSpec>
+              <generatorName>spring</generatorName>
+              <output>${project.build.directory}/generated-sources/openapi/patient</output>
+              <modelPackage>com.anesop.contracts.patient.model</modelPackage>
+              <generateModels>true</generateModels>
+              <generateApis>false</generateApis>
+              <generateSupportingFiles>false</generateSupportingFiles>
+              <generateModelTests>false</generateModelTests>
+              <generateModelDocumentation>false</generateModelDocumentation>
+              <!--
+                契约的结构/风格门禁由 spectral（scripts/contract-check.sh）负责；
+                openapi-generator 内置的 Swagger 解析器对 3.1 的 license.identifier 等
+                元数据要求更严，会与已评审契约冲突，故关闭其重复校验。
+              -->
+              <skipValidateSpec>true</skipValidateSpec>
+              <configOptions>
+                <useJakartaEe>true</useJakartaEe>
+                <useBeanValidation>true</useBeanValidation>
+                <openApiNullable>false</openApiNullable>
+                <dateLibrary>java8</dateLibrary>
+                <!-- 模型只依赖 Jackson + Jakarta Validation；不引入 swagger 注解库 -->
+                <annotationLibrary>none</annotationLibrary>
+                <documentationProvider>none</documentationProvider>
+              </configOptions>
+            </configuration>
+          </execution>
+          <execution>
+            <id>generate-scheduling-models</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <configuration>
+              <inputSpec>${project.basedir}/../../../packages/contracts/openapi/scheduling.yaml</inputSpec>
+              <generatorName>spring</generatorName>
+              <output>${project.build.directory}/generated-sources/openapi/scheduling</output>
+              <modelPackage>com.anesop.contracts.scheduling.model</modelPackage>
+              <generateModels>true</generateModels>
+              <generateApis>false</generateApis>
+              <generateSupportingFiles>false</generateSupportingFiles>
+              <generateModelTests>false</generateModelTests>
+              <generateModelDocumentation>false</generateModelDocumentation>
+              <!--
+                契约的结构/风格门禁由 spectral（scripts/contract-check.sh）负责；
+                openapi-generator 内置的 Swagger 解析器对 3.1 的 license.identifier 等
+                元数据要求更严，会与已评审契约冲突，故关闭其重复校验。
+              -->
+              <skipValidateSpec>true</skipValidateSpec>
+              <configOptions>
+                <useJakartaEe>true</useJakartaEe>
+                <useBeanValidation>true</useBeanValidation>
+                <openApiNullable>false</openApiNullable>
+                <dateLibrary>java8</dateLibrary>
+                <!-- 模型只依赖 Jackson + Jakarta Validation；不引入 swagger 注解库 -->
+                <annotationLibrary>none</annotationLibrary>
+                <documentationProvider>none</documentationProvider>
+              </configOptions>
+            </configuration>
+          </execution>
+          <execution>
+            <id>generate-anesthesia-models</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <configuration>
+              <inputSpec>${project.basedir}/../../../packages/contracts/openapi/anesthesia.yaml</inputSpec>
+              <generatorName>spring</generatorName>
+              <output>${project.build.directory}/generated-sources/openapi/anesthesia</output>
+              <modelPackage>com.anesop.contracts.anesthesia.model</modelPackage>
+              <generateModels>true</generateModels>
+              <generateApis>false</generateApis>
+              <generateSupportingFiles>false</generateSupportingFiles>
+              <generateModelTests>false</generateModelTests>
+              <generateModelDocumentation>false</generateModelDocumentation>
+              <!--
+                契约的结构/风格门禁由 spectral（scripts/contract-check.sh）负责；
+                openapi-generator 内置的 Swagger 解析器对 3.1 的 license.identifier 等
+                元数据要求更严，会与已评审契约冲突，故关闭其重复校验。
+              -->
+              <skipValidateSpec>true</skipValidateSpec>
+              <configOptions>
+                <useJakartaEe>true</useJakartaEe>
+                <useBeanValidation>true</useBeanValidation>
+                <openApiNullable>false</openApiNullable>
+                <dateLibrary>java8</dateLibrary>
+                <!-- 模型只依赖 Jackson + Jakarta Validation；不引入 swagger 注解库 -->
+                <annotationLibrary>none</annotationLibrary>
+                <documentationProvider>none</documentationProvider>
+              </configOptions>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- 生成代码不纳入 Checkstyle：样式由生成器决定，人工规则只约束手写源码 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <configuration>
+          <sourceDirectories>
+            <sourceDirectory>${project.basedir}/src/main/java</sourceDirectory>
+          </sourceDirectories>
+        </configuration>
+      </plugin>
+
+      <!-- 生成代码不纳入 SpotBugs：排除清单见模块内 spotbugs-exclude.xml -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <configuration>
+          <excludeFilterFile>${project.basedir}/spotbugs-exclude.xml</excludeFilterFile>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  api-contracts 模块 SpotBugs 排除清单。
+
+  target/generated-sources/openapi 下的模型类由 openapi-generator 生成（禁止手改），
+  不是人工评审的源码；缺陷修复必须回到契约或生成器配置，因此整体排除。
+  手写的 src/main/java 类不在排除范围内。
+-->
+<FindBugsFilter>
+  <Match>
+    <Package name="~com\.anesop\.contracts\..*\.model"/>
+  </Match>
+</FindBugsFilter>

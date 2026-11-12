@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# 契约 → TypeScript 类型生成（S0-05）
+# 契约 → 类型生成（S0-05 TS / S0-07 Java）
 #
 # 输入：packages/contracts/openapi/{auth,patient,scheduling,anesthesia}.yaml
-# 输出：packages/contracts/generated/typescript/{auth,patient,scheduling,anesthesia}.d.ts
+# 输出：
+#   - TS（默认）：packages/contracts/generated/typescript/<域>.d.ts
+#   - Java（--java）：apps/api/api-contracts/target/generated-sources/openapi/<域>
+#     （Maven 模块 com.anesop:api-contracts，openapi-generator-maven-plugin 生成）
 #
 # 生成物头部固定写 "DO NOT EDIT"；修改契约后重新运行本脚本，禁止手改生成物。
-# 校验：pnpm exec tsc --noEmit --strict packages/contracts/generated/typescript/*.d.ts
+# 校验：
+#   pnpm exec tsc --noEmit --strict packages/contracts/generated/typescript/*.d.ts
+#   ./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-contracts -am test
+#
+# 用法：
+#   bash scripts/gen-contracts.sh          # 仅 TS
+#   bash scripts/gen-contracts.sh --java   # 仅 Java（M1 前置，ADR-0003 第 5 条）
+#   bash scripts/gen-contracts.sh --all    # TS + Java
 # ---------------------------------------------------------------------------
 set -Eeuo pipefail
 
@@ -19,8 +29,48 @@ source "$ROOT/scripts/env.sh" >/dev/null
 
 CONTRACTS_DIR="$ROOT/packages/contracts"
 OUT_DIR="$CONTRACTS_DIR/generated/typescript"
+JAVA_DIR="$ROOT/apps/api/api-contracts/target/generated-sources/openapi"
 DOMAINS=(auth patient scheduling anesthesia)
+MODE="ts"
 
+for arg in "$@"; do
+  case "$arg" in
+    --java) MODE="java" ;;
+    --all) MODE="all" ;;
+    -h | --help)
+      sed -n '2,22p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "gen-contracts.sh: 未知参数 $arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
+gen_java() {
+  echo "[gen-contracts] Java 输出目录：apps/api/api-contracts/target/generated-sources/openapi"
+  # 只构建契约模块及其父 POM，不触碰其他业务模块（避免并发构建冲突）。
+  if ! "$ROOT/scripts/mvn.sh" -B -q -f "$ROOT/apps/api/pom.xml" -pl api-contracts -am generate-sources; then
+    echo "[gen-contracts] Java codegen 失败：openapi-generator 生成出错" >&2
+    exit 1
+  fi
+
+  local empty=0
+  for domain in "${DOMAINS[@]}"; do
+    local dir="$JAVA_DIR/$domain/src/main/java"
+    if [ ! -d "$dir" ] || [ -z "$(find "$dir" -name '*.java' -print -quit)" ]; then
+      echo "[gen-contracts] 缺少 Java 生成物：$dir" >&2
+      empty=1
+      continue
+    fi
+    echo "[gen-contracts] 已生成 Java 模型：$domain（$(find "$dir" -name '*.java' | wc -l | tr -d ' ') 个类）"
+  done
+  [ "$empty" -eq 0 ] || exit 1
+  echo "[gen-contracts] Java OK：${#DOMAINS[@]} 份契约已生成"
+}
+
+gen_ts() {
 mkdir -p "$OUT_DIR"
 
 echo "[gen-contracts] 输出目录：packages/contracts/generated/typescript"
@@ -49,4 +99,14 @@ done
 # 生成物纳入根 Prettier 检查（pnpm lint 会检查 packages/），生成后统一格式化。
 pnpm exec prettier --write "$OUT_DIR" >/dev/null
 
-echo "[gen-contracts] OK：${#DOMAINS[@]} 份契约已生成"
+echo "[gen-contracts] TS OK：${#DOMAINS[@]} 份契约已生成"
+}
+
+case "$MODE" in
+  ts) gen_ts ;;
+  java) gen_java ;;
+  all)
+    gen_ts
+    gen_java
+    ;;
+esac

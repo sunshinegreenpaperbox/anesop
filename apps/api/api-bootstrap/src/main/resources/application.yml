@@ -1,35 +1,94 @@
-# ANESOP API 基础配置（S0-02 骨架）
-# 只放基础设施配置；业务配置随各模块在后续任务中补充。
+# ANESOP API 基础配置（安全默认 / fail-closed）
+#
+# 本文件是**默认即安全**的基线：不激活任何 profile 时也按生产语义收紧——
+#   - springdoc 关闭、actuator 只暴露 health/info；
+#   - Flyway 只加载 db/migration（不含演示种子）；
+#   - demo_* 演示账号与自动生成 JWT 密钥均默认禁止（启动守卫拒绝）。
+# 需要宽松能力的只有 dev/test profile：application-dev.yml / application-test.yml 显式开启。
 spring:
   application:
     name: anesop-api
-  profiles:
-    default: dev
   jackson:
     time-zone: Asia/Shanghai
+
+  # 数据源（S0-07）：生产由环境变量注入；dev/test 在 profile 文件中覆盖。
+  datasource:
+    url: ${ANESOP_DB_URL:jdbc:postgresql://127.0.0.1:5432/anesop}
+    username: ${ANESOP_DB_USER:anesop}
+    password: ${ANESOP_DB_PASSWORD:anesop}
+    hikari:
+      maximum-pool-size: ${ANESOP_DB_POOL_SIZE:10}
+      connection-timeout: 5000
+
+  # Flyway（S0-07）：迁移脚本由 api-bootstrap 的 maven-resources-plugin 从 db/migration
+  # 复制到 classpath:db/migration；默认/生产 locations 只含该目录，演示种子必须显式追加。
+  flyway:
+    enabled: true
+    locations:
+      - classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
+# MyBatis-Plus（S0-07）：下划线转驼峰、逻辑删除；uuid/jsonb/inet TypeHandler 由
+# PersistenceConfiguration 注册。
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: true
+      logic-not-delete-value: false
+
+anesop:
+  security:
+    # 默认禁止演示账号；dev/test 的 profile 文件显式置 true（B-2.3）。
+    demo-accounts-allowed: false
+    jwt:
+      # HS256 签名密钥：Base64 编码，解码后 >= 32 字节（生成方式：openssl rand -base64 48）。
+      # 默认必须由 ANESOP_JWT_SECRET 注入；缺失、占位值、低熵或长度不足均拒绝启动（B-1）。
+      # 密钥不得入库、不得写入仓库/日志；CA/SSO 与真实密钥托管为 EXT-05。
+      secret: ${ANESOP_JWT_SECRET:}
+      # 仅 dev/test 显式允许生成进程内随机密钥；默认 false。
+      allow-dev-generated: false
+      issuer: anesop
+      # 访问令牌 15 分钟；刷新令牌 7 天（轮换 + DB 存 SHA-256，不依赖 Redis）
+      access-ttl: PT15M
+      refresh-ttl: P7D
+    # 登录/刷新 IP 级限流（S-6）：内存令牌桶，单实例语义。
+    rate-limit:
+      enabled: true
+      capacity: 20
+      refill-tokens: 20
+      refill-period: PT1M
 
 server:
   port: 8080
   shutdown: graceful
 
+# 默认只暴露健康与信息端点；metrics/prometheus 必须在目标 profile 显式开启并登记白名单。
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info
   endpoint:
     health:
-      show-details: when-authorized
+      show-details: never
       probes:
         enabled: true
   info:
     env:
-      enabled: true
+      enabled: false
 
+# springdoc 默认关闭；仅 dev/test 显式开启（B-2）。
 springdoc:
   api-docs:
+    enabled: false
     path: /v3/api-docs
   swagger-ui:
+    enabled: false
     path: /swagger-ui.html
   default-produces-media-type: application/json
 
@@ -37,23 +96,3 @@ info:
   app:
     name: ANESOP
     description: 麻醉信息平台（围术期全流程）
-
----
-# 开发环境
-spring:
-  config:
-    activate:
-      on-profile: dev
-logging:
-  level:
-    com.anesop: DEBUG
-
----
-# 测试环境（CI / 本地自动化测试）
-spring:
-  config:
-    activate:
-      on-profile: test
-logging:
-  level:
-    com.anesop: INFO

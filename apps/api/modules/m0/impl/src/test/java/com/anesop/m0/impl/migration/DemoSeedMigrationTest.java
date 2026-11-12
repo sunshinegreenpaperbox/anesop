@@ -3,6 +3,7 @@ package com.anesop.m0.impl.migration;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.SQLException;
+import java.util.List;
 import java.util.Map;
 import javax.sql.DataSource;
 import org.flywaydb.core.api.output.MigrateResult;
@@ -39,10 +40,11 @@ class DemoSeedMigrationTest {
         MigrateResult result = MigrationTestSupport.flyway(dataSource, MigrationTestSupport.demoLocations())
                 .migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(3);
-        assertThat(jdbc.queryForList(
-                "SELECT version FROM public.flyway_schema_history ORDER BY installed_rank", String.class))
-                .containsExactly("1", "2", "100");
+        assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(4);
+        List<String> versions = jdbc.queryForList(
+                "SELECT version FROM public.flyway_schema_history ORDER BY installed_rank", String.class);
+        assertThat(versions).contains("1", "2", "3", "100");
+        assertThat(versions.get(versions.size() - 1)).as("演示种子 V100 必须最后执行").isEqualTo("100");
 
         // 平台预置基线仍在，演示种子只追加账号。
         assertThat(jdbc.queryForObject(

@@ -1,0 +1,38 @@
+# 生产环境（B-2）：不依赖 base 的默认值“碰巧安全”，逐项显式收紧并留出审计痕迹。
+spring:
+  flyway:
+    # 生产只允许 db/migration；禁止 db/seed/demo（演示账号）。
+    locations:
+      - classpath:db/migration
+
+# OpenAPI 文档在公网/院内生产均不暴露（springdoc 关闭，路径 404）。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# 只暴露存活/就绪与版本信息；metrics/prometheus 如需开启必须单独评审并登记白名单。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+  info:
+    env:
+      enabled: false
+
+anesop:
+  security:
+    demo-accounts-allowed: false
+    jwt:
+      allow-dev-generated: false
+
+logging:
+  level:
+    root: WARN
+    com.anesop: INFO
+    org.springframework: WARN

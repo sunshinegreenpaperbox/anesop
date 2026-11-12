@@ -57,11 +57,12 @@ class FlywayMigrationTest {
         MigrateResult result = MigrationTestSupport.flyway(dataSource).migrate();
 
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(2);
-        assertThat(historyCount()).isEqualTo(2);
+        // 其他模块（如 S0-09 的 V4 m2_anes）也会新增迁移，这里只锁定“至少含本任务 V3”。
+        assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(3);
+        assertThat(historyCount()).isEqualTo(result.migrationsExecuted);
         assertThat(jdbc.queryForList(
                 "SELECT version FROM public.flyway_schema_history ORDER BY installed_rank", String.class))
-                .containsExactly("1", "2");
+                .containsSubsequence("1", "2", "3");
     }
 
     @Test
@@ -75,8 +76,8 @@ class FlywayMigrationTest {
 
         assertThat(tables).contains(
                 "sys_user", "sys_role", "sys_permission", "sys_user_role", "sys_role_permission",
-                "sys_audit_log", "sys_dict_type", "sys_dict_item");
-        assertThat(historyCount()).isEqualTo(2);
+                "sys_audit_log", "sys_dict_type", "sys_dict_item", "sys_refresh_token");
+        assertThat(historyCount()).isGreaterThanOrEqualTo(3);
     }
 
     @Test
@@ -185,13 +186,13 @@ class FlywayMigrationTest {
 
         MigrateResult first = flyway.migrate();
         assertThat(first.success).isTrue();
-        assertThat(first.migrationsExecuted).isEqualTo(2);
+        assertThat(first.migrationsExecuted).isGreaterThanOrEqualTo(3);
 
         MigrateResult second = flyway.migrate();
         assertThat(second.success).isTrue();
         assertThat(second.migrationsExecuted).isZero();
         assertThat(flyway.info().pending()).isEmpty();
-        assertThat(historyCount()).isEqualTo(2);
+        assertThat(historyCount()).isEqualTo(first.migrationsExecuted);
     }
 
     @Test
@@ -204,17 +205,18 @@ class FlywayMigrationTest {
 
         List<String> permissionCodes = jdbc.queryForList(
                 "SELECT code FROM m0_platform.sys_permission ORDER BY code", String.class);
-        assertThat(permissionCodes).hasSize(17)
+        assertThat(permissionCodes).hasSize(19)
                 .contains("auth:login", "user:read", "user:write", "role:read", "role:write",
                         "audit:read", "dict:read", "dict:write")
                 .contains("m0:access", "m1:access", "m2:access", "m3:access", "m4:access",
-                        "m5:access", "m6:access", "m7:access", "m8:access");
+                        "m5:access", "m6:access", "m7:access", "m8:access")
+                .contains("m0:auth:read", "m0:auth:write");
 
         assertThat(jdbc.queryForList("SELECT code FROM m0_platform.sys_dict_type ORDER BY code", String.class))
                 .containsExactly("ASA", "CASE_STATUS", "OR_ROOM_STATUS", "ROLE_TYPE", "SEX",
                         "SURGERY_URGENCY");
         assertThat(countRows("sys_dict_item")).isEqualTo(22);
-        assertThat(countRows("sys_role_permission")).isEqualTo(42);
+        assertThat(countRows("sys_role_permission")).isEqualTo(44);
 
         // B-1 核心断言：生产迁移路径不产生任何账号，也没有演示账号及其角色绑定。
         assertThat(countRows("sys_user")).as("生产路径 sys_user 必须为 0").isZero();
@@ -227,6 +229,36 @@ class FlywayMigrationTest {
                 jdbc.queryForObject(
                         "SELECT count(*) FROM m0_platform.sys_user WHERE username = 'demo_admin'",
                         Integer.class));
+    }
+
+    @Test
+    void phoneHashAndRefreshTokenColumnsAreReady() {
+        migrateToLatest();
+
+        // S-11：V3 expand 增加 phone_hash（写路径 M1），与 phone_enc 配套。
+        Integer phoneHashColumns = jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'm0_platform' AND table_name = 'sys_user'
+                  AND column_name = 'phone_hash' AND data_type = 'character varying'
+                  AND character_maximum_length = 128
+                """, Integer.class);
+        assertThat(phoneHashColumns).as("phone_hash varchar(128) 必须由 V3 就绪").isEqualTo(1);
+
+        Integer refreshTokenTable = jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.tables
+                WHERE table_schema = 'm0_platform' AND table_name = 'sys_refresh_token'
+                """, Integer.class);
+        assertThat(refreshTokenTable).as("sys_refresh_token 必须由 V3 创建").isEqualTo(1);
+
+        // 权限码统一三段式（S-7）。
+        assertThat(jdbc.queryForList("""
+                SELECT code FROM m0_platform.sys_permission
+                WHERE code IN ('m0:auth:read', 'm0:auth:write') ORDER BY code
+                """, String.class)).containsExactly("m0:auth:read", "m0:auth:write");
+        System.out.printf("[S-11][migration] phone_hash=%d sys_refresh_token=%d permissions=%s%n",
+                phoneHashColumns, refreshTokenTable,
+                jdbc.queryForList("SELECT code FROM m0_platform.sys_permission "
+                        + "WHERE code LIKE 'm0:auth:%' ORDER BY code", String.class));
     }
 
     @Test

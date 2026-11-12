@@ -13,8 +13,18 @@
 | org.springframework.boot:spring-boot-starter-web | 3.4.5 | Apache-2.0 | REST 接口与内嵌容器 | 后端负责人 |
 | org.springframework.boot:spring-boot-starter-validation | 3.4.5 | Apache-2.0 | Bean Validation | 后端负责人 |
 | org.springframework.boot:spring-boot-starter-actuator | 3.4.5 | Apache-2.0 | 健康检查/指标 | 后端负责人 |
+| io.micrometer:micrometer-core | Boot BOM 管理 | Apache-2.0 | 审计失败指标 `auth.audit.failures`（S0-07 S-4；actuator 传递依赖，显式声明） | 安全负责人 |
 | org.springframework.boot:spring-boot-starter-test | 3.4.5 | Apache-2.0 | JUnit 5/MockMvc/AssertJ | 测试负责人 |
 | org.springframework.security:spring-security-crypto | Boot BOM 管理 | Apache-2.0 | BCrypt 口令哈希（S0-06 测试，S0-07 认证实现） | 安全负责人 |
+| org.springframework.boot:spring-boot-starter-security | 3.4.5 | Apache-2.0 | 安全过滤链（S0-07） | 安全负责人 |
+| org.springframework.boot:spring-boot-starter-oauth2-resource-server | 3.4.5 | Apache-2.0 | JWT 资源服务器（Nimbus，免直依赖） | 安全负责人 |
+| org.springframework.boot:spring-boot-starter-aop | 3.4.5 | Apache-2.0 | 审计切面 | 后端负责人 |
+| org.springframework.boot:spring-boot-starter-jdbc | 3.4.5 | Apache-2.0 | Flyway/JDBC 运行时 | 后端负责人 |
+| org.springframework.security:spring-security-core | Boot BOM | Apache-2.0 | 安全核心 API | 安全负责人 |
+| com.fasterxml.jackson.core:jackson-databind / datatype-jsr310 | Boot BOM | Apache-2.0 | 契约 DTO 序列化 | 后端负责人 |
+| jakarta.validation:jakarta.validation-api | Boot BOM | Apache-2.0 | Bean Validation（生成物注解） | 后端负责人 |
+| jakarta.annotation:jakarta.annotation-api | Boot BOM | EPL-2.0 / GPL-2.0 with CPE（Jakarta 标准 API，仅注解） | @Generated 注解 | 后端负责人 |
+| org.openapitools:openapi-generator-maven-plugin | 7.10.0 | Apache-2.0 | 契约 → Java DTO（构建期，S0-07） | 架构师 |
 | org.postgresql:postgresql | Boot BOM 管理 | BSD-2-Clause | PG JDBC 驱动 + PGobject（jsonb/inet TypeHandler） | 后端负责人 |
 | org.springdoc:springdoc-openapi-starter-webmvc-ui | 2.7.0 | Apache-2.0 | OpenAPI 3.1 文档 | 后端负责人 |
 | com.tngtech.archunit:archunit-junit5 | 1.3.0 | Apache-2.0 | 模块边界用例 | 架构师 |

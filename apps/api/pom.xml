@@ -17,6 +17,7 @@
   <description>M0–M8 模块聚合：每个模块分 api（对外契约）与 impl（实现与数据访问）</description>
 
   <modules>
+    <module>api-contracts</module>
     <module>api-bootstrap</module>
     <module>modules/m0</module>
     <module>modules/m1</module>

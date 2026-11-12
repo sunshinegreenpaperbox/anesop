@@ -34,8 +34,11 @@ public class SysUser {
 
     private String employeeNo;
 
-    /** 手机号密文（应用层 AES-256-GCM），永不解密后落盘/入日志。 */
+    /** 手机号密文（应用层 AES-256-GCM），永不解密后落盘/入日志；写路径 M1。 */
     private String phoneEnc;
+
+    /** 手机号 HMAC-SHA-256 哈希（精确检索/去重）；V3 新增列，写路径 M1。 */
+    private String phoneHash;
 
     private Integer status;
 
@@ -109,6 +112,14 @@ public class SysUser {
 
     public void setPhoneEnc(String phoneEnc) {
         this.phoneEnc = phoneEnc;
+    }
+
+    public String getPhoneHash() {
+        return phoneHash;
+    }
+
+    public void setPhoneHash(String phoneHash) {
+        this.phoneHash = phoneHash;
     }
 
     public Integer getStatus() {
