@@ -39,6 +39,17 @@
 
 - S0-02：分包占位，无页面代码。
 - S0-07：后端认证/权限骨架完成，本目录仅补接口与权限点索引；**不做 UI（S0-08）**。
-- S0-08 待办：登录页、路由守卫、令牌刷新拦截器、菜单/按钮级鉴权；
-  届时通过 `@anesop/contracts` 引用 `packages/contracts/generated/typescript/auth.d.ts`
-  （S0-08 会在 `apps/web/package.json` 增加 workspace 依赖，本任务不改前端依赖）。
+- S0-08：已落地登录、强制改密、会话管理三个 M0 页面；认证接口经 `src/api/auth.ts`
+  引用 `@anesop/contracts` 生成的类型（`packages/contracts/generated/typescript/auth.d.ts`）。
+  其他模块保持占位，不实现业务页面。
+
+## 页面（S0-08）
+
+| 文件 | 路由 | 权限 | 说明 |
+|---|---|---|---|
+| `views/LoginView.vue` | `/login` | 公开 | 账号/口令登录，回车提交，展示契约 `Error` 的 code/message/traceId；`mustChangePassword=true` 跳改密 |
+| `views/ChangePasswordView.vue` | `/m0/password` | 登录 | 旧口令 + 新口令（12–128，四类取三），成功后清会话重新登录 |
+| `views/SessionsView.vue` | `/m0/sessions` | `m0:auth:read` | 当前账号会话分页列表（只读，强制下线留 M1） |
+
+页面不直接调用 `fetch`，一律经 `src/api/http.ts`（Bearer、`X-Trace-Id`、超时、401 单飞刷新重放）。
+菜单与路由守卫见 `src/navigation.ts`、`src/router/index.ts`，约定见 `docs/ui/README.md`。

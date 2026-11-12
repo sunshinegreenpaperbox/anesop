@@ -1,0 +1,255 @@
+/* ============================================================================
+ * @anesop/ui — ANESOP 设计令牌（S0-08）
+ *
+ * 唯一事实源：颜色、字号、间距、圆角、阴影、z-index、字体族。
+ * 页面与组件禁止硬编码颜色/字号，必须引用本文件的 CSS 变量。
+ *
+ * 使用顺序（apps/web/src/main.ts）：
+ *   1) element-plus/dist/index.css（先加载组件库默认主题）
+ *   2) @anesop/ui/tokens.css（后加载覆盖 Element Plus 主题变量与基础排版）
+ * ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ------------------------------------------------------------------ 品牌色板 */
+  --anesop-color-brand-50: #eaf4fb;
+  --anesop-color-brand-100: #d3e8f7;
+  --anesop-color-brand-200: #a9d2ef;
+  --anesop-color-brand-300: #74b4e2;
+  --anesop-color-brand-400: #3d92d1;
+  --anesop-color-brand-500: #1f74b3;
+  --anesop-color-brand-600: #17608f;
+  --anesop-color-brand-700: #124c72;
+  --anesop-color-brand-800: #0d3a57;
+  --anesop-color-brand-900: #08273b;
+
+  /* ------------------------------------------------------------------ 语义色 */
+  --anesop-color-success: #2e9e5b;
+  --anesop-color-warning: #d98b0b;
+  --anesop-color-danger: #c93b3b;
+  --anesop-color-info: #607d8b;
+
+  --anesop-color-success-soft: #eaf5ef;
+  --anesop-color-warning-soft: #fbf3e7;
+  --anesop-color-danger-soft: #faebeb;
+  --anesop-color-info-soft: #eff2f3;
+
+  /* ------------------------------------------------------- 语义别名（页面直接用） */
+  --anesop-color-primary: var(--anesop-color-brand-500);
+  --anesop-color-primary-hover: var(--anesop-color-brand-600);
+  --anesop-color-primary-active: var(--anesop-color-brand-700);
+  --anesop-color-primary-soft: var(--anesop-color-brand-50);
+
+  --anesop-color-text-primary: #1f2d3d;
+  --anesop-color-text-regular: #4a5a6a;
+  --anesop-color-text-secondary: #6b7a8a;
+  --anesop-color-text-placeholder: #94a3b2;
+  --anesop-color-text-disabled: #a3adb8;
+  --anesop-color-text-inverse: #ffffff;
+
+  --anesop-color-border: #d8e0e8;
+  --anesop-color-border-light: #e8eef3;
+  --anesop-color-border-strong: #b8c4cf;
+
+  --anesop-color-bg-page: #f4f7fa;
+  --anesop-color-bg-card: #ffffff;
+  --anesop-color-bg-elevated: #ffffff;
+  --anesop-color-bg-hover: #eef4f9;
+  --anesop-color-bg-active: #dcebf7;
+  --anesop-color-bg-inverse: #0d2a40;
+  --anesop-color-bg-inverse-hover: #16405f;
+
+  --anesop-color-focus-ring: rgba(31, 116, 179, 0.28);
+  --anesop-color-mask: rgba(13, 42, 64, 0.45);
+  --anesop-color-inverse-overlay-strong: rgba(255, 255, 255, 0.16);
+  --anesop-color-inverse-overlay-soft: rgba(255, 255, 255, 0.14);
+
+  /* 品牌展示区渐变（登录页/首页 hero），避免页面里手写 rgba。 */
+  --anesop-gradient-brand:
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.16), transparent 42%),
+    linear-gradient(135deg, var(--anesop-color-brand-700), var(--anesop-color-brand-500));
+
+  /* ------------------------------------------------------------------ 字体族 */
+  --anesop-font-family-sans:
+    'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC',
+    'Source Han Sans SC', 'WenQuanYi Micro Hei', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --anesop-font-family-mono:
+    'JetBrains Mono', 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+  --anesop-font-family-number: 'DIN Alternate', 'Roboto Condensed', var(--anesop-font-family-sans);
+
+  /* ------------------------------------------------------------------ 字号阶梯 */
+  --anesop-font-size-xs: 12px;
+  --anesop-font-size-sm: 13px;
+  --anesop-font-size-base: 14px;
+  --anesop-font-size-md: 16px;
+  --anesop-font-size-lg: 18px;
+  --anesop-font-size-xl: 20px;
+  --anesop-font-size-2xl: 24px;
+  --anesop-font-size-3xl: 28px;
+  --anesop-font-size-4xl: 32px;
+
+  --anesop-line-height-tight: 1.25;
+  --anesop-line-height-base: 1.5;
+  --anesop-line-height-relaxed: 1.75;
+
+  --anesop-font-weight-regular: 400;
+  --anesop-font-weight-medium: 500;
+  --anesop-font-weight-semibold: 600;
+  --anesop-font-weight-bold: 700;
+
+  /* -------------------------------------------------------------------- 间距（4 的倍数） */
+  --anesop-space-1: 4px;
+  --anesop-space-2: 8px;
+  --anesop-space-3: 12px;
+  --anesop-space-4: 16px;
+  --anesop-space-6: 24px;
+  --anesop-space-8: 32px;
+  --anesop-space-0: 0;
+
+  /* -------------------------------------------------------------------- 圆角 */
+  --anesop-radius-sm: 4px;
+  --anesop-radius-md: 6px;
+  --anesop-radius-lg: 8px;
+  --anesop-radius-xl: 12px;
+  --anesop-radius-full: 999px;
+
+  /* -------------------------------------------------------------------- 阴影 */
+  --anesop-shadow-sm: 0 1px 2px rgba(13, 42, 64, 0.06);
+  --anesop-shadow-md: 0 4px 12px rgba(13, 42, 64, 0.08);
+  --anesop-shadow-lg: 0 12px 32px rgba(13, 42, 64, 0.12);
+  --anesop-shadow-focus: 0 0 0 3px var(--anesop-color-focus-ring);
+
+  /* -------------------------------------------------------------------- 层级 */
+  --anesop-z-index-base: 0;
+  --anesop-z-index-sticky: 100;
+  --anesop-z-index-header: 200;
+  --anesop-z-index-drawer: 1000;
+  --anesop-z-index-dropdown: 1500;
+  --anesop-z-index-modal: 2000;
+  --anesop-z-index-popover: 2100;
+  --anesop-z-index-toast: 3000;
+
+  /* -------------------------------------------------------------------- 布局尺寸 */
+  --anesop-layout-header-height: 56px;
+  --anesop-layout-sidebar-width: 220px;
+  --anesop-layout-sidebar-collapsed-width: 64px;
+  --anesop-layout-content-max-width: 1600px;
+
+  /* ==================================================================
+   * Element Plus 主题变量映射
+   * Element Plus 2.9 的每个语义色都拆出 light-3/5/7/8/9 与 dark-2；
+   * 只改 --el-color-primary 不会自动派生，所以逐个显式覆盖。
+   * ================================================================== */
+  --el-color-primary: var(--anesop-color-brand-500);
+  --el-color-primary-light-3: #629eca;
+  --el-color-primary-light-5: #8fbad9;
+  --el-color-primary-light-7: #bcd5e8;
+  --el-color-primary-light-8: #d2e3f0;
+  --el-color-primary-light-9: #e9f1f7;
+  --el-color-primary-dark-2: #195d8f;
+
+  --el-color-success: var(--anesop-color-success);
+  --el-color-success-light-3: #6dbb8c;
+  --el-color-success-light-5: #96cead;
+  --el-color-success-light-7: #c0e2ce;
+  --el-color-success-light-8: #d5ecde;
+  --el-color-success-light-9: #eaf5ef;
+  --el-color-success-dark-2: #257e49;
+
+  --el-color-warning: var(--anesop-color-warning);
+  --el-color-warning-light-3: #e4ae54;
+  --el-color-warning-light-5: #ecc585;
+  --el-color-warning-light-7: #f4dcb6;
+  --el-color-warning-light-8: #f7e8ce;
+  --el-color-warning-light-9: #fbf3e7;
+  --el-color-warning-dark-2: #ae6f09;
+
+  --el-color-danger: var(--anesop-color-danger);
+  --el-color-danger-light-3: #d97676;
+  --el-color-danger-light-5: #e49d9d;
+  --el-color-danger-light-7: #efc4c4;
+  --el-color-danger-light-8: #f4d8d8;
+  --el-color-danger-light-9: #faebeb;
+  --el-color-danger-dark-2: #a12f2f;
+
+  --el-color-error: var(--anesop-color-danger);
+  --el-color-error-light-3: #d97676;
+  --el-color-error-light-5: #e49d9d;
+  --el-color-error-light-7: #efc4c4;
+  --el-color-error-light-8: #f4d8d8;
+  --el-color-error-light-9: #faebeb;
+  --el-color-error-dark-2: #a12f2f;
+
+  --el-color-info: var(--anesop-color-info);
+  --el-color-info-light-3: #90a4ae;
+  --el-color-info-light-5: #b0bec5;
+  --el-color-info-light-7: #cfd8dc;
+  --el-color-info-light-8: #dfe5e8;
+  --el-color-info-light-9: #eff2f3;
+  --el-color-info-dark-2: #4d646f;
+
+  --el-font-family: var(--anesop-font-family-sans);
+  --el-font-size-base: var(--anesop-font-size-base);
+  --el-font-size-small: var(--anesop-font-size-sm);
+  --el-font-size-large: var(--anesop-font-size-md);
+
+  --el-text-color-primary: var(--anesop-color-text-primary);
+  --el-text-color-regular: var(--anesop-color-text-regular);
+  --el-text-color-secondary: var(--anesop-color-text-secondary);
+  --el-text-color-placeholder: var(--anesop-color-text-placeholder);
+  --el-text-color-disabled: var(--anesop-color-text-disabled);
+
+  --el-border-color: var(--anesop-color-border);
+  --el-border-color-light: var(--anesop-color-border-light);
+  --el-border-color-lighter: var(--anesop-color-border-light);
+  --el-border-color-extra-light: #f1f5f8;
+  --el-border-color-dark: var(--anesop-color-border-strong);
+
+  --el-bg-color: var(--anesop-color-bg-card);
+  --el-bg-color-page: var(--anesop-color-bg-page);
+  --el-bg-color-overlay: var(--anesop-color-bg-elevated);
+  --el-fill-color-blank: var(--anesop-color-bg-card);
+  --el-fill-color-light: var(--anesop-color-bg-hover);
+
+  --el-border-radius-base: var(--anesop-radius-md);
+  --el-border-radius-small: var(--anesop-radius-sm);
+  --el-border-radius-round: var(--anesop-radius-full);
+
+  --el-box-shadow-light: var(--anesop-shadow-sm);
+  --el-box-shadow: var(--anesop-shadow-md);
+  --el-box-shadow-dark: var(--anesop-shadow-lg);
+  --el-mask-color: var(--anesop-color-mask);
+}
+
+/* 基础排版：只做最小重置，业务样式留在页面 scoped CSS。 */
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--anesop-color-text-primary);
+  font-family: var(--anesop-font-family-sans);
+  font-size: var(--anesop-font-size-base);
+  line-height: var(--anesop-line-height-base);
+  background-color: var(--anesop-color-bg-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--anesop-color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--anesop-color-primary-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--anesop-color-primary);
+  outline-offset: 2px;
+}

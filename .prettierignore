@@ -27,9 +27,5 @@ pnpm-lock.yaml
 # 方案书原件等二进制/大文档
 docs/plan/
 
-# 历史占位页：<style> 内 font-family 会被 Prettier 强制换行，属纯样式重排；
-# S0-08 前端壳重建时一并格式化，S0-03 不越写域改业务文件。
-apps/web/src/views/HomeView.vue
-
 # 第三方与生成代码
 apps/web/src/api/generated/

@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vitest/config'
@@ -10,11 +12,36 @@ import { defineConfig } from 'vitest/config'
  * - v8 覆盖率阈值与 AGENTS.md 一致：行 ≥70%、分支 ≥55%；
  * - 排除契约生成物、环境声明与入口装配文件（无业务逻辑）。
  */
+const require = createRequire(import.meta.url)
+// async-validator 同时提供 CJS（dist-node，main）与 ESM（dist-web，module）入口；
+// Vitest 的 SSR 解析走 Node main，Element Plus 的默认导入会拿到 CJS 命名空间而非构造函数，
+// 表现为表单校验永远返回 true。这里显式指向浏览器入口，与 Vite 生产构建保持一致。
+const asyncValidatorEsm = join(
+  dirname(require.resolve('element-plus/package.json')),
+  '..',
+  'async-validator',
+  'dist-web',
+  'index.js',
+)
+
 export default defineConfig({
+  resolve: {
+    alias: {
+      'async-validator': asyncValidatorEsm,
+    },
+  },
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [vue()],
   test: {
     environment: 'jsdom',
+    setupFiles: ['src/__tests__/setup.ts'],
+    server: {
+      deps: {
+        // 让 Vite 处理 Element Plus，使上面的 async-validator 别名生效。
+        inline: [/element-plus/, /async-validator/],
+        interopDefault: true,
+      },
+    },
     include: ['src/**/__tests__/**/*.spec.ts'],
     coverage: {
       provider: 'v8',

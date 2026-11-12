@@ -14,7 +14,7 @@
 | S0-05 | 契约基线（OpenAPI 3.1） | `packages/contracts/`、`docs/api/` | S0-02 | 2 天 | Done（评审 B-1/B-2 已修，Java 生成延至 S0-07） |
 | S0-06 | 数据库迁移基线 | `db/migration/`、`db/seed/`、`apps/api/modules/m0/` | S0-02 | 1.5 天 | Done（评审 B-1 已修） |
 | S0-07 | 认证与权限骨架 | `apps/api/modules/m0/`、`apps/web/src/modules/m0/`、`api-bootstrap/`、`apps/api/api-contracts/` | S0-05/06 | 3 天 | Done（76 测试；评审 B-1/B-2/B-3 与 S-1…S-11 已修） |
-| S0-08 | 前端壳与设计令牌 | `apps/web/src/{layout,router,stores,api}/`、`packages/ui/` | S0-05/07 | 3 天 | Ready |
+| S0-08 | 前端壳与设计令牌 | `apps/web/src/{layout,router,stores,api}/`、`packages/ui/` | S0-05/07 | 3 天 | Done（登录→首页→权限菜单→401 刷新；32 单测 + 3 E2E） |
 | S0-09 | 采集网关 POC | `services/device-gateway/`、`db/migration/`（V4） | S0-02/06 | 3 天 | Done |
 | S0-10 | 部署环境（Compose） | `deploy/compose/`、`scripts/` | S0-02 | 1.5 天 | Done |
 | S0-11 | 测试基座 | 各模块 `src/test/`、`e2e/`、根 pom | S0-02 | 2 天 | Done（JaCoCo/Vitest/Playwright/Testcontainers；m0、网关有到期 ratchet） |

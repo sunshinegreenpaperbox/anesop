@@ -3,10 +3,10 @@
 - 当前里程碑：M1（S0）工程骨架
 - 当前 Round：4（2026-11-12）
 - 最近提交：S0-06 数据库迁移基线（评审修复）
-- 已完成任务：9 / 12（S0-01、S0-02、S0-03、S0-05、S0-06、S0-07、S0-09、S0-10、S0-11）
-- 进行中：—（下一批 S0-08 前端壳 + S0-04 CI 并行 → S0-12 → M1 收口）
+- 已完成任务：10 / 12（S0-01、S0-02、S0-03、S0-05、S0-06、S0-07、S0-08、S0-09、S0-10、S0-11）
+- 进行中：S0-04 CI 流水线（收尾）
 - 阻塞：—（Docker 不可用登记 EXT-08，不阻塞；远端 GitHub 组织未建，CODEOWNERS/分支保护为占位）
-- 下一步：S0-08/04 并行 → S0-12 → M1 收口（含 ratchet 清理计划、tag m1、交接单）
+- 下一步：S0-04 收口 → S0-12 → M1 收口（tag m1、交接单、FINAL-REPORT 草稿）
 - 环境：JDK 21 就绪（.toolchain/jdk21）、Maven 3.10（本地仓库 .m2repo，脚本封装）、Node 26/pnpm 11（仓库内 store）、网络可达 npm/Maven Central；Docker 不可用（EXT-08）
 - 门禁：`./scripts/check.sh` → OK（约 6 分钟；根 reactor 121 后端测试 + JaCoCo 门禁、前端 Vitest 覆盖率、Playwright 3 条冒烟、契约 lint/breaking/drift）
 

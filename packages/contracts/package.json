@@ -5,6 +5,21 @@
   "description": "ANESOP OpenAPI 3.1 契约、Spectral 规则与 TypeScript 类型生成（契约优先的唯一事实源）",
   "license": "UNLICENSED",
   "type": "commonjs",
+  "types": "./generated/typescript/auth.d.ts",
+  "exports": {
+    "./auth": {
+      "types": "./generated/typescript/auth.d.ts"
+    },
+    "./patient": {
+      "types": "./generated/typescript/patient.d.ts"
+    },
+    "./scheduling": {
+      "types": "./generated/typescript/scheduling.d.ts"
+    },
+    "./anesthesia": {
+      "types": "./generated/typescript/anesthesia.d.ts"
+    }
+  },
   "scripts": {
     "lint": "spectral lint --fail-severity=warn --ruleset .spectral.yaml openapi/auth.yaml openapi/patient.yaml openapi/scheduling.yaml openapi/anesthesia.yaml",
     "gen:ts": "bash ../../scripts/gen-contracts.sh",

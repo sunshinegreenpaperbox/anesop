@@ -8,6 +8,9 @@ cacheDir: .pnpm-cache
 allowBuilds:
   esbuild: true
   '@scarf/scarf': false
+  # vue-demi（element-plus/@vueuse 的依赖）postinstall 生成入口文件；pnpm 11 需显式允许
+  vue-demi: true
 onlyBuiltDependencies:
   - esbuild
+  - vue-demi
 # @scarf/scarf 是 @stoplight/spectral-cli 的遥测依赖，安装脚本无功能作用；pnpm 11 严格模式需显式忽略。

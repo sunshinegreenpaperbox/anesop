@@ -1,0 +1,28 @@
+{
+  "name": "@anesop/ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ANESOP 设计令牌与共享展示层（S0-08）",
+  "license": "UNLICENSED",
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./tokens.ts",
+      "import": "./tokens.ts"
+    },
+    "./tokens": {
+      "types": "./tokens.ts",
+      "import": "./tokens.ts"
+    },
+    "./tokens.css": "./tokens.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "tokens.css",
+    "tokens.ts",
+    "README.md"
+  ]
+}

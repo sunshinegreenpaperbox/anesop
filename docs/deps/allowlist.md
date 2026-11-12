@@ -81,7 +81,7 @@
 | （已采用，见第三节）@stoplight/spectral-cli | 6.16.0 | Apache-2.0 | OpenAPI lint | S0-05 已引入 |
 | （已采用，见第三节）openapi-typescript | 7.13.0 | MIT | 契约 → TS 类型 | S0-05 已引入 |
 | （已采用，见第三节）@oasdiff-js/oasdiff-js | 1.0.0 | Apache-2.0 | 破坏性变更检测（封装 oasdiff 1.15.0） | S0-05 已引入 |
-| element-plus | 2.9.x | MIT | UI 组件 | S0-08 |
+| element-plus | 2.9.11 | MIT | UI 组件（S0-08 已引入，全量注册） | S0-08 已引入 |
 | echarts | 5.5.x | Apache-2.0 | 图表/大屏 | M8 |
 | pact-jvm | 4.x | Apache-2.0 | 契约测试 | M5 联调 |
 
