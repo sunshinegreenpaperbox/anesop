@@ -6,7 +6,7 @@
 - 已完成任务：**12 / 12（S0 全部）**
 - 进行中：M2 MVP 准备（排程 + 术前）
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M2 任务展开（E-M1 申请接收、E-M2 排程工作台与冲突检测、E-M4 术前访视评估）
+- 下一步：M2 任务展开（任务卡：`docs/ai/tasks/M2-backlog.md`；先 M2-M0-01/02/03 清理，再 M2-M1-01 → M2-M2-01 → M2-M4-01）
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 

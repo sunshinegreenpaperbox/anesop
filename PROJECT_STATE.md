@@ -70,6 +70,7 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 
 1. 先清理 M1 前欠账（可并行）：覆盖率 ratchet 补测、devDeps 漏洞升级、data_scope 绑定表
    （V5）、phone 写路径、E2E-01/04（登录与越权）、springdoc 全量 drift（M0 域）。
+   任务卡见 `docs/ai/tasks/M2-backlog.md`（M2-M0-01/02/03）。
 2. M2 关键路径：E-M1 申请接收（patient/scheduling 契约实现 + HIS 模拟适配器 + 列表/详情页）
    → E-M2 排程工作台与冲突检测（规则引擎 + 冲突算法 + 甘特/看板 + E2E-01）
    → E-M4 术前访视与评估（访视单/ASA/气道/RCRI/Apfel/STOP-BANG/麻醉计划）。
