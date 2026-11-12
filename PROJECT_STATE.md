@@ -8,9 +8,9 @@
 | 项 | 状态 |
 |---|---|
 | 方案书 | **V1.0 基线已冻结（2026-11-12）**，见 `docs/plan/BASELINE.md` |
-| 施工 | **进行中（2026-11-13 恢复）**；M1 达成、S0 全完成；M2-M0-01/02 完成（评审 PASS），下一步 M2-M0-03 |
+| 施工 | **进行中（2026-11-13）**；M1 达成、S0 全完成；M2-M0-01/02/03 完成，下一步 M2-M1-01 申请接收 |
 | 目标里程碑 | ~~M1 工程骨架就绪：2026-12-18~~ **已于 2026-11-12 达成**；M2 MVP：2027-01-29；验收：2027-07-02 |
-| 当前焦点 | M2：M2-M0-03 E2E/ratchet → M2-M1-01 申请接收 → M2-M2-01 排程冲突 |
+| 当前焦点 | M2：M2-M1-01 申请接收 → M2-M2-01 排程冲突 → M2-M4-01 术前访视 |
 | 自动化规则 | `AUTONOMY.md`：不提问、默认决策、阻塞挂号、最终一次性验收 |
 | 环境 | JDK 21（`.toolchain/jdk21`）、Maven 本地仓库 `.m2repo`、Node 26/pnpm 11；**Docker 不可用**（EXT-08） |
 
@@ -62,8 +62,8 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 | M2-M0-01 | 已完成（review PASS、122 测试、contract-check 通过） | — |
 | M2-M0-02 | 已完成（review PASS、156 测试、contract-check 通过） | — |
 | GitHub 远端与组织 | 未建，CI/CODEOWNERS/分支保护未实跑 | 项目经理 |
-| 覆盖率 ratchet（m0-impl、gateway 分支） | 到期 2026-12-18，需补单测 | 后端/测试 |
-| devDependencies 漏洞例外（glob/tinypool） | 到期 2026-12-18，需升级 vitest 工具链 | 前端/平台 |
+| ~~覆盖率 ratchet~~ | 已清理（m0 96/87、gateway 91/77，80/70 门禁生效） | — |
+| ~~devDependencies 漏洞例外~~ | 已清理（vitest 4.1.12 + glob/minimatch override，audit 0 high） | — |
 | 真实 HIS/EMR/设备/CA 联调（EXT-01/02/04/05） | 适配器 + 模拟实现，待院方环境 | 信息科牵头 |
 | 多院区 site_id、审计分区、phone 写路径 | M1/M2 评估或实施 | 架构师 |
 
@@ -71,8 +71,8 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 
 0. ~~恢复点：验证 M2-M0-01 WIP~~ **已完成（2026-11-13）**：`check.sh` 全绿、独立 review PASS、
    122 测试、contract-check 通过，WIP 已转正式提交。
-1. 下一步：M2-M0-03（E2E-04/登录 E2E + 覆盖率 ratchet 清理 + devDeps 升级）→ M2-M1-01
-   申请接收（依赖 M2-M0-01）。任务卡见 `docs/ai/tasks/M2-backlog.md`。
+1. 下一步：M2-M1-01 申请接收（patient/scheduling 契约实现 + HIS 模拟适配器 + 列表/详情页；
+   依赖 M2-M0-01）→ M2-M2-01 排程冲突 → M2-M4-01 术前访视。任务卡见 `docs/ai/tasks/M2-backlog.md`。
 2. M2 关键路径：E-M1 申请接收（patient/scheduling 契约实现 + HIS 模拟适配器 + 列表/详情页）
    → E-M2 排程工作台与冲突检测（规则引擎 + 冲突算法 + 甘特/看板 + E2E-01）
    → E-M4 术前访视与评估（访视单/ASA/气道/RCRI/Apfel/STOP-BANG/麻醉计划）。

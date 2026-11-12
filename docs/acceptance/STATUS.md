@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
 - 当前里程碑：**M2 MVP 进行中**（M1 已于 2026-11-12 达成）
-- 当前 Round：11（2026-11-13）
-- 最近提交：`feat(m0)` M2-M0-02 手机号加密与用户管理（评审 PASS 后转正）
-- 已完成任务：**S0 12/12；M2：M2-M0-01、M2-M0-02 完成**
-- 进行中：M2-M0-03 E2E-04/登录 E2E + 覆盖率 ratchet 清理（下一步）
+- 当前 Round：12（2026-11-13）
+- 最近提交：`test(repo)` M2-M0-03 E2E/覆盖率清理
+- 已完成任务：**S0 12/12；M2：M2-M0-01/02/03 完成**
+- 进行中：M2-M1-01 手术申请接收与校验（下一步）
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M2-M0-03（E2E/ratchet/devDeps 升级）→ M2-M1-01 申请接收
+- 下一步：M2-M1-01 申请接收（契约实现 + HIS 模拟适配器 + 列表/详情）→ M2-M2-01 排程冲突
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
@@ -26,7 +26,7 @@
 - `./scripts/check.sh` → OK（约 7 分钟）：根 reactor 121 后端测试、JaCoCo 门禁、
   前端 32 用例覆盖率 88.3/80.21、Playwright 3/3、契约 lint/breaking/drift、规则检查。
 - `scripts/ci-local.sh --fast` → PASS（9m13s）。
-- 已知 ratchet：m0-impl 单模块 0.13/0.09、gateway 分支 0.60（到期 2026-12-18，ADR-0008）。
+- 覆盖率（2026-11-13）：m0-impl LINE 96.34%/BRANCH 87.52%、gateway 91.68%/77.39%，ratchet 已清零，核心域 80/70 门禁真实生效；devDeps 漏洞例外清零（vitest 4.1.12 + glob/minimatch override）。
 
 ## 近期提交
 
