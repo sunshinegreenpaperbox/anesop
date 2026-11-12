@@ -40,7 +40,7 @@
 ## 提交、PR 与评审
 
 - 分支：`main` 唯一长期分支；`feat/<issue>-<slug>` 存活 ≤3 天，`fix/<issue>-<slug>`、`chore/<issue>-<slug>` ≤2 天；只 squash merge，禁 merge commit、禁 force push。
-- 提交：Conventional Commits 1.0.0，`<type>(<scope>): <subject>`，scope ∈ {m0…m8, web, api, contracts, gateway, db, deploy, docs}。
+- 提交：Conventional Commits 1.0.0，`<type>(<scope>): <subject>`，scope ∈ {m0…m8, web, api, contracts, gateway, db, deploy, docs, repo}（repo = 仓库级配置/脚本/根文件，S0-03 增补）。
 - PR 必填八字段：关联 Issue（`Closes #<issue>`）、变更类型、变更说明、影响面、测试证据、回滚方案、检查清单、AI 参与声明；有效改动 ≤400 行，>800 行必须拆分。
 - 评审：普通 PR 1 人批准；`modules/m2/`、`modules/m0/` 权限与审计、`db/migration/`、安全相关、契约破坏性变更须 2 人批准，其中至少 1 名 CODEOWNERS 自然人；首轮 24h、核心域 12h。
 - 阻断：任一必需检查失败、存在未解决 `blocking` 评论、缺 AI 声明，均不得合并；评审意见分 `blocking`、`suggestion`、`question`，只有 `blocking` 阻断。

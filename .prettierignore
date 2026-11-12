@@ -1,0 +1,35 @@
+# 生成物、依赖缓存与外部资产；只格式化 apps/ 与 packages/ 下的代码
+node_modules/
+dist/
+coverage/
+target/
+build/
+
+# 工具链与包缓存（仓库内）
+.m2repo/
+.toolchain/
+.pnpm-store/
+.pnpm-home/
+.pnpm-cache/
+.npm-cache/
+.playwright/
+.vite/
+.eslintcache
+*.tsbuildinfo
+
+# lockfile 由 pnpm 生成，不做格式化
+pnpm-lock.yaml
+
+# Markdown 以中文表格与长段落为主，Prettier 会整体重排表格（噪声大且不在 S0-03 写域）；
+# 文档格式由 markdownlint 在 S0-04/S0-12 接管。
+*.md
+
+# 方案书原件等二进制/大文档
+docs/plan/
+
+# 历史占位页：<style> 内 font-family 会被 Prettier 强制换行，属纯样式重排；
+# S0-08 前端壳重建时一并格式化，S0-03 不越写域改业务文件。
+apps/web/src/views/HomeView.vue
+
+# 第三方与生成代码
+apps/web/src/api/generated/

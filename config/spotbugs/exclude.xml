@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ANESOP SpotBugs 排除清单（S0-03）
+  原则：不排除任何真实缺陷；只排除无法产生缺陷的"占位/生成"类。
+  新增排除必须在 PR 说明原因、责任人与到期复核版本。
+-->
+<FindBugsFilter>
+  <!-- package-info 只有 Javadoc 注释，无方法体，不存在可分析缺陷 -->
+  <Match>
+    <Class name="~.*\.package-info$"/>
+  </Match>
+</FindBugsFilter>

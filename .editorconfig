@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# ANESOP EditorConfig
+# 统一换行、编码与缩进；与 .gitattributes（eol=lf）、Prettier、Checkstyle 对齐。
+# 约定来源：AGENTS.md「编码与测试要求」、docs/branch-protection.md §7。
+# ---------------------------------------------------------------------------
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Java / Maven 配置：4 空格缩进（现有代码与 Checkstyle 一致）
+[*.java]
+indent_size = 4
+
+[*.{xml,xsd,yml,yaml,json,jsonc,js,cjs,mjs,ts,vue,css,scss,html}]
+indent_size = 2
+
+# Markdown 保留行尾空格（换行语义），不做尾空格清理
+[*.{md,markdown}]
+trim_trailing_whitespace = false
+
+# Makefile 必须用制表符
+[Makefile]
+indent_style = tab
+
+# 生成物与外部资产不参与格式约束
+[{pnpm-lock.yaml,*.min.js,*.min.css}]
+insert_final_newline = false

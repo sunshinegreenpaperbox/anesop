@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# ANESOP git 属性：统一 LF，避免跨平台换行噪声；二进制资产显式标注。
+# ---------------------------------------------------------------------------
+* text=auto eol=lf
+
+# 源码与文本配置一律 LF
+*.java      text eol=lf
+*.xml       text eol=lf
+*.ts        text eol=lf
+*.vue       text eol=lf
+*.js        text eol=lf
+*.cjs       text eol=lf
+*.mjs       text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.sh        text eol=lf diff=bash
+*.sql       text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+
+# Windows 脚本保留 CRLF
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# 二进制资产（禁止文本转换与 diff）
+*.docx      binary
+*.doc       binary
+*.pdf       binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.webp      binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.jar       binary
+*.zip       binary
+*.gz        binary
+*.xlsx      binary
+
+# lockfile 视为生成物，减少 Review 噪声但仍入库
+pnpm-lock.yaml linguist-generated=true

@@ -9,14 +9,14 @@
 |---|---|---|---|---|---|
 | S0-01 | 仓库初始化与协作资产 | 根目录、`.github/` | — | 0.5 天 | Done |
 | S0-02 | monorepo 骨架 | `apps/`、`packages/`、`services/`、`db/`、`deploy/`、`pom.xml`、`package.json` | S0-01 | 2 天 | Done |
-| S0-03 | 静态检查与提交规范 | 根配置文件、`scripts/` | S0-02 | 1 天 | In Progress |
+| S0-03 | 静态检查与提交规范 | 根配置文件、`scripts/` | S0-02 | 1 天 | Done |
 | S0-04 | CI 流水线 | `.github/workflows/`、`scripts/` | S0-02/03/11 | 1.5 天 | Ready |
-| S0-05 | 契约基线（OpenAPI 3.1） | `packages/contracts/`、`docs/api/` | S0-02 | 2 天 | Ready |
-| S0-06 | 数据库迁移基线 | `db/migration/`、`apps/api/modules/m0/` | S0-02 | 1.5 天 | Ready |
+| S0-05 | 契约基线（OpenAPI 3.1） | `packages/contracts/`、`docs/api/` | S0-02 | 2 天 | In Progress |
+| S0-06 | 数据库迁移基线 | `db/migration/`、`apps/api/modules/m0/` | S0-02 | 1.5 天 | In Progress |
 | S0-07 | 认证与权限骨架 | `apps/api/modules/m0/`、`apps/web/src/modules/m0/` | S0-05/06 | 3 天 | Ready |
 | S0-08 | 前端壳与设计令牌 | `apps/web/src/{layout,router,stores,api}/`、`packages/ui/` | S0-05/07 | 3 天 | Ready |
 | S0-09 | 采集网关 POC | `services/device-gateway/`、`db/migration/` | S0-02/06 | 3 天 | Ready |
-| S0-10 | 部署环境（Compose） | `deploy/compose/`、`scripts/` | S0-02 | 1.5 天 | Ready |
+| S0-10 | 部署环境（Compose） | `deploy/compose/`、`scripts/` | S0-02 | 1.5 天 | In Progress |
 | S0-11 | 测试基座 | 各模块 `src/test/`、`e2e/` | S0-02 | 2 天 | Ready |
 | S0-12 | 开发文档与一键起 | `README.md`、`docs/`、`scripts/` | S0-02/10 | 1 天 | Ready |
 

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# commit-msg 钩子：校验 Conventional Commits（由 scripts/install-hooks.sh 启用）
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if ! npx --no-install commitlint --edit "$1"; then
+  cat >&2 <<'EOF'
+
+提交信息不符合 Conventional Commits 1.0.0。
+格式：<type>(<scope>): <subject>
+type ：build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test
+scope：m0..m8|web|api|contracts|gateway|db|deploy|docs|repo
+示例：feat(api): 增加登录接口
+规则来源：AGENTS.md「提交、PR 与评审」、commitlint.config.cjs
+EOF
+  exit 1
+fi

@@ -134,7 +134,7 @@ git config --local core.quotepath false
 
 - 不配置 `remote.origin`，直到远端仓库建立并由项目经理确认地址。
 - 不使用 `git push --force`；需要修正历史时在分支上 `git rebase -i` 后 `--force-with-lease` 仅推个人分支（`main` 永不适用）。
-- 提交信息遵循 Conventional Commits 1.0.0：`<type>(<scope>): <subject>`，scope ∈ {m0…m8, web, api, contracts, gateway, db, deploy, docs}。
+- 提交信息遵循 Conventional Commits 1.0.0：`<type>(<scope>): <subject>`，scope ∈ {m0…m8, web, api, contracts, gateway, db, deploy, docs, repo}（repo = 仓库级配置/脚本/根文件，S0-03 增补）。
 - AI 生成 >50 行高风险代码时，提交附 trailer：`AI-Tool`、`AI-Task`、`AI-Scope`、`Reviewed-by`、`Co-authored-by`。
 
 ## 8. 落地检查清单（远端建立后逐项勾选）

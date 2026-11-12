@@ -48,9 +48,25 @@
     <archunit.version>1.3.0</archunit.version>
     <testcontainers.version>1.20.4</testcontainers.version>
 
+    <!-- 嵌入式 PostgreSQL（Docker 不可用 EXT-08 时的集成测试基座；S0-06 起使用） -->
+    <embedded-postgres.version>2.2.2</embedded-postgres.version>
+    <embedded-postgres-binaries.version>16.15.0</embedded-postgres-binaries.version>
+
     <!-- 集成组件：本阶段只锁版本属性，依赖在 S0-09 采集网关任务中引入 -->
     <camel.version>4.14.0</camel.version>
     <hapi.version>2.5.1</hapi.version>
+
+    <!-- 静态检查（S0-03）：Checkstyle 在 validate 阶段、SpotBugs 在 verify 阶段 -->
+    <checkstyle.version>10.26.1</checkstyle.version>
+    <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
+    <spotbugs-maven-plugin.version>4.9.8.5</spotbugs-maven-plugin.version>
+
+    <!--
+      仓库根目录：由 scripts/mvn.sh 注入 -Danesop.root=<repo root>。
+      直接执行 mvn 时回退到 Maven 的多模块根（从仓库根调用即为仓库根）。
+      规则文件统一放在 <repo root>/config/{checkstyle,spotbugs}/。
+    -->
+    <anesop.root>${maven.multiModuleProjectDirectory}</anesop.root>
   </properties>
 
   <dependencyManagement>
@@ -96,6 +112,25 @@
         <artifactId>archunit-junit5</artifactId>
         <version>${archunit.version}</version>
       </dependency>
+
+      <!--
+        嵌入式 PostgreSQL（Zonky）：无需 Docker 即可用真实 PostgreSQL 16 跑 Flyway 与集成测试。
+        许可证：embedded-postgres Apache-2.0；PostgreSQL 二进制为 PostgreSQL License（均在白名单）。
+        精确二进制版本由 BOM 统一覆盖（避免走 2.2.2 默认的 PG 14）。
+      -->
+      <dependency>
+        <groupId>io.zonky.test.postgres</groupId>
+        <artifactId>embedded-postgres-binaries-bom</artifactId>
+        <version>${embedded-postgres-binaries.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>io.zonky.test</groupId>
+        <artifactId>embedded-postgres</artifactId>
+        <version>${embedded-postgres.version}</version>
+        <scope>test</scope>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -109,5 +144,73 @@
         </plugin>
       </plugins>
     </pluginManagement>
+
+    <plugins>
+      <!--
+        Checkstyle：validate 阶段执行，违规即失败。
+        - 规则文件 config/checkstyle/checkstyle.xml（Google 风格放宽：4 空格、行宽 160、不强制 Javadoc）
+        - 只检查 src/main/java；测试源码不纳入
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>${maven-checkstyle-plugin.version}</version>
+        <dependencies>
+          <!-- 覆盖插件自带 9.3，使用支持 Java 21 语法的新版 Checkstyle -->
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <configLocation>${anesop.root}/config/checkstyle/checkstyle.xml</configLocation>
+          <consoleOutput>true</consoleOutput>
+          <failOnViolation>true</failOnViolation>
+          <violationSeverity>error</violationSeverity>
+          <includeTestSourceDirectory>false</includeTestSourceDirectory>
+          <inputEncoding>UTF-8</inputEncoding>
+          <outputEncoding>UTF-8</outputEncoding>
+          <linkXRef>false</linkXRef>
+        </configuration>
+        <executions>
+          <execution>
+            <id>checkstyle-validate</id>
+            <phase>validate</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!--
+        SpotBugs：verify 阶段执行（effort=Max、threshold=Medium），
+        排除清单 config/spotbugs/exclude.xml 只含占位骨架噪声，不含真实缺陷豁免。
+      -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${spotbugs-maven-plugin.version}</version>
+        <configuration>
+          <effort>Max</effort>
+          <threshold>Medium</threshold>
+          <excludeFilterFile>${anesop.root}/config/spotbugs/exclude.xml</excludeFilterFile>
+          <includeTests>false</includeTests>
+          <xmlOutput>true</xmlOutput>
+          <failOnError>true</failOnError>
+          <spotbugsXmlOutputDirectory>${project.build.directory}/spotbugs</spotbugsXmlOutputDirectory>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotbugs-verify</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
   </build>
 </project>
