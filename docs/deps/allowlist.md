@@ -14,6 +14,8 @@
 | org.springframework.boot:spring-boot-starter-validation | 3.4.5 | Apache-2.0 | Bean Validation | 后端负责人 |
 | org.springframework.boot:spring-boot-starter-actuator | 3.4.5 | Apache-2.0 | 健康检查/指标 | 后端负责人 |
 | org.springframework.boot:spring-boot-starter-test | 3.4.5 | Apache-2.0 | JUnit 5/MockMvc/AssertJ | 测试负责人 |
+| org.springframework.security:spring-security-crypto | Boot BOM 管理 | Apache-2.0 | BCrypt 口令哈希（S0-06 测试，S0-07 认证实现） | 安全负责人 |
+| org.postgresql:postgresql | Boot BOM 管理 | BSD-2-Clause | PG JDBC 驱动 + PGobject（jsonb/inet TypeHandler） | 后端负责人 |
 | org.springdoc:springdoc-openapi-starter-webmvc-ui | 2.7.0 | Apache-2.0 | OpenAPI 3.1 文档 | 后端负责人 |
 | com.tngtech.archunit:archunit-junit5 | 1.3.0 | Apache-2.0 | 模块边界用例 | 架构师 |
 | com.baomidou:mybatis-plus-spring-boot3-starter | 3.5.9 | Apache-2.0 | 持久层（S0-06 起启用） | 后端负责人 |

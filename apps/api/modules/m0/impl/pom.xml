@@ -25,5 +25,66 @@
       <groupId>org.springframework</groupId>
       <artifactId>spring-context</artifactId>
     </dependency>
+
+    <!-- 持久层：MyBatis-Plus（版本由根 pom dependencyManagement 锁定） -->
+    <dependency>
+      <groupId>com.baomidou</groupId>
+      <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+    </dependency>
+
+    <!-- jsonb/inet TypeHandler 需要 PGobject；驱动版本由 Spring Boot BOM 管理 -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+    </dependency>
+
+    <!-- 演示种子测试校验 BCrypt 口令哈希；版本由 Spring Boot BOM 管理 -->
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-crypto</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- 数据库迁移：Flyway 核心 + PostgreSQL 方言（版本由根 pom 锁定） -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+
+    <!-- 测试：JUnit 5 + AssertJ；嵌入式 PostgreSQL 16（Docker 不可用，EXT-08） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.zonky.test</groupId>
+      <artifactId>embedded-postgres</artifactId>
+      <scope>test</scope>
+      <exclusions>
+        <!-- 只保留 Linux amd64（显式依赖），排除其他平台二进制以缩小测试依赖面 -->
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-windows-amd64</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-darwin-amd64</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-linux-amd64-alpine</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.zonky.test.postgres</groupId>
+      <artifactId>embedded-postgres-binaries-linux-amd64</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 </project>
