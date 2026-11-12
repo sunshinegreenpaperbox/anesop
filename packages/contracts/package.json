@@ -1,0 +1,18 @@
+{
+  "name": "@anesop/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ANESOP OpenAPI 3.1 契约、Spectral 规则与 TypeScript 类型生成（契约优先的唯一事实源）",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "scripts": {
+    "lint": "spectral lint --fail-severity=error --ruleset .spectral.yaml openapi/auth.yaml openapi/patient.yaml openapi/scheduling.yaml openapi/anesthesia.yaml",
+    "gen:ts": "bash ../../scripts/gen-contracts.sh",
+    "check:breaking": "bash ../../scripts/contract-check.sh --breaking-only"
+  },
+  "devDependencies": {
+    "@oasdiff-js/oasdiff-js": "1.0.0",
+    "@stoplight/spectral-cli": "6.16.0",
+    "openapi-typescript": "7.13.0"
+  }
+}

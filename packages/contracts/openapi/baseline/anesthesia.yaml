@@ -1,0 +1,1093 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 麻醉记录契约（anesthesia）
+  summary: 术前访视、麻醉记录单读写、锁单与术后随访
+  description: |
+    ANESOP 麻醉记录域契约，对应方案书 §2.4.3（M2 麻醉信息管理）与 §3.4.2（麻醉记录单/事件实体）。
+    硬规则：记录以事件时间为准、补录标注录入时间与原因、锁单后只能生成修订版本、三方核查未完成
+    不允许锁单。所有示例均为 SYNTHETIC 合成数据。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 麻醉记录
+    description: 术前访视、麻醉记录单、锁单与修订、术后随访。
+paths:
+  /v1/anesthesia/preop-visits/{visitId}:
+    get:
+      operationId: getPreopVisit
+      tags:
+        - 麻醉记录
+      summary: 查询术前访视
+      description: 返回病史、气道 Mallampati 分级、ASA 分级、RCRI/Apfel/STOP-BANG/DASI 评分与麻醉计划。
+      parameters:
+        - name: visitId
+          in: path
+          description: 术前访视标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 术前访视详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreopVisit'
+              example:
+                visitId: '1100000000000000001'
+                recordId: '1200000000000000001'
+                scheduleId: '8000000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                history: 演示病史（高血压，规律服药；合成数据）
+                mallampati: II
+                asaClass: II
+                rcriScore: 1
+                apfelScore: 2
+                stopBangScore: 3
+                dasiScore: 0.8
+                anesthesiaPlan: 演示麻醉计划（全身麻醉 + 气管插管）
+                consentSigned: true
+                status: SIGNED
+                createdAt: '2026-11-20T09:00:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-25T14:00:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    put:
+      operationId: updatePreopVisit
+      tags:
+        - 麻醉记录
+      summary: 保存术前访视
+      description: 更新访视内容与评分；使用 version 做乐观锁，冲突返回 409，不静默覆盖他人修改。
+      parameters:
+        - name: visitId
+          in: path
+          description: 术前访视标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreopVisitUpdateRequest'
+            example:
+              history: 演示病史（高血压，规律服药；合成数据）
+              mallampati: II
+              asaClass: II
+              rcriScore: 1
+              apfelScore: 2
+              stopBangScore: 3
+              dasiScore: 0.8
+              anesthesiaPlan: 演示麻醉计划（全身麻醉 + 气管插管）
+              consentSigned: true
+              version: 2
+      responses:
+        '200':
+          description: 保存成功，返回更新后的访视。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreopVisit'
+              example:
+                visitId: '1100000000000000001'
+                recordId: '1200000000000000001'
+                scheduleId: '8000000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                history: 演示病史（高血压，规律服药；合成数据）
+                mallampati: II
+                asaClass: II
+                rcriScore: 1
+                apfelScore: 2
+                stopBangScore: 3
+                dasiScore: 0.8
+                anesthesiaPlan: 演示麻醉计划（全身麻醉 + 气管插管）
+                consentSigned: true
+                status: SIGNED
+                createdAt: '2026-11-20T09:00:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-25T15:10:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 3
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/records/{recordId}:
+    get:
+      operationId: getAnesthesiaRecord
+      tags:
+        - 麻醉记录
+      summary: 查询麻醉记录单
+      description: 返回记录单状态、时间轴事件与审计字段；生命体征高频序列另走采集查询接口。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 麻醉记录单详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnesthesiaRecord'
+              example:
+                recordId: '1200000000000000001'
+                scheduleId: '8000000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                status: IN_PROGRESS
+                anesthesiaType: GENERAL
+                startedAt: '2026-12-01T08:40:00+08:00'
+                endedAt: null
+                events:
+                  - eventId: '1300000000000000001'
+                    eventType: INDUCTION
+                    occurredAt: '2026-12-01T08:45:00+08:00'
+                    source: MANUAL
+                    note: 演示诱导事件（合成数据）
+                    entryReason: null
+                    recordedAt: '2026-12-01T08:46:00+08:00'
+                    recordedBy: '1000000000000000001'
+                createdAt: '2026-12-01T08:35:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-01T08:46:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 5
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    put:
+      operationId: updateAnesthesiaRecord
+      tags:
+        - 麻醉记录
+      summary: 保存麻醉记录单
+      description: |
+        更新记录单事件与麻醉方式。事件时间以 occurredAt 为准；补录须填写 entryReason。
+        锁单后调用本接口返回 409，只能走修订流程。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAnesthesiaRecordRequest'
+            example:
+              anesthesiaType: GENERAL
+              version: 5
+              events:
+                - eventId: '1300000000000000002'
+                  eventType: INTUBATION
+                  occurredAt: '2026-12-01T08:55:00+08:00'
+                  source: MANUAL
+                  note: 演示插管事件（合成数据）
+                  entryReason: null
+                  recordedAt: '2026-12-01T08:56:00+08:00'
+                  recordedBy: '1000000000000000001'
+      responses:
+        '200':
+          description: 保存成功，返回更新后的记录单。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnesthesiaRecord'
+              example:
+                recordId: '1200000000000000001'
+                scheduleId: '8000000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                status: IN_PROGRESS
+                anesthesiaType: GENERAL
+                startedAt: '2026-12-01T08:40:00+08:00'
+                endedAt: null
+                events:
+                  - eventId: '1300000000000000002'
+                    eventType: INTUBATION
+                    occurredAt: '2026-12-01T08:55:00+08:00'
+                    source: MANUAL
+                    note: 演示插管事件（合成数据）
+                    entryReason: null
+                    recordedAt: '2026-12-01T08:56:00+08:00'
+                    recordedBy: '1000000000000000001'
+                createdAt: '2026-12-01T08:35:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-01T08:56:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 6
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/records/{recordId}/lock:
+    post:
+      operationId: lockAnesthesiaRecord
+      tags:
+        - 麻醉记录
+      summary: 锁单
+      description: |
+        锁单后记录不可直接修改，修改只能生成修订版本并保留原值、修改人、时间、原因。
+        三方核查未完成或版本冲突时返回 409；CA 签名失败不阻断锁单，签名状态置为 PENDING。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRecordRequest'
+            example:
+              version: 6
+              signatureRequested: true
+      responses:
+        '200':
+          description: 锁单结果；签名失败时 signatureStatus 为 PENDING 或 FAILED，不回滚锁单。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LockRecordResult'
+              example:
+                id: '1200000000000000001'
+                status: LOCKED
+                lockedAt: '2026-12-01T11:30:00+08:00'
+                lockedBy: '1000000000000000001'
+                signatureStatus: PENDING
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/follow-ups:
+    get:
+      operationId: listFollowUps
+      tags:
+        - 麻醉记录
+      summary: 查询术后随访列表
+      description: 按记录单分页查询 24/48 小时随访；不传 recordId 时按当前用户数据范围返回。
+      parameters:
+        - name: recordId
+          in: query
+          description: 麻醉记录单标识；不传时按数据范围查询。
+          required: false
+          schema:
+            type: string
+        - name: followUpHours
+          in: query
+          description: 随访时点（小时）。
+          required: false
+          schema:
+            type: integer
+            enum:
+              - 24
+              - 48
+        - name: page
+          in: query
+          description: 页码，从 1 开始。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          description: 每页条数。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 随访分页列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FollowUpPage'
+              example:
+                items:
+                  - followUpId: '1400000000000000001'
+                    recordId: '1200000000000000001'
+                    patientId: '5000000000000000001'
+                    patientNo: SYNTH-P-0001
+                    patientName: 演示患者
+                    followUpHours: 24
+                    painScore: 2
+                    ponv: false
+                    cognition: 演示认知状态（清醒，无异常；合成数据）
+                    satisfaction: 5
+                    completedAt: '2026-12-02T10:00:00+08:00'
+                    createdAt: '2026-12-02T10:00:00+08:00'
+                    createdBy: '1000000000000000001'
+                    updatedAt: '2026-12-02T10:00:00+08:00'
+                    updatedBy: '1000000000000000001'
+                    version: 1
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    post:
+      operationId: createFollowUp
+      tags:
+        - 麻醉记录
+      summary: 创建术后随访
+      description: 记录 24/48 小时随访的镇痛、PONV、认知与满意度；超时任务由 M2 随访待办提醒。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFollowUpRequest'
+            example:
+              recordId: '1200000000000000001'
+              followUpHours: 24
+              painScore: 2
+              ponv: false
+              cognition: 演示认知状态（清醒，无异常；合成数据）
+              satisfaction: 5
+              completedAt: '2026-12-02T10:00:00+08:00'
+      responses:
+        '201':
+          description: 随访创建成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FollowUp'
+              example:
+                followUpId: '1400000000000000001'
+                recordId: '1200000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                followUpHours: 24
+                painScore: 2
+                ponv: false
+                cognition: 演示认知状态（清醒，无异常；合成数据）
+                satisfaction: 5
+                completedAt: '2026-12-02T10:00:00+08:00'
+                createdAt: '2026-12-02T10:00:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-02T10:00:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/follow-ups/{followUpId}:
+    get:
+      operationId: getFollowUp
+      tags:
+        - 麻醉记录
+      summary: 查询术后随访
+      description: 按随访标识返回 24/48 小时随访记录。
+      parameters:
+        - name: followUpId
+          in: path
+          description: 随访标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 随访详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FollowUp'
+              example:
+                followUpId: '1400000000000000001'
+                recordId: '1200000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                followUpHours: 24
+                painScore: 2
+                ponv: false
+                cognition: 演示认知状态（清醒，无异常；合成数据）
+                satisfaction: 5
+                completedAt: '2026-12-02T10:00:00+08:00'
+                createdAt: '2026-12-02T10:00:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-02T10:00:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 头中。
+  responses:
+    Unauthorized:
+      description: 未认证：未携带令牌、令牌过期或签名无效。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0001
+            details: []
+    Forbidden:
+      description: 已认证但无权限，或请求超出当前用户数据范围。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0002
+            details:
+              - field: dataScope
+                reason: 当前角色不包含该科室数据范围
+    NotFound:
+      description: 资源不存在，或存在但不在当前用户数据权限内（不泄露存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-0003
+            details: []
+    Conflict:
+      description: 记录状态冲突、锁单后修改或乐观锁版本冲突。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RECORD_STATE_CONFLICT
+            message: 记录已锁定或提交版本已过期
+            traceId: SYNTH-TRACE-0004
+            details:
+              - field: version
+                reason: 提交版本落后于服务端当前版本
+  schemas:
+    ErrorDetail:
+      type: object
+      description: 错误明细项，用于字段级校验失败或状态说明。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 相关字段名或资源标识。
+        reason:
+          type: string
+          description: 可读的失败原因，不包含堆栈、SQL 实参与内部路径。
+    Error:
+      type: object
+      description: 统一错误响应；错误信息不暴露堆栈、SQL 实参与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    PageMeta:
+      type: object
+      description: 分页元数据；页码从 1 开始，size 上限由服务端限制。
+      required:
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          description: 当前页码，从 1 开始。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页条数。
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          description: 符合条件的总条数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数；total 为 0 时为 0。
+          minimum: 0
+    AuditFields:
+      type: object
+      description: 审计与乐观锁公共字段；锁单后修订保留原值、修改人、时间与原因。
+      required:
+        - createdAt
+        - createdBy
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间（服务端时间）。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间（服务端时间）。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号，从 1 开始；更新必须回传。
+          minimum: 1
+    IdResponse:
+      type: object
+      description: 仅返回资源标识的通用响应。
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          description: 雪花 ID 序列化后的字符串，避免前端精度丢失。
+    PreopVisit:
+      type: object
+      description: 术前访视；评分项与阈值可按院方口径配置。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - visitId
+            - recordId
+            - scheduleId
+            - patientId
+            - patientNo
+            - patientName
+            - history
+            - mallampati
+            - asaClass
+            - rcriScore
+            - apfelScore
+            - stopBangScore
+            - dasiScore
+            - anesthesiaPlan
+            - consentSigned
+            - status
+          properties:
+            visitId:
+              type: string
+              description: 访视标识。
+            recordId:
+              type: string
+              description: 关联麻醉记录单标识。
+            scheduleId:
+              type: string
+              description: 关联排程标识。
+            patientId:
+              type: string
+              description: 患者标识。
+            patientNo:
+              type: string
+              description: 院内患者编号；示例统一使用 SYNTH-P-0001。
+            patientName:
+              type: string
+              description: 患者姓名；示例统一使用“演示患者”。
+            history:
+              type: string
+              description: 病史摘要（演示文本）；不写入日志。
+            mallampati:
+              type: string
+              description: 气道 Mallampati 分级。
+              enum:
+                - I
+                - II
+                - III
+                - IV
+            asaClass:
+              type: string
+              description: ASA 分级 I–VI。
+              enum:
+                - I
+                - II
+                - III
+                - IV
+                - V
+                - VI
+            rcriScore:
+              type: integer
+              description: 修订版心脏风险指数 RCRI 得分。
+              minimum: 0
+              maximum: 6
+            apfelScore:
+              type: integer
+              description: Apfel PONV 风险评分。
+              minimum: 0
+              maximum: 4
+            stopBangScore:
+              type: integer
+              description: STOP-BANG OSA 筛查得分。
+              minimum: 0
+              maximum: 8
+            dasiScore:
+              type: number
+              description: 杜克活动状态指数 DASI。
+              minimum: 0
+              maximum: 10
+            anesthesiaPlan:
+              type: string
+              description: 麻醉计划（演示文本）。
+            consentSigned:
+              type: boolean
+              description: 知情同意是否已签署并留档。
+            status:
+              type: string
+              description: 访视状态。
+              enum:
+                - DRAFT
+                - COMPLETED
+                - SIGNED
+    PreopVisitUpdateRequest:
+      type: object
+      description: 术前访视保存请求；version 必填用于乐观锁。
+      required:
+        - version
+      properties:
+        history:
+          type: string
+          description: 病史摘要。
+        mallampati:
+          type: string
+          description: 气道 Mallampati 分级。
+          enum:
+            - I
+            - II
+            - III
+            - IV
+        asaClass:
+          type: string
+          description: ASA 分级。
+          enum:
+            - I
+            - II
+            - III
+            - IV
+            - V
+            - VI
+        rcriScore:
+          type: integer
+          description: RCRI 得分。
+          minimum: 0
+          maximum: 6
+        apfelScore:
+          type: integer
+          description: Apfel 评分。
+          minimum: 0
+          maximum: 4
+        stopBangScore:
+          type: integer
+          description: STOP-BANG 得分。
+          minimum: 0
+          maximum: 8
+        dasiScore:
+          type: number
+          description: DASI 指数。
+          minimum: 0
+          maximum: 10
+        anesthesiaPlan:
+          type: string
+          description: 麻醉计划。
+        consentSigned:
+          type: boolean
+          description: 知情同意是否已签署。
+        version:
+          type: integer
+          description: 当前版本号。
+          minimum: 1
+    AnesthesiaEvent:
+      type: object
+      description: 麻醉事件；事件时间与录入时间分离，补录须说明原因。
+      required:
+        - eventId
+        - eventType
+        - occurredAt
+        - source
+        - recordedAt
+        - recordedBy
+      properties:
+        eventId:
+          type: string
+          description: 事件标识。
+        eventType:
+          type: string
+          description: 事件类型。
+          enum:
+            - INDUCTION
+            - INTUBATION
+            - INCISION
+            - EXTUBATION
+            - OUT_OF_ROOM
+            - RESCUE
+            - OTHER
+        occurredAt:
+          type: string
+          format: date-time
+          description: 事件实际发生时间（服务端校准）。
+        source:
+          type: string
+          description: 数据来源；设备采集与手工补录区分。
+          enum:
+            - DEVICE
+            - MANUAL
+        note:
+          type: [string, 'null']
+          description: 事件备注；可为 null。
+        entryReason:
+          type: [string, 'null']
+          description: 补录原因；手工补录时必填，正常录入为 null。
+        recordedAt:
+          type: string
+          format: date-time
+          description: 录入时间，与 occurredAt 分离。
+        recordedBy:
+          type: string
+          description: 录入人用户标识。
+    AnesthesiaRecord:
+      type: object
+      description: 麻醉记录单；锁单后不可直接修改。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - recordId
+            - scheduleId
+            - patientId
+            - patientNo
+            - patientName
+            - status
+            - anesthesiaType
+            - events
+          properties:
+            recordId:
+              type: string
+              description: 记录单标识。
+            scheduleId:
+              type: string
+              description: 关联排程标识。
+            patientId:
+              type: string
+              description: 患者标识。
+            patientNo:
+              type: string
+              description: 院内患者编号；示例统一使用 SYNTH-P-0001。
+            patientName:
+              type: string
+              description: 患者姓名；示例统一使用“演示患者”。
+            status:
+              type: string
+              description: 记录单状态；LOCKED 后只能生成修订版本。
+              enum:
+                - DRAFT
+                - IN_PROGRESS
+                - LOCKED
+                - REVISED
+            anesthesiaType:
+              type: string
+              description: 麻醉方式。
+              enum:
+                - GENERAL
+                - REGIONAL
+                - COMBINED
+                - LOCAL
+                - SEDATION
+            startedAt:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              description: 记录开始时间；未开始为 null。
+            endedAt:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              description: 记录结束时间；未结束为 null。
+            events:
+              type: array
+              description: 时间轴事件列表。
+              items:
+                $ref: '#/components/schemas/AnesthesiaEvent'
+    UpdateAnesthesiaRecordRequest:
+      type: object
+      description: 麻醉记录单保存请求；锁单后调用返回 409。
+      required:
+        - version
+      properties:
+        anesthesiaType:
+          type: string
+          description: 麻醉方式。
+          enum:
+            - GENERAL
+            - REGIONAL
+            - COMBINED
+            - LOCAL
+            - SEDATION
+        events:
+          type: array
+          description: 本次提交的事件列表。
+          items:
+            $ref: '#/components/schemas/AnesthesiaEvent'
+        version:
+          type: integer
+          description: 当前版本号。
+          minimum: 1
+    LockRecordRequest:
+      type: object
+      description: 锁单请求。
+      required:
+        - version
+        - signatureRequested
+      properties:
+        version:
+          type: integer
+          description: 当前版本号。
+          minimum: 1
+        signatureRequested:
+          type: boolean
+          description: 是否同时发起 CA 签名与可信时间戳。
+    LockRecordResult:
+      type: object
+      description: 锁单结果；id 为记录单标识。
+      allOf:
+        - $ref: '#/components/schemas/IdResponse'
+        - type: object
+          required:
+            - status
+            - lockedAt
+            - lockedBy
+            - signatureStatus
+          properties:
+            status:
+              type: string
+              description: 锁单后的状态。
+              enum:
+                - LOCKED
+            lockedAt:
+              type: string
+              format: date-time
+              description: 锁单时间（服务端时间）。
+            lockedBy:
+              type: string
+              description: 锁单操作人用户标识。
+            signatureStatus:
+              type: string
+              description: CA 签名状态；失败不阻断锁单。
+              enum:
+                - SIGNED
+                - PENDING
+                - FAILED
+    FollowUp:
+      type: object
+      description: 术后随访记录；24/48 小时。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - followUpId
+            - recordId
+            - patientId
+            - patientNo
+            - patientName
+            - followUpHours
+            - painScore
+            - ponv
+            - cognition
+            - satisfaction
+            - completedAt
+          properties:
+            followUpId:
+              type: string
+              description: 随访标识。
+            recordId:
+              type: string
+              description: 关联记录单标识。
+            patientId:
+              type: string
+              description: 患者标识。
+            patientNo:
+              type: string
+              description: 院内患者编号；示例统一使用 SYNTH-P-0001。
+            patientName:
+              type: string
+              description: 患者姓名；示例统一使用“演示患者”。
+            followUpHours:
+              type: integer
+              description: 随访时点（小时）。
+              enum:
+                - 24
+                - 48
+            painScore:
+              type: integer
+              description: 静息疼痛评分 NRS 0–10。
+              minimum: 0
+              maximum: 10
+            ponv:
+              type: boolean
+              description: 是否发生术后恶心呕吐 PONV。
+            cognition:
+              type: string
+              description: 认知状态描述（演示文本）。
+            satisfaction:
+              type: integer
+              description: 满意度评分 1–5。
+              minimum: 1
+              maximum: 5
+            completedAt:
+              type: string
+              format: date-time
+              description: 随访完成时间。
+    CreateFollowUpRequest:
+      type: object
+      description: 创建术后随访请求。
+      required:
+        - recordId
+        - followUpHours
+        - painScore
+        - ponv
+        - cognition
+        - satisfaction
+        - completedAt
+      properties:
+        recordId:
+          type: string
+          description: 关联记录单标识。
+        followUpHours:
+          type: integer
+          description: 随访时点（小时）。
+          enum:
+            - 24
+            - 48
+        painScore:
+          type: integer
+          description: 静息疼痛评分 NRS 0–10。
+          minimum: 0
+          maximum: 10
+        ponv:
+          type: boolean
+          description: 是否发生 PONV。
+        cognition:
+          type: string
+          description: 认知状态描述。
+        satisfaction:
+          type: integer
+          description: 满意度评分 1–5。
+          minimum: 1
+          maximum: 5
+        completedAt:
+          type: string
+          format: date-time
+          description: 随访完成时间。
+    FollowUpPage:
+      type: object
+      description: 术后随访分页结果。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页随访列表。
+          items:
+            $ref: '#/components/schemas/FollowUp'
+        meta:
+          $ref: '#/components/schemas/PageMeta'

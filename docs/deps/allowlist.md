@@ -58,9 +58,9 @@
 
 | 依赖 | 计划版本 | 许可证（待核） | 用途 | 引入任务 |
 |---|---|---|---|---|
-| @stoplight/spectral-cli | 6.x | Apache-2.0 | OpenAPI lint | S0-05 |
-| openapi-typescript 或等价 | 7.x | MIT | 契约 → TS 类型 | S0-05 |
-| openapi-diff / oasdiff 等价 | 最新稳定 | Apache-2.0 / MIT | 破坏性变更检测 | S0-05 |
+| （已采用，见第三节）@stoplight/spectral-cli | 6.16.0 | Apache-2.0 | OpenAPI lint | S0-05 已引入 |
+| （已采用，见第三节）openapi-typescript | 7.13.0 | MIT | 契约 → TS 类型 | S0-05 已引入 |
+| （已采用，见第三节）@oasdiff-js/oasdiff-js | 1.0.0 | Apache-2.0 | 破坏性变更检测（封装 oasdiff 1.15.0） | S0-05 已引入 |
 | element-plus | 2.9.x | MIT | UI 组件 | S0-08 |
 | echarts | 5.5.x | Apache-2.0 | 图表/大屏 | M8 |
 | vitest | 2.x | MIT | 前端单测 | S0-11 |
@@ -68,6 +68,14 @@
 | @playwright/test | 1.x | Apache-2.0 | E2E | S0-11 |
 | jacoco（Maven 插件） | 0.8.x | EPL-2.0（构建期工具） | 覆盖率 | S0-11 |
 | pact-jvm | 4.x | Apache-2.0 | 契约测试 | M5 联调 |
+
+## 三之二、S0-05 实际引入（契约工具链）
+
+| 包 | 版本 | 许可证 | 用途 | 备注 |
+|---|---|---|---|---|
+| @stoplight/spectral-cli | 6.16.0 | Apache-2.0 | OpenAPI lint | 其遥测依赖 @scarf/scarf 安装脚本已在 pnpm-workspace 显式关闭 |
+| openapi-typescript | 7.13.0 | MIT | 契约 → TS 类型生成 | 生成物 `packages/contracts/generated/typescript/` 入库 |
+| @oasdiff-js/oasdiff-js | 1.0.0 | Apache-2.0 | OpenAPI 破坏性变更检测 | 封装 oasdiff 1.15.0；openapi-diff 0.24.1 因不支持 3.1 未采用 |
 
 ## 四、检查与豁免
 

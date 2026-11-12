@@ -1,0 +1,76 @@
+extends:
+  - spectral:oas
+
+# 自定义函数目录（相对本文件）；error-responses 校验每个 operation 的错误响应。
+functionsDir: ./rules
+functions:
+  - error-responses
+
+rules:
+  # —— 基本信息 ——
+  info-contact: error
+  info-description: error
+  info-license: error
+  openapi-tags: error
+  tag-description: error
+
+  # —— operation 必备项 ——
+  operation-description: error
+  operation-operationId: error
+  operation-operationId-unique: error
+  operation-operationId-valid-in-url: error
+  operation-tag-defined: error
+  operation-tags: error
+  operation-singular-tag: error
+  operation-success-response: error
+  operation-parameters: error
+  path-params: error
+
+  # —— OpenAPI 3.1 结构与示例 ——
+  oas3-api-servers: error
+  oas3-operation-security-defined: error
+  oas3-schema: error
+  oas3-valid-media-example: error
+  oas3-valid-schema-example: error
+  oas3-unused-component: warn
+
+  # —— 项目约定：servers 必须 https ——
+  servers-https:
+    description: servers.url 必须以 https:// 开头（生产网无明文入口）。
+    message: '{{property}} 必须使用 https://（当前：{{value}}）'
+    severity: error
+    given: $.servers[*].url
+    then:
+      function: pattern
+      functionOptions:
+        match: '^https://[^ ]+$'
+
+  # —— 项目约定：tag 名称与描述必须中文 ——
+  tag-name-chinese:
+    description: 全局 tag 名称必须包含中文，便于中文工作台与文档展示。
+    message: 'tag 名称必须包含中文（当前：{{value}}）'
+    severity: error
+    given: $.tags[*].name
+    then:
+      function: pattern
+      functionOptions:
+        match: '[\u4e00-\u9fa5]'
+
+  tag-description-chinese:
+    description: 全局 tag 描述必须包含中文。
+    message: 'tag 描述必须包含中文（当前：{{value}}）'
+    severity: error
+    given: $.tags[*].description
+    then:
+      function: pattern
+      functionOptions:
+        match: '[\u4e00-\u9fa5]'
+
+  # —— 项目约定：每个 operation 必须声明 401/403/404/409 ——
+  error-responses:
+    description: 每个 operation 必须声明 401/403/404/409 四类错误响应。
+    message: '{{error}}'
+    severity: error
+    given: $.paths[*][get,put,post,delete,patch]
+    then:
+      function: error-responses

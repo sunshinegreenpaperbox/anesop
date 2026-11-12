@@ -55,10 +55,10 @@ pnpm -C apps/web exec vue-tsc --noEmit
 step "5/7 前端单元测试（pnpm test:unit --run）"
 pnpm test:unit --run
 
-# 6. 契约 lint：S0-05 落地 OpenAPI 后自动生效
-step "6/7 契约 lint（spectral）"
+# 6. 契约检查：S0-05 落地 spectral lint + baseline 破坏性变更检测
+step "6/7 契约检查（spectral + oasdiff）"
 if compgen -G "packages/contracts/openapi/*.yaml" >/dev/null; then
-  npx --yes @stoplight/spectral-cli lint packages/contracts/openapi/*.yaml
+  ./scripts/contract-check.sh
 else
   echo "跳过：packages/contracts/openapi/ 下暂无 *.yaml（S0-05 落地后自动生效）"
 fi

@@ -1,0 +1,586 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 认证与令牌契约（auth）
+  summary: 统一认证、令牌刷新、登出与当前用户权限
+  description: |
+    ANESOP 平台 M0 公共支撑的认证域契约。覆盖本地/AD/LDAP/SSO 登录、JWT 刷新、登出与
+    “当前用户 + 角色 + 权限点 + 数据范围”查询，对应方案书 §2.4.1（M0 公共支撑）与
+    §3.9.2（RBAC 与数据权限）。所有示例均为 SYNTHETIC 合成数据，不含真实患者或账号信息。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 认证与令牌
+    description: 登录、刷新、登出与当前用户权限查询；除登录/刷新外均需 Bearer Token。
+paths:
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags:
+        - 认证与令牌
+      summary: 账号登录
+      description: |
+        使用本地账号、AD/LDAP 或 SSO 凭据换取 JWT。登录失败不区分“账号不存在”与“密码错误”的
+        对外提示（统一 401），但审计日志记录真实原因；连续失败锁定策略见 §3.9.1。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              username: demo.anesthesiologist
+              password: SYNTHETIC-PASSWORD
+              authType: LOCAL
+      responses:
+        '200':
+          description: 登录成功，返回访问令牌、刷新令牌与当前用户权限快照。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                accessToken: SYNTH-ACCESS-TOKEN
+                refreshToken: SYNTH-REFRESH-TOKEN
+                tokenType: Bearer
+                expiresIn: 1800
+                user:
+                  userId: '1000000000000000001'
+                  username: demo.anesthesiologist
+                  displayName: 演示医师
+                  roles:
+                    - ANESTHESIOLOGIST
+                  permissions:
+                    - anesthesia.record.read
+                    - anesthesia.record.write
+                  dataScopes:
+                    - type: DEPARTMENT
+                      scopeIds:
+                        - '2000000000000000001'
+                  siteIds:
+                    - '3000000000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/auth/refresh:
+    post:
+      operationId: refreshToken
+      tags:
+        - 认证与令牌
+      summary: 刷新访问令牌
+      description: 使用未过期的刷新令牌换取新的访问令牌；刷新令牌轮换后旧令牌立即失效。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+            example:
+              refreshToken: SYNTH-REFRESH-TOKEN
+      responses:
+        '200':
+          description: 刷新成功，返回轮换后的访问令牌与刷新令牌。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                accessToken: SYNTH-ACCESS-TOKEN-2
+                refreshToken: SYNTH-REFRESH-TOKEN-2
+                tokenType: Bearer
+                expiresIn: 1800
+                user:
+                  userId: '1000000000000000001'
+                  username: demo.anesthesiologist
+                  displayName: 演示医师
+                  roles:
+                    - ANESTHESIOLOGIST
+                  permissions:
+                    - anesthesia.record.read
+                  dataScopes:
+                    - type: DEPARTMENT
+                      scopeIds:
+                        - '2000000000000000001'
+                  siteIds:
+                    - '3000000000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags:
+        - 认证与令牌
+      summary: 登出当前会话
+      description: 吊销当前访问令牌与刷新令牌，并结束服务端会话；重复登出按幂等处理。
+      responses:
+        '200':
+          description: 登出成功，返回被吊销的会话标识。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdResponse'
+              example:
+                id: '4000000000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/auth/me:
+    get:
+      operationId: getCurrentUser
+      tags:
+        - 认证与令牌
+      summary: 查询当前用户与权限
+      description: 返回当前登录用户的角色、权限点与数据范围，供前端菜单与按钮级鉴权使用。
+      responses:
+        '200':
+          description: 当前用户信息与权限快照。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+              example:
+                userId: '1000000000000000001'
+                username: demo.anesthesiologist
+                displayName: 演示医师
+                roles:
+                  - ANESTHESIOLOGIST
+                permissions:
+                  - anesthesia.record.read
+                  - anesthesia.record.write
+                  - anesthesia.record.lock
+                dataScopes:
+                  - type: DEPARTMENT
+                    scopeIds:
+                      - '2000000000000000001'
+                siteIds:
+                  - '3000000000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/auth/sessions:
+    get:
+      operationId: listSessions
+      tags:
+        - 认证与令牌
+      summary: 查询当前用户会话
+      description: 返回当前用户的有效与历史登录会话，用于在线设备查看与强制下线；按数据权限过滤。
+      parameters:
+        - name: page
+          in: query
+          description: 页码，从 1 开始。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          description: 每页条数。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 会话分页列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
+              example:
+                items:
+                  - sessionId: '4000000000000000001'
+                    userId: '1000000000000000001'
+                    clientIp: 10.0.0.10
+                    userAgent: SYNTHETIC-BROWSER/1.0
+                    loginAt: '2026-11-12T08:00:00+08:00'
+                    expiresAt: '2026-11-12T08:30:00+08:00'
+                    status: ACTIVE
+                    createdAt: '2026-11-12T08:00:00+08:00'
+                    createdBy: '1000000000000000001'
+                    updatedAt: '2026-11-12T08:00:00+08:00'
+                    updatedBy: '1000000000000000001'
+                    version: 1
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
+  responses:
+    Unauthorized:
+      description: 未认证：未携带令牌、令牌过期或签名无效。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0001
+            details: []
+    Forbidden:
+      description: 已认证但无权限，或请求超出当前用户数据范围。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0002
+            details:
+              - field: dataScope
+                reason: 当前角色不包含该科室数据范围
+    NotFound:
+      description: 资源不存在，或存在但不在当前用户数据权限内（不泄露存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-0003
+            details: []
+    Conflict:
+      description: 业务状态冲突、乐观锁版本冲突或重复提交。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: STATE_CONFLICT
+            message: 当前状态不允许该操作或版本已过期
+            traceId: SYNTH-TRACE-0004
+            details:
+              - field: version
+                reason: 提交版本落后于服务端当前版本
+  schemas:
+    ErrorDetail:
+      type: object
+      description: 错误明细项，用于字段级校验失败或权限范围说明。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 相关字段名或资源标识。
+        reason:
+          type: string
+          description: 可读的失败原因，不包含堆栈、SQL 实参与内部路径。
+    Error:
+      type: object
+      description: 统一错误响应；错误信息不暴露堆栈、SQL 实参与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用，如 AUTH_UNAUTHORIZED。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联，便于排障。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    PageMeta:
+      type: object
+      description: 分页元数据；页码从 1 开始，size 上限由服务端限制。
+      required:
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          description: 当前页码，从 1 开始。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页条数。
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          description: 符合条件的总条数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数；total 为 0 时为 0。
+          minimum: 0
+    AuditFields:
+      type: object
+      description: 审计与乐观锁公共字段；临床数据不物理删除，删除以 deletedAt 另行扩展。
+      required:
+        - createdAt
+        - createdBy
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间（服务端时间，Asia/Shanghai 展示）。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间（服务端时间）。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号，从 1 开始；更新必须回传。
+          minimum: 1
+    IdResponse:
+      type: object
+      description: 仅返回资源标识的通用响应。
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          description: 雪花 ID 序列化后的字符串，避免前端精度丢失。
+    LoginRequest:
+      type: object
+      description: 登录请求；authType 决定走本地口令、AD/LDAP 还是 SSO。
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          description: 登录账号（工号或域账号），非患者标识。
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          description: 口令；仅通过 TLS 传输，日志与审计不得记录明文。
+          minLength: 1
+          maxLength: 128
+        authType:
+          type: string
+          description: 认证方式，默认 LOCAL。
+          enum:
+            - LOCAL
+            - LDAP
+            - SSO
+          default: LOCAL
+    RefreshRequest:
+      type: object
+      description: 刷新令牌请求。
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          description: 未过期的刷新令牌；轮换后旧值立即失效。
+          minLength: 1
+    TokenResponse:
+      type: object
+      description: 令牌响应；expiresIn 单位为秒。
+      required:
+        - accessToken
+        - refreshToken
+        - tokenType
+        - expiresIn
+        - user
+      properties:
+        accessToken:
+          type: string
+          description: JWT 访问令牌，放入 Authorization 请求头（Bearer 方案）。
+        refreshToken:
+          type: string
+          description: 刷新令牌，仅用于 /auth/refresh。
+        tokenType:
+          type: string
+          description: 令牌类型，固定 Bearer。
+          enum:
+            - Bearer
+        expiresIn:
+          type: integer
+          description: 访问令牌有效期（秒）。
+          minimum: 1
+        user:
+          $ref: '#/components/schemas/CurrentUser'
+    DataScope:
+      type: object
+      description: 数据权限范围，对应 §3.9.2 的全院/科室/术间/本人患者四类。
+      required:
+        - type
+        - scopeIds
+      properties:
+        type:
+          type: string
+          description: 数据范围类型。
+          enum:
+            - ALL
+            - DEPARTMENT
+            - ROOM
+            - OWN_PATIENTS
+        scopeIds:
+          type: array
+          description: 范围对象标识；ALL 时为空数组。
+          items:
+            type: string
+    CurrentUser:
+      type: object
+      description: 当前用户、角色、权限点与数据范围快照。
+      required:
+        - userId
+        - username
+        - displayName
+        - roles
+        - permissions
+        - dataScopes
+        - siteIds
+      properties:
+        userId:
+          type: string
+          description: 用户标识（雪花 ID 字符串）。
+        username:
+          type: string
+          description: 登录账号。
+        displayName:
+          type: string
+          description: 展示名；示例统一使用“演示医师”等合成称谓。
+        staffId:
+          type: [string, 'null']
+          description: 关联人员档案标识；纯系统账号可为 null。
+        roles:
+          type: array
+          description: 角色编码列表。
+          items:
+            type: string
+        permissions:
+          type: array
+          description: 权限点列表，粒度到“菜单 + 操作”，如 anesthesia.record.lock。
+          items:
+            type: string
+        dataScopes:
+          type: array
+          description: 数据权限范围列表。
+          items:
+            $ref: '#/components/schemas/DataScope'
+        siteIds:
+          type: array
+          description: 可访问院区标识列表。
+          items:
+            type: string
+    Session:
+      type: object
+      description: 登录会话；用于在线设备查看与强制下线。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - sessionId
+            - userId
+            - clientIp
+            - userAgent
+            - loginAt
+            - expiresAt
+            - status
+          properties:
+            sessionId:
+              type: string
+              description: 会话标识。
+            userId:
+              type: string
+              description: 所属用户标识。
+            clientIp:
+              type: string
+              description: 登录客户端 IP（审计用，不记录患者信息）。
+            userAgent:
+              type: string
+              description: 客户端标识摘要；示例为合成值。
+            loginAt:
+              type: string
+              format: date-time
+              description: 登录时间。
+            expiresAt:
+              type: string
+              format: date-time
+              description: 会话过期时间；默认 30 分钟无操作失效。
+            status:
+              type: string
+              description: 会话状态。
+              enum:
+                - ACTIVE
+                - EXPIRED
+                - REVOKED
+    SessionPage:
+      type: object
+      description: 会话分页结果。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页会话列表。
+          items:
+            $ref: '#/components/schemas/Session'
+        meta:
+          $ref: '#/components/schemas/PageMeta'

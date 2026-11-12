@@ -1,0 +1,750 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 患者与手术申请契约（patient）
+  summary: 患者主索引查询与 HIS 手术申请接收
+  description: |
+    ANESOP 患者域契约。患者主索引以 HIS 为权威来源，本系统只读同步并按数据权限返回；
+    手术申请以 HIS 申请号为幂等键接收，对应方案书 §2.4.1（M0 公共支撑）、§2.4.2（M1 手术排程）
+    与 §3.5.3（I-01a/I-01b）。所有示例均为 SYNTHETIC 合成数据。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 患者与手术申请
+    description: 患者主索引查询、患者详情与手术申请接收/查询。
+paths:
+  /v1/patients:
+    get:
+      operationId: listPatients
+      tags:
+        - 患者与手术申请
+      summary: 分页查询患者
+      description: |
+        按患者编号、姓名、住院号或科室检索患者主索引。姓名支持模糊匹配但受数据权限约束；
+        返回证件号与手机号均为脱敏值，完整值不出接口。
+      parameters:
+        - name: patientNo
+          in: query
+          description: 院内患者编号，精确匹配。
+          required: false
+          schema:
+            type: string
+        - name: name
+          in: query
+          description: 患者姓名关键字；仅用于检索，不在日志中记录。
+          required: false
+          schema:
+            type: string
+        - name: inpatientNo
+          in: query
+          description: 住院号，精确匹配。
+          required: false
+          schema:
+            type: string
+        - name: departmentId
+          in: query
+          description: 科室标识；同时受当前用户数据范围约束。
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: 页码，从 1 开始。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          description: 每页条数。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 患者分页列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatientPage'
+              example:
+                items:
+                  - patientId: '5000000000000000001'
+                    patientNo: SYNTH-P-0001
+                    name: 演示患者
+                    gender: FEMALE
+                    birthDate: '1978-03-15'
+                    idCardMasked: 110101********1234
+                    phoneMasked: 138****0000
+                    inpatientNo: SYNTH-ZY-0001
+                    departmentId: '2000000000000000001'
+                    departmentName: 演示外科
+                    siteId: '3000000000000000001'
+                    createdAt: '2026-11-01T09:00:00+08:00'
+                    createdBy: '1000000000000000001'
+                    updatedAt: '2026-11-10T15:30:00+08:00'
+                    updatedBy: '1000000000000000001'
+                    version: 3
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/patients/{patientId}:
+    get:
+      operationId: getPatient
+      tags:
+        - 患者与手术申请
+      summary: 查询患者详情
+      description: 按患者标识返回主索引详情；跨科室查看需临时授权并全程审计（§3.9.2）。
+      parameters:
+        - name: patientId
+          in: path
+          description: 患者标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 患者详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Patient'
+              example:
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                name: 演示患者
+                gender: FEMALE
+                birthDate: '1978-03-15'
+                idCardMasked: 110101********1234
+                phoneMasked: 138****0000
+                inpatientNo: SYNTH-ZY-0001
+                departmentId: '2000000000000000001'
+                departmentName: 演示外科
+                siteId: '3000000000000000001'
+                createdAt: '2026-11-01T09:00:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-10T15:30:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 3
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/patients/{patientId}/surgery-applications:
+    get:
+      operationId: listPatientSurgeryApplications
+      tags:
+        - 患者与手术申请
+      summary: 查询患者的手术申请
+      description: 按患者标识分页返回手术申请，用于术前访视与排程上下文。
+      parameters:
+        - name: patientId
+          in: path
+          description: 患者标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: 页码，从 1 开始。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          description: 每页条数。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 手术申请分页列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurgeryApplicationPage'
+              example:
+                items:
+                  - applicationId: '6000000000000000001'
+                    applicationNo: SYNTH-HIS-APP-0001
+                    patientId: '5000000000000000001'
+                    patientNo: SYNTH-P-0001
+                    patientName: 演示患者
+                    diagnosis: 演示诊断（膝关节退行性病变）
+                    procedureName: 演示术式（全膝关节置换术）
+                    plannedSurgeryDate: '2026-12-01'
+                    urgency: ELECTIVE
+                    status: SCHEDULED
+                    departmentId: '2000000000000000001'
+                    departmentName: 演示外科
+                    siteId: '3000000000000000001'
+                    createdAt: '2026-11-08T10:00:00+08:00'
+                    createdBy: '1000000000000000001'
+                    updatedAt: '2026-11-09T11:20:00+08:00'
+                    updatedBy: '1000000000000000001'
+                    version: 2
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/surgery-applications:
+    post:
+      operationId: createSurgeryApplication
+      tags:
+        - 患者与手术申请
+      summary: 接收手术申请
+      description: |
+        接收 HIS 手术申请，以 applicationNo（HIS 申请号）为幂等键；重复提交返回首次结果，
+        不重复创建。必填项校验与术式/诊断匹配提醒在此完成（§2.4.1、§2.4.2）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSurgeryApplicationRequest'
+            example:
+              applicationNo: SYNTH-HIS-APP-0001
+              patientId: '5000000000000000001'
+              diagnosis: 演示诊断（膝关节退行性病变）
+              procedureName: 演示术式（全膝关节置换术）
+              plannedSurgeryDate: '2026-12-01'
+              urgency: ELECTIVE
+              departmentId: '2000000000000000001'
+              siteId: '3000000000000000001'
+      responses:
+        '201':
+          description: 手术申请创建成功；幂等重放返回首次创建结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurgeryApplication'
+              example:
+                applicationId: '6000000000000000001'
+                applicationNo: SYNTH-HIS-APP-0001
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                diagnosis: 演示诊断（膝关节退行性病变）
+                procedureName: 演示术式（全膝关节置换术）
+                plannedSurgeryDate: '2026-12-01'
+                urgency: ELECTIVE
+                status: RECEIVED
+                departmentId: '2000000000000000001'
+                departmentName: 演示外科
+                siteId: '3000000000000000001'
+                createdAt: '2026-11-08T10:00:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-08T10:00:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/surgery-applications/{applicationId}:
+    get:
+      operationId: getSurgeryApplication
+      tags:
+        - 患者与手术申请
+      summary: 查询手术申请详情
+      description: 按申请标识返回手术申请详情，供排程与访视任务引用。
+      parameters:
+        - name: applicationId
+          in: path
+          description: 手术申请标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 手术申请详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurgeryApplication'
+              example:
+                applicationId: '6000000000000000001'
+                applicationNo: SYNTH-HIS-APP-0001
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                diagnosis: 演示诊断（膝关节退行性病变）
+                procedureName: 演示术式（全膝关节置换术）
+                plannedSurgeryDate: '2026-12-01'
+                urgency: ELECTIVE
+                status: SCHEDULED
+                departmentId: '2000000000000000001'
+                departmentName: 演示外科
+                siteId: '3000000000000000001'
+                createdAt: '2026-11-08T10:00:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-09T11:20:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/surgery-applications/{applicationId}/cancel:
+    post:
+      operationId: cancelSurgeryApplication
+      tags:
+        - 患者与手术申请
+      summary: 取消手术申请
+      description: 取消未被排程或已释放排程的手术申请；必须选择原因码并写变更记录。
+      parameters:
+        - name: applicationId
+          in: path
+          description: 手术申请标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelSurgeryApplicationRequest'
+            example:
+              reasonCode: PATIENT_CONDITION
+              reason: 演示取消原因（合成数据）
+              version: 2
+      responses:
+        '200':
+          description: 取消成功，返回手术申请标识。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdResponse'
+              example:
+                id: '6000000000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 头中。
+  responses:
+    Unauthorized:
+      description: 未认证：未携带令牌、令牌过期或签名无效。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0001
+            details: []
+    Forbidden:
+      description: 已认证但无权限，或请求超出当前用户数据范围。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0002
+            details:
+              - field: dataScope
+                reason: 当前角色不包含该科室数据范围
+    NotFound:
+      description: 资源不存在，或存在但不在当前用户数据权限内（不泄露存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-0003
+            details: []
+    Conflict:
+      description: 业务状态冲突、乐观锁版本冲突或重复提交。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: STATE_CONFLICT
+            message: 当前状态不允许该操作或版本已过期
+            traceId: SYNTH-TRACE-0004
+            details:
+              - field: version
+                reason: 提交版本落后于服务端当前版本
+  schemas:
+    ErrorDetail:
+      type: object
+      description: 错误明细项，用于字段级校验失败或权限范围说明。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 相关字段名或资源标识。
+        reason:
+          type: string
+          description: 可读的失败原因，不包含堆栈、SQL 实参与内部路径。
+    Error:
+      type: object
+      description: 统一错误响应；错误信息不暴露堆栈、SQL 实参与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    PageMeta:
+      type: object
+      description: 分页元数据；页码从 1 开始，size 上限由服务端限制。
+      required:
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          description: 当前页码，从 1 开始。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页条数。
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          description: 符合条件的总条数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数；total 为 0 时为 0。
+          minimum: 0
+    AuditFields:
+      type: object
+      description: 审计与乐观锁公共字段；临床数据不物理删除。
+      required:
+        - createdAt
+        - createdBy
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间（服务端时间）。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间（服务端时间）。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号，从 1 开始；更新必须回传。
+          minimum: 1
+    IdResponse:
+      type: object
+      description: 仅返回资源标识的通用响应。
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          description: 雪花 ID 序列化后的字符串，避免前端精度丢失。
+    Patient:
+      type: object
+      description: 患者主索引只读视图；证件号与手机号为脱敏值。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - patientId
+            - patientNo
+            - name
+            - gender
+            - birthDate
+            - idCardMasked
+            - phoneMasked
+            - inpatientNo
+            - departmentId
+            - departmentName
+            - siteId
+          properties:
+            patientId:
+              type: string
+              description: 患者标识（雪花 ID 字符串）。
+            patientNo:
+              type: string
+              description: 院内患者编号；示例统一使用 SYNTH-P-xxxx。
+            name:
+              type: string
+              description: 患者姓名；示例统一使用“演示患者”。
+            gender:
+              type: string
+              description: 性别。
+              enum:
+                - MALE
+                - FEMALE
+                - UNKNOWN
+            birthDate:
+              type: string
+              format: date
+              description: 出生日期；与年龄组合可能重识别，按最小必要返回。
+            idCardMasked:
+              type: string
+              description: 脱敏证件号（前 6 后 4）；完整值不出接口。
+            phoneMasked:
+              type: string
+              description: 脱敏手机号（前 3 后 4）。
+            inpatientNo:
+              type: string
+              description: 住院号；直接标识，按数据权限控制并记审计。
+            departmentId:
+              type: string
+              description: 所属科室标识。
+            departmentName:
+              type: string
+              description: 所属科室名称。
+            siteId:
+              type: string
+              description: 院区标识（多院区维度）。
+    PatientPage:
+      type: object
+      description: 患者分页结果。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页患者列表。
+          items:
+            $ref: '#/components/schemas/Patient'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    SurgeryApplication:
+      type: object
+      description: HIS 手术申请映射；applicationNo 为幂等键。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - applicationId
+            - applicationNo
+            - patientId
+            - patientNo
+            - patientName
+            - diagnosis
+            - procedureName
+            - plannedSurgeryDate
+            - urgency
+            - status
+            - departmentId
+            - departmentName
+            - siteId
+          properties:
+            applicationId:
+              type: string
+              description: 手术申请标识（雪花 ID 字符串）。
+            applicationNo:
+              type: string
+              description: HIS 申请号，入站幂等键；重复提交返回首次结果。
+            patientId:
+              type: string
+              description: 患者标识。
+            patientNo:
+              type: string
+              description: 院内患者编号。
+            patientName:
+              type: string
+              description: 患者姓名；示例统一使用“演示患者”。
+            diagnosis:
+              type: string
+              description: 术前诊断（脱敏后的演示文本）。
+            procedureName:
+              type: string
+              description: 拟施术式。
+            plannedSurgeryDate:
+              type: string
+              format: date
+              description: 拟手术日期。
+            urgency:
+              type: string
+              description: 急缓标识；急诊优先于择期（§2.4.2）。
+              enum:
+                - ELECTIVE
+                - EMERGENCY
+            status:
+              type: string
+              description: 申请状态。
+              enum:
+                - RECEIVED
+                - VALIDATED
+                - SCHEDULED
+                - CANCELLED
+            departmentId:
+              type: string
+              description: 申请科室标识。
+            departmentName:
+              type: string
+              description: 申请科室名称。
+            siteId:
+              type: string
+              description: 院区标识。
+    SurgeryApplicationPage:
+      type: object
+      description: 手术申请分页结果。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页手术申请列表。
+          items:
+            $ref: '#/components/schemas/SurgeryApplication'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CreateSurgeryApplicationRequest:
+      type: object
+      description: 接收 HIS 手术申请的请求体；applicationNo 为幂等键。
+      required:
+        - applicationNo
+        - patientId
+        - diagnosis
+        - procedureName
+        - plannedSurgeryDate
+        - urgency
+        - departmentId
+        - siteId
+      properties:
+        applicationNo:
+          type: string
+          description: HIS 申请号；同一申请号重复提交不得重复建单。
+          minLength: 1
+          maxLength: 64
+        patientId:
+          type: string
+          description: 患者标识；须已存在于患者主索引。
+        diagnosis:
+          type: string
+          description: 术前诊断。
+          minLength: 1
+          maxLength: 500
+        procedureName:
+          type: string
+          description: 拟施术式。
+          minLength: 1
+          maxLength: 200
+        plannedSurgeryDate:
+          type: string
+          format: date
+          description: 拟手术日期。
+        urgency:
+          type: string
+          description: 急缓标识。
+          enum:
+            - ELECTIVE
+            - EMERGENCY
+        departmentId:
+          type: string
+          description: 申请科室标识。
+        siteId:
+          type: string
+          description: 院区标识。
+    CancelSurgeryApplicationRequest:
+      type: object
+      description: 取消手术申请请求；原因码必填并进入统计。
+      required:
+        - reasonCode
+        - reason
+        - version
+      properties:
+        reasonCode:
+          type: string
+          description: 取消原因码，来自字典。
+        reason:
+          type: string
+          description: 原因说明。
+        version:
+          type: integer
+          description: 申请当前版本号，用于乐观锁。
+          minimum: 1

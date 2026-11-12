@@ -1,0 +1,899 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 手术排程契约（scheduling）
+  summary: 术间资源、排程查询与创建、冲突检测、急诊加台与停台
+  description: |
+    ANESOP 手术排程域契约，对应方案书 §2.4.2（M1 手术排程管理）与 §3.4.2（排程/台次实体）。
+    硬规则：同术间时段不重叠、冲突不得强行保存、急诊加台优先于择期、停台改台必选原因码。
+    所有示例均为 SYNTHETIC 合成数据。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 手术排程
+    description: 术间资源、日排程、冲突检测、急诊加台与停台操作。
+paths:
+  /v1/scheduling/rooms:
+    get:
+      operationId: listOperatingRooms
+      tags:
+        - 手术排程
+      summary: 查询术间列表
+      description: 返回术间静态配置与当前状态，供排程工作台与驾驶舱使用；术间编号院内唯一。
+      parameters:
+        - name: siteId
+          in: query
+          description: 院区标识；不传时按当前用户数据范围过滤。
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: 术间当前状态。
+          required: false
+          schema:
+            type: string
+            enum:
+              - IDLE
+              - PREPARING
+              - ANESTHESIA
+              - SURGERY
+              - PACU
+              - CLEANING
+      responses:
+        '200':
+          description: 术间列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatingRoomList'
+              example:
+                items:
+                  - roomId: '7000000000000000001'
+                    roomNo: OR-01
+                    roomName: 演示 1 号手术间
+                    siteId: '3000000000000000001'
+                    status: IDLE
+                    isolationRequired: false
+                    equipmentTags:
+                      - ANESTHESIA_MACHINE
+                      - MONITOR
+                    createdAt: '2026-01-05T08:00:00+08:00'
+                    createdBy: '1000000000000000001'
+                    updatedAt: '2026-11-12T08:00:00+08:00'
+                    updatedBy: '1000000000000000001'
+                    version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/scheduling/schedules:
+    get:
+      operationId: listSchedules
+      tags:
+        - 手术排程
+      summary: 查询排程
+      description: 按日期、术间与状态查询日排程，返回台次顺序、计划与实际起止时间。
+      parameters:
+        - name: date
+          in: query
+          description: 排程日期（YYYY-MM-DD），按院区时区解释。
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: roomId
+          in: query
+          description: 术间标识。
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: 排程状态。
+          required: false
+          schema:
+            type: string
+            enum:
+              - PLANNED
+              - PUBLISHED
+              - IN_PROGRESS
+              - COMPLETED
+              - CANCELLED
+              - DELAYED
+        - name: page
+          in: query
+          description: 页码，从 1 开始。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          description: 每页条数。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: 排程分页列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulePage'
+              example:
+                items:
+                  - scheduleId: '8000000000000000001'
+                    applicationId: '6000000000000000001'
+                    patientId: '5000000000000000001'
+                    patientNo: SYNTH-P-0001
+                    patientName: 演示患者
+                    roomId: '7000000000000000001'
+                    roomNo: OR-01
+                    sequenceNo: 1
+                    plannedStart: '2026-12-01T08:30:00+08:00'
+                    plannedEnd: '2026-12-01T11:00:00+08:00'
+                    actualStart: '2026-12-01T08:35:00+08:00'
+                    actualEnd: null
+                    status: IN_PROGRESS
+                    priority: ELECTIVE
+                    changeReason: null
+                    createdAt: '2026-11-09T11:20:00+08:00'
+                    createdBy: '1000000000000000001'
+                    updatedAt: '2026-12-01T08:35:00+08:00'
+                    updatedBy: '1000000000000000001'
+                    version: 4
+                meta:
+                  page: 1
+                  size: 50
+                  total: 1
+                  totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    post:
+      operationId: createSchedule
+      tags:
+        - 手术排程
+      summary: 创建排程
+      description: |
+        为手术申请分配术间、台次与计划时段。服务端在事务内再次执行冲突检测，冲突时返回 409，
+        不得强行保存；急诊加台走专用接口。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScheduleRequest'
+            example:
+              applicationId: '6000000000000000001'
+              roomId: '7000000000000000001'
+              plannedStart: '2026-12-01T08:30:00+08:00'
+              plannedEnd: '2026-12-01T11:00:00+08:00'
+              sequenceNo: 1
+              priority: ELECTIVE
+      responses:
+        '201':
+          description: 排程创建成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+              example:
+                scheduleId: '8000000000000000001'
+                applicationId: '6000000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                roomId: '7000000000000000001'
+                roomNo: OR-01
+                sequenceNo: 1
+                plannedStart: '2026-12-01T08:30:00+08:00'
+                plannedEnd: '2026-12-01T11:00:00+08:00'
+                actualStart: null
+                actualEnd: null
+                status: PLANNED
+                priority: ELECTIVE
+                changeReason: null
+                createdAt: '2026-11-09T11:20:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-09T11:20:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/scheduling/schedules/{scheduleId}:
+    get:
+      operationId: getSchedule
+      tags:
+        - 手术排程
+      summary: 查询排程详情
+      description: 按排程标识返回台次详情，供麻醉记录单起单与术前准备联动。
+      parameters:
+        - name: scheduleId
+          in: path
+          description: 排程标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 排程详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+              example:
+                scheduleId: '8000000000000000001'
+                applicationId: '6000000000000000001'
+                patientId: '5000000000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                roomId: '7000000000000000001'
+                roomNo: OR-01
+                sequenceNo: 1
+                plannedStart: '2026-12-01T08:30:00+08:00'
+                plannedEnd: '2026-12-01T11:00:00+08:00'
+                actualStart: null
+                actualEnd: null
+                status: PUBLISHED
+                priority: ELECTIVE
+                changeReason: null
+                createdAt: '2026-11-09T11:20:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-10T09:10:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/scheduling/conflicts/check:
+    post:
+      operationId: checkScheduleConflict
+      tags:
+        - 手术排程
+      summary: 检测排程冲突
+      description: |
+        对候选术间与时段执行冲突检测，覆盖术间时段重叠、人员排班、设备依赖与隔离要求。
+        仅返回检测结果，不落库；创建/调整排程时服务端仍会复核。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConflictCheckRequest'
+            example:
+              roomId: '7000000000000000001'
+              plannedStart: '2026-12-01T10:30:00+08:00'
+              plannedEnd: '2026-12-01T12:30:00+08:00'
+              excludeScheduleId: '8000000000000000001'
+              staffIds:
+                - '9000000000000000001'
+              equipmentTags:
+                - ANESTHESIA_MACHINE
+      responses:
+        '200':
+          description: 冲突检测结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictCheckResult'
+              example:
+                hasConflict: true
+                conflicts:
+                  - conflictType: ROOM_OVERLAP
+                    severity: BLOCKING
+                    message: 与已发布台次 OR-01 第 1 台时段重叠
+                    conflictingScheduleId: '8000000000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/scheduling/emergency-cases:
+    post:
+      operationId: addEmergencyCase
+      tags:
+        - 手术排程
+      summary: 急诊加台
+      description: |
+        急诊手术绿色通道加台：优先占用空档，必要时提示挤占并触发加台审批；急诊优先于择期，
+        术后补记原因（§2.3.2）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmergencyAddRequest'
+            example:
+              applicationId: '6000000000000000002'
+              roomId: '7000000000000000002'
+              reasonCode: EMERGENCY_GREEN_CHANNEL
+              reason: 演示急诊加台（合成数据）
+              expectedStart: '2026-12-01T13:00:00+08:00'
+      responses:
+        '200':
+          description: 急诊加台受理结果；需审批时 approvalRequired 为 true。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmergencyAddResult'
+              example:
+                accepted: true
+                scheduleId: '8000000000000000002'
+                approvalRequired: true
+                conflicts: []
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/scheduling/schedules/{scheduleId}/cancel:
+    post:
+      operationId: cancelSchedule
+      tags:
+        - 手术排程
+      summary: 停台/取消排程
+      description: 停台或取消排程必须选择原因码并写变更记录；已开始台次不允许直接取消（409）。
+      parameters:
+        - name: scheduleId
+          in: path
+          description: 排程标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelScheduleRequest'
+            example:
+              reasonCode: PATIENT_CONDITION
+              reason: 演示停台原因（合成数据）
+              version: 4
+      responses:
+        '200':
+          description: 取消成功，返回排程标识。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdResponse'
+              example:
+                id: '8000000000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 头中。
+  responses:
+    Unauthorized:
+      description: 未认证：未携带令牌、令牌过期或签名无效。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0001
+            details: []
+    Forbidden:
+      description: 已认证但无权限，或请求超出当前用户数据范围。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0002
+            details:
+              - field: dataScope
+                reason: 当前角色不包含该科室数据范围
+    NotFound:
+      description: 资源不存在，或存在但不在当前用户数据权限内（不泄露存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-0003
+            details: []
+    Conflict:
+      description: 排程冲突、状态冲突或乐观锁版本冲突。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: SCHEDULE_CONFLICT
+            message: 目标时段与已有排程冲突或版本已过期
+            traceId: SYNTH-TRACE-0004
+            details:
+              - field: plannedStart
+                reason: 与已发布台次时段重叠
+  schemas:
+    ErrorDetail:
+      type: object
+      description: 错误明细项，用于字段级校验失败或冲突说明。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 相关字段名或资源标识。
+        reason:
+          type: string
+          description: 可读的失败原因，不包含堆栈、SQL 实参与内部路径。
+    Error:
+      type: object
+      description: 统一错误响应；错误信息不暴露堆栈、SQL 实参与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    PageMeta:
+      type: object
+      description: 分页元数据；页码从 1 开始，size 上限由服务端限制。
+      required:
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          description: 当前页码，从 1 开始。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页条数。
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          description: 符合条件的总条数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数；total 为 0 时为 0。
+          minimum: 0
+    AuditFields:
+      type: object
+      description: 审计与乐观锁公共字段；排程变更留版本与原因。
+      required:
+        - createdAt
+        - createdBy
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间（服务端时间）。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间（服务端时间）。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号，从 1 开始；更新必须回传。
+          minimum: 1
+    IdResponse:
+      type: object
+      description: 仅返回资源标识的通用响应。
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          description: 雪花 ID 序列化后的字符串，避免前端精度丢失。
+    OperatingRoom:
+      type: object
+      description: 术间静态配置与实时状态。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - roomId
+            - roomNo
+            - roomName
+            - siteId
+            - status
+            - isolationRequired
+            - equipmentTags
+          properties:
+            roomId:
+              type: string
+              description: 术间标识。
+            roomNo:
+              type: string
+              description: 术间编号，院内唯一。
+              examples:
+                - OR-01
+            roomName:
+              type: string
+              description: 术间名称。
+            siteId:
+              type: string
+              description: 院区标识。
+            status:
+              type: string
+              description: 术间当前状态。
+              enum:
+                - IDLE
+                - PREPARING
+                - ANESTHESIA
+                - SURGERY
+                - PACU
+                - CLEANING
+            isolationRequired:
+              type: boolean
+              description: 是否要求隔离（感染等）。
+            equipmentTags:
+              type: array
+              description: 设备依赖标签，用于排程设备冲突校验。
+              items:
+                type: string
+    OperatingRoomList:
+      type: object
+      description: 术间列表。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 术间列表。
+          items:
+            $ref: '#/components/schemas/OperatingRoom'
+    Schedule:
+      type: object
+      description: 排程/台次；同术间时段不得重叠。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - scheduleId
+            - applicationId
+            - patientId
+            - patientNo
+            - patientName
+            - roomId
+            - roomNo
+            - sequenceNo
+            - plannedStart
+            - plannedEnd
+            - status
+            - priority
+          properties:
+            scheduleId:
+              type: string
+              description: 排程标识。
+            applicationId:
+              type: string
+              description: 手术申请标识。
+            patientId:
+              type: string
+              description: 患者标识。
+            patientNo:
+              type: string
+              description: 院内患者编号；示例统一使用 SYNTH-P-0001。
+            patientName:
+              type: string
+              description: 患者姓名；示例统一使用“演示患者”。
+            roomId:
+              type: string
+              description: 术间标识。
+            roomNo:
+              type: string
+              description: 术间编号。
+            sequenceNo:
+              type: integer
+              description: 台次序号，从 1 开始。
+              minimum: 1
+            plannedStart:
+              type: string
+              format: date-time
+              description: 计划开始时间（含时区偏移）。
+            plannedEnd:
+              type: string
+              format: date-time
+              description: 计划结束时间（含时区偏移）。
+            actualStart:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              description: 实际开始时间；未开始为 null。
+            actualEnd:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              description: 实际结束时间；未结束为 null。
+            status:
+              type: string
+              description: 排程状态。
+              enum:
+                - PLANNED
+                - PUBLISHED
+                - IN_PROGRESS
+                - COMPLETED
+                - CANCELLED
+                - DELAYED
+            priority:
+              type: string
+              description: 优先级；急诊优先于择期。
+              enum:
+                - ELECTIVE
+                - URGENT
+                - EMERGENCY
+            changeReason:
+              type:
+                - string
+                - 'null'
+              description: 最近一次改台/停台原因；无变更为 null。
+    SchedulePage:
+      type: object
+      description: 排程分页结果。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页排程列表。
+          items:
+            $ref: '#/components/schemas/Schedule'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CreateScheduleRequest:
+      type: object
+      description: 创建排程请求；服务端在事务内复核冲突。
+      required:
+        - applicationId
+        - roomId
+        - plannedStart
+        - plannedEnd
+        - sequenceNo
+        - priority
+      properties:
+        applicationId:
+          type: string
+          description: 手术申请标识。
+        roomId:
+          type: string
+          description: 术间标识。
+        plannedStart:
+          type: string
+          format: date-time
+          description: 计划开始时间。
+        plannedEnd:
+          type: string
+          format: date-time
+          description: 计划结束时间，必须晚于开始时间。
+        sequenceNo:
+          type: integer
+          description: 台次序号。
+          minimum: 1
+        priority:
+          type: string
+          description: 优先级。
+          enum:
+            - ELECTIVE
+            - URGENT
+            - EMERGENCY
+    ConflictCheckRequest:
+      type: object
+      description: 排程冲突检测请求；只读预检，不落库。
+      required:
+        - roomId
+        - plannedStart
+        - plannedEnd
+      properties:
+        roomId:
+          type: string
+          description: 候选术间标识。
+        plannedStart:
+          type: string
+          format: date-time
+          description: 候选开始时间。
+        plannedEnd:
+          type: string
+          format: date-time
+          description: 候选结束时间。
+        excludeScheduleId:
+          type: [string, 'null']
+          description: 调整既有排程时排除自身，避免误报。
+        staffIds:
+          type: array
+          description: 候选人员标识，用于排班与资质冲突校验。
+          items:
+            type: string
+        equipmentTags:
+          type: array
+          description: 候选设备标签。
+          items:
+            type: string
+    Conflict:
+      type: object
+      description: 单条冲突明细。
+      required:
+        - conflictType
+        - severity
+        - message
+      properties:
+        conflictType:
+          type: string
+          description: 冲突类型。
+          enum:
+            - ROOM_OVERLAP
+            - STAFF_CONFLICT
+            - EQUIPMENT_CONFLICT
+            - ISOLATION_CONFLICT
+            - QUALIFICATION_MISMATCH
+        severity:
+          type: string
+          description: 阻断或告警；BLOCKING 不得保存。
+          enum:
+            - BLOCKING
+            - WARNING
+        message:
+          type: string
+          description: 冲突说明。
+        conflictingScheduleId:
+          type: [string, 'null']
+          description: 冲突的既有排程标识；无对应排程为 null。
+    ConflictCheckResult:
+      type: object
+      description: 冲突检测结果。
+      required:
+        - hasConflict
+        - conflicts
+      properties:
+        hasConflict:
+          type: boolean
+          description: 是否存在冲突（含 WARNING）。
+        conflicts:
+          type: array
+          description: 冲突明细；无冲突为空数组。
+          items:
+            $ref: '#/components/schemas/Conflict'
+    EmergencyAddRequest:
+      type: object
+      description: 急诊加台请求。
+      required:
+        - applicationId
+        - reasonCode
+        - reason
+      properties:
+        applicationId:
+          type: string
+          description: 急诊手术申请标识。
+        roomId:
+          type: [string, 'null']
+          description: 指定术间；为 null 时由规则引擎推荐空档。
+        reasonCode:
+          type: string
+          description: 加台原因码，来自字典。
+        reason:
+          type: string
+          description: 原因说明（演示文本）。
+        expectedStart:
+          type: [string, 'null']
+          format: date-time
+          description: 期望开始时间；为 null 时尽快安排。
+    EmergencyAddResult:
+      type: object
+      description: 急诊加台受理结果。
+      required:
+        - accepted
+        - approvalRequired
+        - conflicts
+      properties:
+        accepted:
+          type: boolean
+          description: 是否已受理；false 时须走人工协调。
+        scheduleId:
+          type: [string, 'null']
+          description: 生成的排程标识；未落排程为 null。
+        approvalRequired:
+          type: boolean
+          description: 是否触发加台审批。
+        conflicts:
+          type: array
+          description: 挤占或冲突提示。
+          items:
+            $ref: '#/components/schemas/Conflict'
+    CancelScheduleRequest:
+      type: object
+      description: 停台/取消排程请求；原因码必填并进入统计。
+      required:
+        - reasonCode
+        - reason
+        - version
+      properties:
+        reasonCode:
+          type: string
+          description: 停台原因码，来自字典；区分计划停台与非计划停台。
+        reason:
+          type: string
+          description: 原因说明。
+        version:
+          type: integer
+          description: 排程当前版本号，用于乐观锁。
+          minimum: 1
