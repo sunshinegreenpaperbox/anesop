@@ -7,6 +7,11 @@ spring:
       - classpath:db/seed/demo
 
 anesop:
+  m1:
+    inpatient-pepper:
+      # 本地 dev 未配置 ANESOP_INPATIENT_PEPPER 时生成进程内随机 pepper 并 WARN；
+      # 重启后旧住院号哈希不可复用，仅本地 SYNTHETIC 演示可接受。生产禁止置 true。
+      allow-dev-generated: true
   security:
     demo-accounts-allowed: true
     jwt:

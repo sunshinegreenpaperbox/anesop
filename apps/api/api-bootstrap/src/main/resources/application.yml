@@ -42,6 +42,15 @@ mybatis-plus:
       logic-not-delete-value: false
 
 anesop:
+  # M1 住院号匹配哈希 pepper（V7，B-2）：HMAC-SHA-256，Base64，解码后 ≥32 字节。
+  # 默认 fail-closed：缺失/非法 Base64/长度不足/低熵一律拒绝启动；只有 dev/test 在
+  # application-dev.yml / application-test.yml 显式置 allow-dev-generated=true 时
+  # 才生成进程内随机 pepper 并 WARN（仅 SYNTHETIC 演示/自动化测试）。
+  # 生成方式：openssl rand -base64 48；生产由院方密钥托管注入，禁止入库/入日志。
+  m1:
+    inpatient-pepper:
+      value: ${ANESOP_INPATIENT_PEPPER:}
+      allow-dev-generated: false
   security:
     # 默认禁止演示账号；dev/test 的 profile 文件显式置 true（B-2.3）。
     demo-accounts-allowed: false

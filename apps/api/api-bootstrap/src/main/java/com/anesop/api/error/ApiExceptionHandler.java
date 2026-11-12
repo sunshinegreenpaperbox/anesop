@@ -7,6 +7,9 @@ import com.anesop.contracts.auth.model.ErrorDetail;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m0.api.security.UserConflictException;
 import com.anesop.m0.api.security.UserValidationException;
+import com.anesop.m1.api.application.PatientNotInIndexException;
+import com.anesop.m1.api.application.SurgeryApplicationConflictException;
+import com.anesop.m1.api.application.SurgeryApplicationValidationException;
 import com.anesop.m0.api.audit.AuditWriter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
@@ -106,12 +109,43 @@ public class ApiExceptionHandler {
     }
 
     /**
-     * 数据库唯一约束兜底（并发创建，M2-M0-02）：同样映射为 409。
+     * 数据库唯一约束兜底（并发创建，M2-M0-02 / M2-M1-01）：同样映射为 409。
      * 返回固定文案，不回显数据库约束名、SQL 实参或冲突值。
      */
     @ExceptionHandler(DuplicateKeyException.class)
     public ResponseEntity<Error> handleDuplicateKey(DuplicateKeyException exception, HttpServletRequest request) {
-        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "登录账号或工号已存在，或数据已被修改", request);
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "数据已存在或已被修改", request);
+    }
+
+    /**
+     * 手术申请字段级校验（M2-M1-01）：400 {@code PARAM_INVALID}，field 由服务端固定提供，
+     * 不回显用户输入原文或患者标识。
+     */
+    @ExceptionHandler(SurgeryApplicationValidationException.class)
+    public ResponseEntity<Error> handleSurgeryApplicationValidation(
+            SurgeryApplicationValidationException exception, HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 手术申请业务冲突（重复申请号/非法状态流转/乐观锁版本冲突，M2-M1-01）：409。
+     */
+    @ExceptionHandler(SurgeryApplicationConflictException.class)
+    public ResponseEntity<Error> handleSurgeryApplicationConflict(
+            SurgeryApplicationConflictException exception, HttpServletRequest request) {
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "申请状态或版本冲突，操作未生效", request);
+    }
+
+    /**
+     * 患者不在患者快照内（M2-M1-01）：创建/导入接口无资源路径参数，按契约语义返回 422。
+     */
+    @ExceptionHandler(PatientNotInIndexException.class)
+    public ResponseEntity<Error> handlePatientNotInIndex(
+            PatientNotInIndexException exception, HttpServletRequest request) {
+        return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
+                "患者不在本系统患者快照内", request,
+                List.of(ErrorResponses.detail("patientId", "患者主索引未同步或标识不存在")));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

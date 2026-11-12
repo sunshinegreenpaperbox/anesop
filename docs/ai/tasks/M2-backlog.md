@@ -24,7 +24,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 | M2-M0-01 | 数据范围绑定表与解析 | `db/migration/V5*`、`apps/api/modules/m0/**`、契约 auth.yaml | M1 | Done（独立 review PASS，0 blocking；122 测试） |
 | M2-M0-02 | 手机号加密与 hash 写路径 | `db/migration/V6*`、`apps/api/modules/m0/**`、契约 | M1 | Review（V6 + 契约 0.5.0 + 用户管理；待独立 review） |
 | M2-M0-03 | E2E-04 越权 + 登录 E2E + 覆盖率 ratchet 清理 | `apps/web/e2e/**`、各 `src/test/**`、根 pom | M1 | Done（m0 96/87、gateway 91/77；ratchet 清零；9 E2E） |
-| M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Ready |
+| M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Review（契约 0.3.0 + V7 + m1 后端/前端；待独立 review） |
 | M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Blocked |
 | M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Blocked |
 | M2-M4-01 | 术前访视与评估 | `anesthesia.yaml` 扩展、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V8*` | M2-M1-01 | Blocked |
@@ -64,6 +64,15 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
   模拟申请→映射→幂等入库；校验规则（必填、术式、术前检查、重复申请）；列表/详情页（Element Plus）。
 - 验收：申请单 CRUD + 分页 + 权限（m1:application:read/write）；重复申请幂等/冲突 409；模拟 HIS 推送
   →入库→页面可见；越权 403 + 审计；单元/集成/契约一致性；E2E 主流程；迁移 V7 + 回滚说明；独立 review。
+
+- 落地说明（Review）：契约 patient/scheduling 0.3.0（`/v1/scheduling/applications` 创建/列表/详情/模拟导入/取消；
+  患者摘要 `hisPatientNo` 过滤、移除证件号/手机号；历史 `/v1/surgery-applications*` 标 deprecated，baseline/TS 同步）；
+  V7 `m1_sched.patient_snapshot`（住院号 masked + HMAC 哈希、无明文）/`surgery_application`（his_application_no 幂等）/
+  `application_status_history`（append-only）+ `m1:application:read|write`；`m1-api` 端口/服务、`m1-impl`
+  `MockHisApplicationAdapter`（fixed seed，simulated=true）与导入 `ON CONFLICT DO NOTHING`、状态机 409、
+  取消历史 + 审计；`api-bootstrap` 控制器 + 404/409/422 映射 + DataScope（ALL/DEPT/SELF）；前端列表/详情 +
+  权限按钮 + Vitest；测试：m1-impl 单测覆盖率 93%/70.7%，后端集成 7 用例（导入幂等/脱敏/409/404/400/403/DataScope），
+  contract-check 全绿。
 
 ### M2-M2-01 排程工作台与冲突检测
 - 目标：术间/台次/日期排程；规则引擎（术间类型/时长/优先级/医师资质/设备）；冲突检测（时间重叠、

@@ -14,13 +14,37 @@ export interface paths {
       cookie?: never
     }
     /**
-     * 分页查询患者
-     * @description 按患者编号、姓名、住院号或科室检索患者主索引。姓名支持模糊匹配但受数据权限约束；
-     *     返回证件号与手机号均为脱敏值，完整值不出接口。
+     * 分页查询患者（已弃用，改用 POST /v1/patients/search）
+     * @deprecated
+     * @description 已弃用：查询参数可能包含姓名/住院号等 PHI，会进入 Nginx/代理访问日志，生产环境禁用，
+     *     仅保留用于兼容旧调用方；新代码必须使用 `POST /v1/patients/search`（条件放 JSON 请求体）。
+     *     按患者编号、姓名、住院号或科室检索患者主索引。姓名支持模糊匹配但受数据权限约束；
+     *     返回证件号与手机号均为兼容占位字段（空字符串），不返回真实值。
      */
     get: operations['listPatients']
     put?: never
     post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/patients/search': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 检索患者（POST，条件在请求体）
+     * @description 医学检索统一使用 POST：姓名/住院号/HIS 患者号等检索条件放 JSON 请求体，
+     *     避免 PHI 进入 URL 查询串与 Nginx/代理访问日志。授权与数据范围约束同列表接口。
+     */
+    post: operations['searchPatients']
     delete?: never
     options?: never
     head?: never
@@ -56,6 +80,7 @@ export interface paths {
     }
     /**
      * 查询患者的手术申请
+     * @deprecated
      * @description 按患者标识分页返回手术申请，用于术前访视与排程上下文。
      */
     get: operations['listPatientSurgeryApplications']
@@ -78,6 +103,7 @@ export interface paths {
     put?: never
     /**
      * 接收手术申请
+     * @deprecated
      * @description 接收 HIS 手术申请，以 applicationNo（HIS 申请号）为幂等键；重复提交返回首次结果，
      *     不重复创建。必填项校验与术式/诊断匹配提醒在此完成（§2.4.1、§2.4.2）。
      */
@@ -97,6 +123,7 @@ export interface paths {
     }
     /**
      * 查询手术申请详情
+     * @deprecated
      * @description 按申请标识返回手术申请详情，供排程与访视任务引用。
      */
     get: operations['getSurgeryApplication']
@@ -119,6 +146,7 @@ export interface paths {
     put?: never
     /**
      * 取消手术申请
+     * @deprecated
      * @description 取消未被排程或已释放排程的手术申请；必须选择原因码并写变更记录。
      */
     post: operations['cancelSurgeryApplication']
@@ -185,12 +213,22 @@ export interface components {
       /** @description 雪花 ID 序列化后的字符串，避免前端精度丢失。 */
       id: string
     }
-    /** @description 患者主索引只读视图；证件号与手机号为脱敏值。 */
+    /**
+     * @description 患者主索引只读视图（排程/手术申请上下文）。仅返回最小必要的脱敏字段：
+     *     姓名、性别、出生日期/年龄、脱敏住院号、科室/病区/床号；**不返回证件号与手机号**
+     *     （含脱敏值），避免组合重识别（§3.9.3）。
+     */
     Patient: components['schemas']['AuditFields'] & {
-      /** @description 患者标识（雪花 ID 字符串）。 */
+      /** @description 患者标识（UUID 字符串）。 */
       patientId: string
-      /** @description 院内患者编号；示例统一使用 SYNTH-P-xxxx。 */
+      /**
+       * @deprecated
+       * @description 已弃用：编号口径统一为 `hisPatientNo`，本字段仅为兼容 0.2.0 调用方保留并回填
+       *     hisPatientNo；计划 1.0.0 major 删除。
+       */
       patientNo: string
+      /** @description HIS 患者号；HIS 申请导入时按此匹配患者快照。 */
+      hisPatientNo: string
       /** @description 患者姓名；示例统一使用“演示患者”。 */
       name: string
       /**
@@ -200,31 +238,60 @@ export interface components {
       gender: 'MALE' | 'FEMALE' | 'UNKNOWN'
       /**
        * Format: date
-       * @description 出生日期；与年龄组合可能重识别，按最小必要返回。
+       * @description 出生日期；与年龄/科室组合可能重识别，仅详情返回。
        */
       birthDate: string
+      /** @description 年龄（岁），由出生日期计算；列表与详情均返回。 */
+      age: number
       /**
-       * @description 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
-       * @example 110***********1234
+       * @deprecated
+       * @description M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+       *     字段只增不删；计划 1.0.0 major 删除。
+       * @example
        */
       idCardMasked: string
-      /** @description 脱敏手机号（前 3 后 4）。 */
+      /**
+       * @deprecated
+       * @description M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+       *     字段只增不删；计划 1.0.0 major 删除。
+       * @example
+       */
       phoneMasked: string
-      /** @description 住院号明文；仅授权角色可见，传输加密，展示脱敏，访问记审计。 */
+      /**
+       * @deprecated
+       * @description M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+       *     字段只增不删；计划 1.0.0 major 删除。
+       * @example
+       */
       inpatientNo: string
+      /**
+       * @description 脱敏住院号（前 4 + 4 个 * + 后 4）；明文与哈希均不出接口。
+       * @example SYNT****0001
+       */
+      inpatientNoMasked: string
       /** @description 所属科室标识。 */
       departmentId: string
       /** @description 所属科室名称。 */
       departmentName: string
+      /** @description 病区名称。 */
+      ward?: string
+      /** @description 床号；未分配时为空字符串。 */
+      bedNo?: string
       /** @description 院区标识（多院区维度）。 */
       siteId: string
     }
-    /** @description 患者列表视图；不返回出生日期与住院号明文，仅返回脱敏值。 */
+    /** @description 患者列表视图；不返回出生日期、证件号、手机号与住院号明文，仅返回年龄与脱敏住院号。 */
     PatientSummary: components['schemas']['AuditFields'] & {
-      /** @description 患者标识（雪花 ID 字符串）。 */
+      /** @description 患者标识（UUID 字符串）。 */
       patientId: string
-      /** @description 院内患者编号；示例统一使用 SYNTH-P-xxxx。 */
+      /**
+       * @deprecated
+       * @description 已弃用：编号口径统一为 `hisPatientNo`，本字段仅为兼容 0.2.0 调用方保留并回填
+       *     hisPatientNo；计划 1.0.0 major 删除。
+       */
       patientNo: string
+      /** @description HIS 患者号；HIS 申请导入时按此匹配患者快照。 */
+      hisPatientNo: string
       /** @description 患者姓名；示例统一使用“演示患者”。 */
       name: string
       /**
@@ -232,21 +299,66 @@ export interface components {
        * @enum {string}
        */
       gender: 'MALE' | 'FEMALE' | 'UNKNOWN'
+      /** @description 年龄（岁），由出生日期计算。 */
+      age: number
       /**
-       * @description 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
-       * @example 110***********1234
+       * @deprecated
+       * @description M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+       *     字段只增不删；计划 1.0.0 major 删除。
+       * @example
        */
       idCardMasked: string
-      /** @description 脱敏手机号（前 3 后 4）。 */
+      /**
+       * @deprecated
+       * @description M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+       *     字段只增不删；计划 1.0.0 major 删除。
+       * @example
+       */
       phoneMasked: string
-      /** @description 脱敏住院号；列表不返回住院号明文。 */
+      /**
+       * @description 脱敏住院号（前 4 + 4 个 * + 后 4）；列表不返回住院号明文。
+       * @example SYNT****0001
+       */
       inpatientNoMasked: string
       /** @description 所属科室标识。 */
       departmentId: string
       /** @description 所属科室名称。 */
       departmentName: string
+      /** @description 病区名称。 */
+      ward?: string
+      /** @description 床号；未分配时为空字符串。 */
+      bedNo?: string
       /** @description 院区标识（多院区维度）。 */
       siteId: string
+    }
+    /**
+     * @description 患者检索条件（POST 请求体）。姓名/住院号/HIS 患者号等 PHI 只放请求体，
+     *     不进入 URL 查询串，避免被 Nginx/代理访问日志记录。
+     */
+    PatientSearchRequest: {
+      /** @description HIS 患者号，精确匹配；新代码统一使用该编号口径。 */
+      hisPatientNo?: string
+      /**
+       * @deprecated
+       * @description 已弃用：等同 hisPatientNo，仅为兼容旧调用方保留。
+       */
+      patientNo?: string
+      /** @description 患者姓名关键字；服务端不记录请求体原文。 */
+      name?: string
+      /** @description 住院号，精确匹配；服务端只按哈希匹配，明文不落库/不落日志。 */
+      inpatientNo?: string
+      /** @description 科室标识；同时受当前用户数据范围约束。 */
+      departmentId?: string
+      /**
+       * @description 页码，从 1 开始。
+       * @default 1
+       */
+      page: number
+      /**
+       * @description 每页条数。
+       * @default 20
+       */
+      size: number
     }
     /** @description 患者分页结果。 */
     PatientPage: {
@@ -262,7 +374,10 @@ export interface components {
       applicationNo: string
       /** @description 患者标识。 */
       patientId: string
-      /** @description 院内患者编号。 */
+      /**
+       * @deprecated
+       * @description 已弃用：编号口径统一为 hisPatientNo；1.0.0 major 删除。
+       */
       patientNo: string
       /** @description 患者姓名；示例统一使用“演示患者”。 */
       patientName: string
@@ -469,6 +584,8 @@ export interface operations {
       query?: {
         /** @description 院内患者编号，精确匹配。 */
         patientNo?: string
+        /** @description HIS 患者号，精确匹配；用于 HIS 申请导入时的患者匹配。 */
+        hisPatientNo?: string
         /** @description 患者姓名关键字；仅用于检索，不在日志中记录。 */
         name?: string
         /** @description 住院号，精确匹配。 */
@@ -496,15 +613,19 @@ export interface operations {
            * @example {
            *       "items": [
            *         {
-           *           "patientId": "5000000000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
            *           "patientNo": "SYNTH-P-0001",
+           *           "hisPatientNo": "SYNTH-HIS-P-0001",
            *           "name": "演示患者",
            *           "gender": "FEMALE",
-           *           "idCardMasked": "110***********1234",
-           *           "phoneMasked": "138****0000",
-           *           "inpatientNoMasked": "SYNTH-ZY-****-0001",
+           *           "age": 47,
+           *           "idCardMasked": "",
+           *           "phoneMasked": "",
+           *           "inpatientNoMasked": "SYNT****0001",
            *           "departmentId": "2000000000000000001",
            *           "departmentName": "演示外科",
+           *           "ward": "演示外科病区",
+           *           "bedNo": "12",
            *           "siteId": "3000000000000000001",
            *           "createdAt": "2026-11-01T09:00:00+08:00",
            *           "createdBy": "1000000000000000001",
@@ -528,12 +649,82 @@ export interface operations {
       403: components['responses']['Forbidden']
     }
   }
+  searchPatients: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "hisPatientNo": "SYNTH-HIS-P-0001",
+         *       "name": "演示患者",
+         *       "inpatientNo": "SYNTH-ZY-0001",
+         *       "departmentId": "2000000000000000001",
+         *       "page": 1,
+         *       "size": 20
+         *     }
+         */
+        'application/json': components['schemas']['PatientSearchRequest']
+      }
+    }
+    responses: {
+      /** @description 患者分页列表；兼容字段 idCardMasked/phoneMasked 为空字符串，不返回真实值。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "patientNo": "SYNTH-P-0001",
+           *           "hisPatientNo": "SYNTH-HIS-P-0001",
+           *           "name": "演示患者",
+           *           "gender": "FEMALE",
+           *           "age": 47,
+           *           "idCardMasked": "",
+           *           "phoneMasked": "",
+           *           "inpatientNoMasked": "SYNT****0001",
+           *           "departmentId": "2000000000000000001",
+           *           "departmentName": "演示外科",
+           *           "ward": "演示外科病区",
+           *           "bedNo": "12",
+           *           "siteId": "3000000000000000001",
+           *           "createdAt": "2026-11-01T09:00:00+08:00",
+           *           "createdBy": "1000000000000000001",
+           *           "updatedAt": "2026-11-10T15:30:00+08:00",
+           *           "updatedBy": "1000000000000000001",
+           *           "version": 3
+           *         }
+           *       ],
+           *       "meta": {
+           *         "page": 1,
+           *         "size": 20,
+           *         "total": 1,
+           *         "totalPages": 1
+           *       }
+           *     }
+           */
+          'application/json': components['schemas']['PatientPage']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
   getPatient: {
     parameters: {
       query?: never
       header?: never
       path: {
-        /** @description 患者标识（雪花 ID 字符串）。 */
+        /** @description 患者标识（UUID 字符串）。 */
         patientId: string
       }
       cookie?: never
@@ -548,16 +739,21 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "patientId": "5000000000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
+           *       "hisPatientNo": "SYNTH-HIS-P-0001",
            *       "name": "演示患者",
            *       "gender": "FEMALE",
            *       "birthDate": "1978-03-15",
-           *       "idCardMasked": "110***********1234",
-           *       "phoneMasked": "138****0000",
-           *       "inpatientNo": "SYNTH-ZY-0001",
+           *       "age": 47,
+           *       "idCardMasked": "",
+           *       "phoneMasked": "",
+           *       "inpatientNo": "",
+           *       "inpatientNoMasked": "SYNT****0001",
            *       "departmentId": "2000000000000000001",
            *       "departmentName": "演示外科",
+           *       "ward": "演示外科病区",
+           *       "bedNo": "12",
            *       "siteId": "3000000000000000001",
            *       "createdAt": "2026-11-01T09:00:00+08:00",
            *       "createdBy": "1000000000000000001",
@@ -584,7 +780,7 @@ export interface operations {
       }
       header?: never
       path: {
-        /** @description 患者标识（雪花 ID 字符串）。 */
+        /** @description 患者标识（UUID 字符串）。 */
         patientId: string
       }
       cookie?: never
@@ -603,7 +799,7 @@ export interface operations {
            *         {
            *           "applicationId": "6000000000000000001",
            *           "applicationNo": "SYNTH-HIS-APP-0001",
-           *           "patientId": "5000000000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
            *           "patientNo": "SYNTH-P-0001",
            *           "patientName": "演示患者",
            *           "diagnosis": "演示诊断（膝关节退行性病变）",
@@ -649,7 +845,7 @@ export interface operations {
         /**
          * @example {
          *       "applicationNo": "SYNTH-HIS-APP-0001",
-         *       "patientId": "5000000000000000001",
+         *       "patientId": "50000000-0000-4000-8000-000000000001",
          *       "diagnosis": "演示诊断（膝关节退行性病变）",
          *       "procedureName": "演示术式（全膝关节置换术）",
          *       "plannedSurgeryDate": "2026-12-01",
@@ -672,7 +868,7 @@ export interface operations {
            * @example {
            *       "applicationId": "6000000000000000001",
            *       "applicationNo": "SYNTH-HIS-APP-0001",
-           *       "patientId": "5000000000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "diagnosis": "演示诊断（膝关节退行性病变）",
@@ -721,7 +917,7 @@ export interface operations {
            * @example {
            *       "applicationId": "6000000000000000001",
            *       "applicationNo": "SYNTH-HIS-APP-0001",
-           *       "patientId": "5000000000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "diagnosis": "演示诊断（膝关节退行性病变）",

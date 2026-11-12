@@ -26,6 +26,10 @@ management:
       enabled: false
 
 anesop:
+  m1:
+    inpatient-pepper:
+      # 生产显式禁止进程内随机 pepper：缺失/非法/长度不足即拒绝启动（与 base 默认一致，此处留痕）。
+      allow-dev-generated: false
   security:
     demo-accounts-allowed: false
     jwt:

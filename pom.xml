@@ -346,6 +346,20 @@
     </profile>
 
     <profile>
+      <id>coverage-core-m1</id>
+      <activation>
+        <file>
+          <exists>src/main/java/com/anesop/m1/impl/application/SurgeryApplicationServiceImpl.java</exists>
+        </file>
+      </activation>
+      <properties>
+        <!-- 核心域 m1（手术申请接收）：按 m1-impl basedir 文件存在激活，80/70 与 AGENTS 一致。 -->
+        <jacoco.line.min>0.80</jacoco.line.min>
+        <jacoco.branch.min>0.70</jacoco.branch.min>
+      </properties>
+    </profile>
+
+    <profile>
       <id>coverage-core-m2</id>
       <activation>
         <file>

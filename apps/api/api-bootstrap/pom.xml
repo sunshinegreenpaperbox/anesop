@@ -73,6 +73,13 @@
       <version>${project.version}</version>
     </dependency>
 
+    <!-- M1 手术申请实现（M2-M1-01）：bootstrap 是唯一允许依赖 impl 的装配点 -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m1-impl</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
     <!-- 基础设施 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

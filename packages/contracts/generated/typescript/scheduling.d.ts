@@ -133,6 +133,96 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/scheduling/applications': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 分页查询手术申请
+     * @description 按状态、紧急度与申请科室分页查询手术申请（M2-M1-01）。返回结果受当前用户数据范围约束：
+     *     集合查询越权返回 403；申请只返回脱敏患者摘要，不含证件号与手机号。
+     */
+    get: operations['listSurgeryApplications']
+    put?: never
+    /**
+     * 创建手术申请（手工/测试）
+     * @description 手工或测试创建手术申请，以 hisApplicationNo 为幂等键；重复申请返回 409，不静默覆盖。
+     *     患者必须已存在于患者快照；未知患者返回 422。申请科室取自患者快照，来源固定 MANUAL，
+     *     初始状态 SUBMITTED，并写 SUBMITTED 状态历史。
+     */
+    post: operations['submitSurgeryApplication']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/scheduling/applications/import': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 从 HIS 拉取并导入手术申请（模拟）
+     * @description **模拟适配器（EXT-01）**：从内置 Mock HIS 适配器拉取 SYNTHETIC 手术申请并入库，
+     *     响应固定标记 simulated=true、adapter=MOCK_HIS。生成器使用固定种子，重复导入按
+     *     hisApplicationNo 幂等（ON CONFLICT DO NOTHING），不会新增重复申请。
+     */
+    post: operations['importSurgeryApplications']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/scheduling/applications/{applicationId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询手术申请详情
+     * @description 按申请标识返回申请详情、脱敏患者摘要与完整状态历史；不存在或超出数据范围返回 404。
+     */
+    get: operations['getSchedulingApplication']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/scheduling/applications/{applicationId}/cancel': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 取消手术申请
+     * @description 取消 SUBMITTED/ACCEPTED/SCHEDULED 状态的申请；CANCELLED/REJECTED 为终态，
+     *     再次取消返回 409。取消必须填写原因码与原因，写状态历史与审计，并做乐观锁版本校验。
+     */
+    post: operations['cancelSchedulingApplication']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -226,7 +316,10 @@ export interface components {
       applicationId: string
       /** @description 患者标识。 */
       patientId: string
-      /** @description 院内患者编号；示例统一使用 SYNTH-P-0001。 */
+      /**
+       * @deprecated
+       * @description 已弃用：编号口径统一为 hisPatientNo；本字段仅为兼容 0.2.0 保留，计划 1.0.0 major 删除。
+       */
       patientNo: string
       /** @description 患者姓名；示例统一使用“演示患者”。 */
       patientName: string
@@ -383,6 +476,179 @@ export interface components {
       /** @description 原因说明。 */
       reason: string
       /** @description 排程当前版本号，用于乐观锁。 */
+      version: number
+    }
+    /**
+     * @description 申请单内嵌的患者摘要（SYNTHETIC 示例）。只含姓名、性别、出生日期/年龄、脱敏住院号与
+     *     科室/病区/床号；**不含证件号与手机号**，住院号明文与哈希均不出接口。
+     */
+    PatientSnapshot: {
+      /** @description 患者标识（UUID 字符串）。 */
+      patientId: string
+      /** @description HIS 患者号；患者编号统一口径，patientNo 仅作为历史兼容字段在 patient 契约保留。 */
+      hisPatientNo: string
+      /** @description 患者姓名；示例统一使用“演示患者”。 */
+      name: string
+      /**
+       * @description 性别。
+       * @enum {string}
+       */
+      gender: 'MALE' | 'FEMALE' | 'UNKNOWN'
+      /**
+       * Format: date
+       * @description 出生日期；与年龄/科室组合可能重识别，按最小必要返回。
+       */
+      birthDate?: string
+      /** @description 年龄（岁）。 */
+      age: number
+      /**
+       * @description 脱敏住院号（前 4 + 4 个 * + 后 4）。
+       * @example SYNT****0001
+       */
+      inpatientNoMasked: string
+      /** @description 患者所属科室标识。 */
+      departmentId: string
+      /** @description 患者所属科室名称。 */
+      departmentName: string
+      /** @description 病区名称。 */
+      ward?: string
+      /** @description 床号；未分配时为空字符串。 */
+      bedNo?: string
+      /** @description 院区标识。 */
+      siteId: string
+    }
+    /** @description 申请状态变更历史（append-only）。 */
+    StatusHistoryEntry: {
+      /**
+       * @description 变更前状态；首次创建为 null。
+       * @enum {string|null}
+       */
+      fromStatus?: 'SUBMITTED' | 'ACCEPTED' | 'SCHEDULED' | 'CANCELLED' | 'REJECTED' | null
+      /**
+       * @description 变更后状态。
+       * @enum {string}
+       */
+      toStatus: 'SUBMITTED' | 'ACCEPTED' | 'SCHEDULED' | 'CANCELLED' | 'REJECTED'
+      /** @description 变更原因码（字典值，≤64 字符）；取消时必填，创建/导入为空。 */
+      reasonCode?: string
+      /** @description 变更原因说明（演示文本，≤500 字符），不含患者标识。 */
+      reason?: string
+      /** @description 操作人用户标识。 */
+      operatorId?: string
+      /**
+       * Format: date-time
+       * @description 变更时间（服务端时间）。
+       */
+      occurredAt: string
+    }
+    /** @description 手术申请单（HIS 导入或手工创建）；hisApplicationNo 为幂等键。 */
+    SurgeryApplication: components['schemas']['AuditFields'] & {
+      /** @description 手术申请标识（雪花 ID 字符串）。 */
+      applicationId: string
+      /** @description HIS 申请号，入站幂等键；重复提交不重复建单。 */
+      hisApplicationNo: string
+      patient: components['schemas']['PatientSnapshot']
+      /** @description 拟施术式。 */
+      surgeryName: string
+      /** @description 术式编码（字典/院内编码）。 */
+      surgeryCode?: string
+      /**
+       * @description 紧急度；急诊优先于择期（§2.4.2）。
+       * @enum {string}
+       */
+      urgency: 'ELECTIVE' | 'URGENT' | 'EMERGENCY'
+      /** @description 预计手术时长（分钟），必须大于 0。 */
+      plannedDurationMin: number
+      /** @description 申请科室名称（取自患者快照）。 */
+      departmentName: string
+      /** @description 申请/主刀医师姓名（演示文本）。 */
+      surgeonName?: string
+      /** @description 术前诊断（演示文本，不含患者标识）。 */
+      preopDiagnosis?: string
+      /**
+       * @description 申请状态。
+       * @enum {string}
+       */
+      status: 'SUBMITTED' | 'ACCEPTED' | 'SCHEDULED' | 'CANCELLED' | 'REJECTED'
+      /**
+       * Format: date-time
+       * @description 提交时间（服务端时间）。
+       */
+      submittedAt: string
+      /**
+       * @description 来源：HIS=接口导入，MANUAL=手工/测试创建。
+       * @enum {string}
+       */
+      source: 'HIS' | 'MANUAL'
+      /** @description 备注（演示文本）。 */
+      remark?: string
+      /** @description 状态历史；列表接口为空数组，详情接口返回完整历史。 */
+      statusHistory: components['schemas']['StatusHistoryEntry'][]
+    }
+    /** @description 手术申请分页结果。 */
+    SurgeryApplicationPage: {
+      /** @description 当前页手术申请列表。 */
+      items: components['schemas']['SurgeryApplication'][]
+      meta: components['schemas']['PageMeta']
+    }
+    /** @description 手工/测试创建手术申请；hisApplicationNo 为幂等键，重复返回 409。 */
+    SurgeryApplicationCreateRequest: {
+      /** @description HIS 申请号（幂等键）。 */
+      hisApplicationNo: string
+      /** @description 患者标识；必须已存在于患者快照。 */
+      patientId: string
+      /** @description 拟施术式。 */
+      surgeryName: string
+      /** @description 术式编码。 */
+      surgeryCode?: string
+      /**
+       * @description 紧急度。
+       * @enum {string}
+       */
+      urgency: 'ELECTIVE' | 'URGENT' | 'EMERGENCY'
+      /** @description 预计手术时长（分钟），必须大于 0。 */
+      plannedDurationMin: number
+      /** @description 申请/主刀医师姓名（演示文本）。 */
+      surgeonName?: string
+      /** @description 术前诊断（演示文本）。 */
+      preopDiagnosis?: string
+      /** @description 备注。 */
+      remark?: string
+    }
+    /** @description 模拟 HIS 拉取请求；count 严格 1–5（请求多少返回多少），seed 用于可复现的 SYNTHETIC 生成。 */
+    ImportSurgeryApplicationsRequest: {
+      /** @description 拉取条数，严格 1–5：请求 N 条即返回 N 条（不足时返回可用数量并在 message 说明），越界返回 400。 */
+      count: number
+      /** @description 随机种子；相同种子生成相同申请号，保证重复导入幂等。 */
+      seed?: number
+    }
+    /** @description 模拟 HIS 导入结果；simulated=true 与 adapter=MOCK_HIS 明确标识为模拟。 */
+    ImportSurgeryApplicationsResult: {
+      /** @description 是否模拟导入；当前固定 true（EXT-01）。 */
+      simulated: boolean
+      /**
+       * @description 适配器标识；当前固定 MOCK_HIS。
+       * @enum {string}
+       */
+      adapter: 'MOCK_HIS'
+      /** @description 请求拉取条数。 */
+      requestedCount: number
+      /** @description 本次新增入库条数。 */
+      importedCount: number
+      /** @description 因幂等键已存在而跳过的条数。 */
+      skippedCount: number
+      /** @description 本次新增的申请；重复导入时为空数组。 */
+      applications: components['schemas']['SurgeryApplication'][]
+      /** @description 结果说明（明确模拟来源）。 */
+      message: string
+    }
+    /** @description 取消手术申请请求；原因码必填并进入统计。 */
+    CancelSurgeryApplicationRequest: {
+      /** @description 取消原因码，来自字典。 */
+      reasonCode: string
+      /** @description 原因说明（演示文本）。 */
+      reason: string
+      /** @description 申请当前版本号，用于乐观锁。 */
       version: number
     }
   }
@@ -599,7 +865,7 @@ export interface operations {
            *         {
            *           "scheduleId": "8000000000000000001",
            *           "applicationId": "6000000000000000001",
-           *           "patientId": "5000000000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
            *           "patientNo": "SYNTH-P-0001",
            *           "patientName": "演示患者",
            *           "roomId": "7000000000000000001",
@@ -667,7 +933,7 @@ export interface operations {
            * @example {
            *       "scheduleId": "8000000000000000001",
            *       "applicationId": "6000000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "roomId": "7000000000000000001",
@@ -719,7 +985,7 @@ export interface operations {
            * @example {
            *       "scheduleId": "8000000000000000001",
            *       "applicationId": "6000000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "roomId": "7000000000000000001",
@@ -879,6 +1145,341 @@ export interface operations {
           /**
            * @example {
            *       "id": "8000000000000000001"
+           *     }
+           */
+          'application/json': components['schemas']['IdResponse']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  listSurgeryApplications: {
+    parameters: {
+      query?: {
+        /** @description 申请状态过滤。 */
+        status?: 'SUBMITTED' | 'ACCEPTED' | 'SCHEDULED' | 'CANCELLED' | 'REJECTED'
+        /** @description 紧急度过滤。 */
+        urgency?: 'ELECTIVE' | 'URGENT' | 'EMERGENCY'
+        /** @description 申请科室名称过滤（精确匹配）；同时受数据范围约束。 */
+        departmentName?: string
+        /** @description 页码，从 1 开始。 */
+        page?: number
+        /** @description 每页条数。 */
+        size?: number
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 手术申请分页列表；statusHistory 在列表中为空数组，详情接口返回完整历史。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "applicationId": "6000000000000000001",
+           *           "hisApplicationNo": "SYNTH-HIS-APP-0001",
+           *           "patient": {
+           *             "patientId": "50000000-0000-4000-8000-000000000001",
+           *             "hisPatientNo": "SYNTH-HIS-P-0001",
+           *             "name": "演示患者",
+           *             "gender": "FEMALE",
+           *             "birthDate": "1978-03-15",
+           *             "age": 47,
+           *             "inpatientNoMasked": "SYNT****0001",
+           *             "departmentId": "2000000000000000001",
+           *             "departmentName": "演示外科",
+           *             "ward": "演示外科病区",
+           *             "bedNo": "12",
+           *             "siteId": "3000000000000000001"
+           *           },
+           *           "surgeryName": "演示术式（全膝关节置换术）",
+           *           "surgeryCode": "SYNTH-OP-0001",
+           *           "urgency": "ELECTIVE",
+           *           "plannedDurationMin": 150,
+           *           "departmentName": "演示外科",
+           *           "surgeonName": "演示术者",
+           *           "preopDiagnosis": "演示诊断（膝关节退行性病变）",
+           *           "status": "SUBMITTED",
+           *           "submittedAt": "2026-11-08T10:00:00+08:00",
+           *           "source": "HIS",
+           *           "remark": "演示备注（合成数据）",
+           *           "statusHistory": [],
+           *           "createdAt": "2026-11-08T10:00:00+08:00",
+           *           "createdBy": "1000000000000000001",
+           *           "updatedAt": "2026-11-08T10:00:00+08:00",
+           *           "updatedBy": "1000000000000000001",
+           *           "version": 1
+           *         }
+           *       ],
+           *       "meta": {
+           *         "page": 1,
+           *         "size": 20,
+           *         "total": 1,
+           *         "totalPages": 1
+           *       }
+           *     }
+           */
+          'application/json': components['schemas']['SurgeryApplicationPage']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  submitSurgeryApplication: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "hisApplicationNo": "SYNTH-MANUAL-APP-0001",
+         *       "patientId": "50000000-0000-4000-8000-000000000001",
+         *       "surgeryName": "演示术式（腹腔镜胆囊切除术）",
+         *       "surgeryCode": "SYNTH-OP-0002",
+         *       "urgency": "URGENT",
+         *       "plannedDurationMin": 90,
+         *       "surgeonName": "演示术者",
+         *       "preopDiagnosis": "演示诊断（胆囊结石）",
+         *       "remark": "演示备注（合成数据）"
+         *     }
+         */
+        'application/json': components['schemas']['SurgeryApplicationCreateRequest']
+      }
+    }
+    responses: {
+      /** @description 创建成功；返回状态为 SUBMITTED 的申请。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "applicationId": "6000000000000000002",
+           *       "hisApplicationNo": "SYNTH-MANUAL-APP-0001",
+           *       "patient": {
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "hisPatientNo": "SYNTH-HIS-P-0001",
+           *         "name": "演示患者",
+           *         "gender": "FEMALE",
+           *         "birthDate": "1978-03-15",
+           *         "age": 47,
+           *         "inpatientNoMasked": "SYNT****0001",
+           *         "departmentId": "2000000000000000001",
+           *         "departmentName": "演示外科",
+           *         "ward": "演示外科病区",
+           *         "bedNo": "12",
+           *         "siteId": "3000000000000000001"
+           *       },
+           *       "surgeryName": "演示术式（腹腔镜胆囊切除术）",
+           *       "surgeryCode": "SYNTH-OP-0002",
+           *       "urgency": "URGENT",
+           *       "plannedDurationMin": 90,
+           *       "departmentName": "演示外科",
+           *       "surgeonName": "演示术者",
+           *       "preopDiagnosis": "演示诊断（胆囊结石）",
+           *       "status": "SUBMITTED",
+           *       "submittedAt": "2026-11-08T10:00:00+08:00",
+           *       "source": "MANUAL",
+           *       "remark": "演示备注（合成数据）",
+           *       "statusHistory": [
+           *         {
+           *           "fromStatus": null,
+           *           "toStatus": "SUBMITTED",
+           *           "reason": "手工创建",
+           *           "operatorId": "1000000000000000001",
+           *           "occurredAt": "2026-11-08T10:00:00+08:00"
+           *         }
+           *       ],
+           *       "createdAt": "2026-11-08T10:00:00+08:00",
+           *       "createdBy": "1000000000000000001",
+           *       "updatedAt": "2026-11-08T10:00:00+08:00",
+           *       "updatedBy": "1000000000000000001",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['SurgeryApplication']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
+  importSurgeryApplications: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "count": 4,
+         *       "seed": 20260101
+         *     }
+         */
+        'application/json': components['schemas']['ImportSurgeryApplicationsRequest']
+      }
+    }
+    responses: {
+      /** @description 导入结果；importedCount 为本次新增行数，skippedCount 为幂等跳过行数。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "simulated": true,
+           *       "adapter": "MOCK_HIS",
+           *       "requestedCount": 4,
+           *       "importedCount": 4,
+           *       "skippedCount": 0,
+           *       "applications": [],
+           *       "message": "本次为模拟 HIS 导入（SYNTHETIC 合成数据）"
+           *     }
+           */
+          'application/json': components['schemas']['ImportSurgeryApplicationsResult']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+    }
+  }
+  getSchedulingApplication: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 手术申请标识（雪花 ID 字符串）。 */
+        applicationId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 手术申请详情。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "applicationId": "6000000000000000001",
+           *       "hisApplicationNo": "SYNTH-HIS-APP-0001",
+           *       "patient": {
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "hisPatientNo": "SYNTH-HIS-P-0001",
+           *         "name": "演示患者",
+           *         "gender": "FEMALE",
+           *         "birthDate": "1978-03-15",
+           *         "age": 47,
+           *         "inpatientNoMasked": "SYNT****0001",
+           *         "departmentId": "2000000000000000001",
+           *         "departmentName": "演示外科",
+           *         "ward": "演示外科病区",
+           *         "bedNo": "12",
+           *         "siteId": "3000000000000000001"
+           *       },
+           *       "surgeryName": "演示术式（全膝关节置换术）",
+           *       "surgeryCode": "SYNTH-OP-0001",
+           *       "urgency": "ELECTIVE",
+           *       "plannedDurationMin": 150,
+           *       "departmentName": "演示外科",
+           *       "surgeonName": "演示术者",
+           *       "preopDiagnosis": "演示诊断（膝关节退行性病变）",
+           *       "status": "CANCELLED",
+           *       "submittedAt": "2026-11-08T10:00:00+08:00",
+           *       "source": "HIS",
+           *       "remark": "演示备注（合成数据）",
+           *       "statusHistory": [
+           *         {
+           *           "fromStatus": null,
+           *           "toStatus": "SUBMITTED",
+           *           "reason": "HIS 导入",
+           *           "operatorId": "1000000000000000001",
+           *           "occurredAt": "2026-11-08T10:00:00+08:00"
+           *         },
+           *         {
+           *           "fromStatus": "SUBMITTED",
+           *           "toStatus": "CANCELLED",
+           *           "reason": "演示取消原因（合成数据）",
+           *           "operatorId": "1000000000000000001",
+           *           "occurredAt": "2026-11-09T11:20:00+08:00"
+           *         }
+           *       ],
+           *       "createdAt": "2026-11-08T10:00:00+08:00",
+           *       "createdBy": "1000000000000000001",
+           *       "updatedAt": "2026-11-09T11:20:00+08:00",
+           *       "updatedBy": "1000000000000000001",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['SurgeryApplication']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  cancelSchedulingApplication: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 手术申请标识（雪花 ID 字符串）。 */
+        applicationId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "reasonCode": "PATIENT_CONDITION",
+         *       "reason": "演示取消原因（合成数据）",
+         *       "version": 1
+         *     }
+         */
+        'application/json': components['schemas']['CancelSurgeryApplicationRequest']
+      }
+    }
+    responses: {
+      /** @description 取消成功，返回手术申请标识。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "id": "6000000000000000001"
            *     }
            */
           'application/json': components['schemas']['IdResponse']

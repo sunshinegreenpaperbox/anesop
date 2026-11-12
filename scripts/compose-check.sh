@@ -407,6 +407,21 @@ else:
         emit(not lacking, f"nginx.conf 含 {label}"
              + (f"；缺少：{', '.join(lacking)}" if lacking else ""))
 
+    # B-3：/api/ location 的访问日志不得包含 query/参数（$request 含查询串，$args 即查询串）。
+    api_match = re.search(r"location\s+/api/\s*\{(.*?)\n    \}", nginx, re.S)
+    if not api_match:
+        emit(False, "nginx.conf 存在 location /api/ 块")
+    else:
+        api_block = api_match.group(1)
+        query_markers = [m for m in ("$request", "$args", "$query_string")
+                         if re.search(re.escape(m) + r"(?![A-Za-z0-9_])", api_block)]
+        emit(not query_markers, "nginx /api/ 访问日志不含 query/请求参数"
+             + (f"；发现：{', '.join(query_markers)}" if query_markers else ""))
+        emit("anesop_no_query" in api_block and "access_log" in api_block,
+             "nginx /api/ 使用自定义 anesop_no_query 访问日志格式"
+             if "anesop_no_query" in api_block
+             else "nginx /api/ 必须使用 anesop_no_query 或 access_log off")
+
 # --- 13. 监控配置可解析 -----------------------------------------------------
 monitoring_yamls = [
     "deploy/prometheus/prometheus.yml",

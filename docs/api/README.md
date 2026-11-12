@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理（`info.version=0.5.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请（`auth 0.5.0`、`patient/scheduling 0.3.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -23,10 +23,10 @@ packages/contracts/
 | 契约 | 路径数 | operationId 数 | 覆盖能力 | 方案书对应 |
 |---|---:|---:|---|---|
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
-| `patient.yaml` | 6 | 6 | 患者查询/详情、患者手术申请、申请接收/详情/取消 | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
-| `scheduling.yaml` | 6 | 7 | 术间列表、排程查询/创建/详情、冲突检测、急诊加台、停台 | §2.4.2、§2.3.2、§3.4.2 |
+| `patient.yaml` | 6 | 6 | 患者摘要查询/详情（`hisPatientNo` 过滤，不含证件号/手机号）、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
+| `scheduling.yaml` | 10 | 12 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情、冲突检测、急诊加台、停台 | §2.4.2、§2.3.2、§3.4.2 |
 | `anesthesia.yaml` | 6 | 10 | 术前访视读写、记录单读写、锁单、三方核查读写、随访创建/查询/列表 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **28** | **35** | 4 个限界上下文骨架 | — |
+| **合计** | **32** | **40** | 4 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -38,7 +38,7 @@ packages/contracts/
 - **标识**：雪花 ID 在接口层统一序列化为字符串，避免前端 19 位整数精度丢失（§3.4.3）。
 - **审计与并发**：业务实体返回 `AuditFields`；更新请求必须回传 `version`，冲突返回 409，不静默覆盖。
 - **逻辑删除**：临床数据不物理删除；契约暂不暴露 `deletedAt`，后续按迁移与契约评审扩展。
-- **脱敏返回**：列表只返回 `PatientSummary`（无出生日期、无住院号明文）；详情返回 `Patient`，住院号标 `x-restricted: true`。规则见第 6 节。
+- **脱敏返回**：M1 排程视图只返回 `PatientSummary`/`Patient` 的最小必要字段（姓名、性别、出生日期/年龄、脱敏住院号、科室/病区/床号）；**不返回证件号与手机号（含脱敏值）**，住院号明文与哈希不出接口。规则见第 6 节。
 
 ## 3. 认证与授权
 
@@ -52,6 +52,20 @@ packages/contracts/
   契约中**没有**手机号明文、`phone_enc` 密文、`phone_hash` 哈希字段；创建与管理员重置口令都强制
   `mustChangePassword=true`，重置的一次性初始口令仅本次响应返回，并在同一事务撤销该用户全部
   刷新令牌；更新工号撞院内唯一键返回 409。示例全部为 SYNTHETIC。
+
+### 3.1 手术申请与患者摘要（M2-M1-01，0.3.0 additive）
+
+- `scheduling.yaml` 新增 `/v1/scheduling/applications`（列表/创建）、`/import`（模拟 HIS 拉取）、
+  `/{applicationId}`（详情）、`/{applicationId}/cancel`（取消）；权限点 `m1:application:read|write`
+  （V7：read 授 SYS_ADMIN/SYS_OR_MANAGER/SYS_SURGEON，write 授 SYS_ADMIN/SYS_OR_MANAGER）。
+- 申请以 `hisApplicationNo` 为幂等键：模拟导入重复执行按 `ON CONFLICT DO NOTHING` 跳过，
+  响应 `simulated=true`/`adapter=MOCK_HIS`；手工重复提交 409。
+- 状态机 `SUBMITTED → ACCEPTED → SCHEDULED`，`CANCELLED`/`REJECTED` 终态；每次创建/变更返回
+  `statusHistory`（列表为空数组，详情为完整历史）。
+- `patient.yaml` 0.3.0：`GET /v1/patients` 新增 `hisPatientNo` 精确过滤；列表/详情收敛为脱敏摘要，
+  移除证件号/手机号字段（安全收紧，baseline 已同步并在本节登记）；历史 `/v1/surgery-applications*`
+  端点标记 `deprecated`，由 scheduling 同名能力取代。
+- 创建/导入无资源路径参数，未知患者按语义返回 **422**；单对象查询（患者/申请详情）仍返回 404。
 
 ## 4. 错误模型
 
@@ -98,15 +112,16 @@ packages/contracts/
 
 | 字段 | 返回范围 | 规则 |
 |---|---|---|
-| `idCardMasked` | 列表/详情 | 保留前 3 位 + 11 个 `*` + 后 4 位（共 18 位），如 `110***********1234`；不保留出生日期段 |
-| `phoneMasked` | 列表/详情 | 前 3 后 4，如 `138****0000` |
-| `birthDate` | 仅详情 | 列表 `PatientSummary` 不返回；与年龄/科室组合可能重识别，按最小必要 |
-| `inpatientNoMasked` | 仅列表 | 脱敏住院号，列表不返回明文 |
-| `inpatientNo` | 仅详情 | `x-restricted: true`；仅授权角色、传输加密、展示脱敏、访问记审计 |
+| `name` | 列表/详情 | 患者姓名；仅授权角色可见，示例统一“演示患者” |
+| `gender` | 列表/详情 | MALE/FEMALE/UNKNOWN |
+| `birthDate` | 仅详情 | 与年龄/科室组合可能重识别，按最小必要返回 |
+| `age` | 列表/详情 | 由出生日期计算，不单独构成直接标识 |
+| `inpatientNoMasked` | 列表/详情 | 前 4 + `****` + 后 4，如 `SYNT****0001`；住院号明文与哈希均不出接口 |
+| `idCard*` / `phone*` | 不返回 | M1 排程视图不返回证件号/手机号（含脱敏值），从源头降低组合重识别风险 |
 
 ## 7. 版本与破坏性变更流程
 
-- `info.version` 采用语义化版本；当前 `0.5.0`（M2-M0-02：新增用户管理与 `phoneMasked`，`PUT /v1/auth/users/{userId}` 增加 409，compatible additive）。路径主版本为 `/v1`。
+- `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient/scheduling 0.3.0`（M2-M1-01：新增手术申请与患者摘要端点，compatible additive；患者摘要移除证件号/手机号为安全收紧，baseline 已同步）。路径主版本为 `/v1`。
 - **兼容变更**（只增不删）：新增可选字段、新增接口、新增响应字段、新增枚举值（调用方需容忍未知值）；更新 `minor`/`patch`，评审通过后同步 baseline。
 - **阻断性变更**（oasdiff `--fail-on WARN` 即失败）：删除路径或 operation；请求体新增必填字段；请求字段类型变更；响应必填字段删除；响应字段类型变更。删除/收紧枚举值、改变字段语义同样按破坏性变更处理。
 - **兼容例外（M2 契约冻结前）**：响应新增必填字段按 warning 处理、不阻断，但必须在 PR 说明调用方兼容方案，并在下表登记；M2 契约冻结前清零。

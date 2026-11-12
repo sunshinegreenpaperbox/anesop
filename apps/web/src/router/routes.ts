@@ -3,6 +3,8 @@ import MainLayout from '../layout/MainLayout.vue'
 import LoginView from '../modules/m0/views/LoginView.vue'
 import ChangePasswordView from '../modules/m0/views/ChangePasswordView.vue'
 import SessionsView from '../modules/m0/views/SessionsView.vue'
+import ApplicationListView from '../modules/m1/views/ApplicationListView.vue'
+import ApplicationDetailView from '../modules/m1/views/ApplicationDetailView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -37,6 +39,23 @@ export const routes: RouteRecordRaw[] = [
         name: 'home',
         component: HomeView,
         meta: menuMeta('/home'),
+      },
+      {
+        path: 'm1/applications',
+        name: 'm1-applications',
+        component: ApplicationListView,
+        meta: menuMeta('/m1/applications'),
+      },
+      {
+        path: 'm1/applications/:id',
+        name: 'm1-application-detail',
+        component: ApplicationDetailView,
+        meta: {
+          title: '手术申请详情',
+          icon: 'sessions',
+          permissions: ['m1:application:read'],
+          menu: false,
+        },
       },
       {
         path: 'm0/sessions',

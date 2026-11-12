@@ -7,6 +7,16 @@ spring:
       - classpath:db/seed/demo
 
 anesop:
+  m1:
+    inpatient-pepper:
+      # 自动化测试不注入真实 pepper：进程内随机生成（每个测试上下文独立）。
+      allow-dev-generated: true
+    his:
+      mock:
+        # 自动化测试：模拟 HIS 申请统一落入演示麻醉科（V100 SYNTHETIC 组织），
+        # 用于 DEPT 数据范围断言；生产不配置时申请不带科室标识（DEPT 用户不可见）。
+        department-id: f1000000-0000-4000-8000-000000000002
+        site-id: f1000000-0000-4000-8000-000000000001
   security:
     demo-accounts-allowed: true
     jwt:

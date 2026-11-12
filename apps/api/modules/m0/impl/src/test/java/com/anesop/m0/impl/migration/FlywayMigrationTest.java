@@ -207,20 +207,28 @@ class FlywayMigrationTest {
 
         List<String> permissionCodes = jdbc.queryForList(
                 "SELECT code FROM m0_platform.sys_permission ORDER BY code", String.class);
-        assertThat(permissionCodes).hasSize(23)
+        // 结构性断言：锁定“必须存在的基线权限点”，不再硬编码数量（后续迁移可继续新增）。
+        assertThat(permissionCodes)
                 .contains("auth:login", "user:read", "user:write", "role:read", "role:write",
                         "audit:read", "dict:read", "dict:write")
                 .contains("m0:access", "m1:access", "m2:access", "m3:access", "m4:access",
                         "m5:access", "m6:access", "m7:access", "m8:access")
                 .contains("m0:auth:read", "m0:auth:write")
                 .contains("m0:org:read", "m0:org:write")
-                .contains("m0:user:read", "m0:user:write");
+                .contains("m0:user:read", "m0:user:write")
+                .contains("m1:application:read", "m1:application:write", "m1:patient:read");
 
         assertThat(jdbc.queryForList("SELECT code FROM m0_platform.sys_dict_type ORDER BY code", String.class))
                 .containsExactly("ASA", "CASE_STATUS", "OR_ROOM_STATUS", "ROLE_TYPE", "SEX",
                         "SURGERY_URGENCY");
         assertThat(countRows("sys_dict_item")).isEqualTo(22);
-        assertThat(countRows("sys_role_permission")).isEqualTo(49);
+
+        // 结构性授权断言：关键权限点必须授给正确角色，替代脆弱的“总行数”硬编码。
+        assertThat(roleCodesForPermission("m0:user:read")).containsExactly("SYS_ADMIN");
+        assertThat(roleCodesForPermission("m1:application:write"))
+                .containsExactly("SYS_ADMIN", "SYS_OR_MANAGER");
+        assertThat(roleCodesForPermission("m1:patient:read"))
+                .containsExactly("SYS_ADMIN", "SYS_OR_MANAGER", "SYS_SURGEON");
 
         // B-1 核心断言：生产迁移路径不产生任何账号，也没有演示账号及其角色绑定。
         assertThat(countRows("sys_user")).as("生产路径 sys_user 必须为 0").isZero();
@@ -433,5 +441,14 @@ class FlywayMigrationTest {
         assertThat(jdbc.queryForObject(
                 "SELECT detail ->> 'role' FROM m0_platform.sys_audit_log WHERE id = ?::uuid",
                 String.class, auditId)).isEqualTo("SYS_ADMIN");
+    }
+
+    private List<String> roleCodesForPermission(String permissionCode) {
+        return jdbc.queryForList("""
+                SELECT r.code FROM m0_platform.sys_permission p
+                JOIN m0_platform.sys_role_permission rp ON rp.permission_id = p.id
+                JOIN m0_platform.sys_role r ON r.id = rp.role_id
+                WHERE p.code = ? ORDER BY r.code
+                """, String.class, permissionCode);
     }
 }

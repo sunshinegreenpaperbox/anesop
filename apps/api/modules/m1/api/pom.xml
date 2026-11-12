@@ -14,4 +14,19 @@
   <artifactId>m1-api</artifactId>
   <name>ANESOP :: M1 手术排程管理 API</name>
   <description>M1 手术排程管理 对外接口、DTO 与领域事件；其他模块唯一可依赖的层</description>
+
+  <dependencies>
+    <!-- 跨模块同步调用只依赖 m0-api（审计、认证主体、数据范围断言） -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m0-api</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- 契约生成的 Java DTO（patient/scheduling 0.3.0），禁止手写重复模型 -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>api-contracts</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies>
 </project>

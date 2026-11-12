@@ -21,6 +21,12 @@ export interface MenuEntry {
 export const appMenu: readonly MenuEntry[] = [
   { path: '/home', title: '首页', icon: 'home' },
   {
+    path: '/m1/applications',
+    title: '手术申请',
+    icon: 'sessions',
+    permissions: ['m1:application:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',

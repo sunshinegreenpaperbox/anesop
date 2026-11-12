@@ -6,7 +6,7 @@ info:
     ANESOP 患者域契约。患者主索引以 HIS 为权威来源，本系统只读同步并按数据权限返回；
     手术申请以 HIS 申请号为幂等键接收，对应方案书 §2.4.1（M0 公共支撑）、§2.4.2（M1 手术排程）
     与 §3.5.3（I-01a/I-01b）。所有示例均为 SYNTHETIC 合成数据。
-  version: 0.2.0
+  version: 0.3.0
   contact:
     name: ANESOP 项目组
   license:
@@ -33,6 +33,12 @@ paths:
         - name: patientNo
           in: query
           description: 院内患者编号，精确匹配。
+          required: false
+          schema:
+            type: string
+        - name: hisPatientNo
+          in: query
+          description: HIS 患者号，精确匹配；用于 HIS 申请导入时的患者匹配。
           required: false
           schema:
             type: string
@@ -82,13 +88,15 @@ paths:
                 items:
                   - patientId: '5000000000000000001'
                     patientNo: SYNTH-P-0001
+                    hisPatientNo: SYNTH-HIS-P-0001
                     name: 演示患者
                     gender: FEMALE
-                    idCardMasked: 110***********1234
-                    phoneMasked: 138****0000
-                    inpatientNoMasked: SYNTH-ZY-****-0001
+                    age: 47
+                    inpatientNoMasked: SYNT****0001
                     departmentId: '2000000000000000001'
                     departmentName: 演示外科
+                    ward: 演示外科病区
+                    bedNo: '12'
                     siteId: '3000000000000000001'
                     createdAt: '2026-11-01T09:00:00+08:00'
                     createdBy: '1000000000000000001'
@@ -128,14 +136,16 @@ paths:
               example:
                 patientId: '5000000000000000001'
                 patientNo: SYNTH-P-0001
+                hisPatientNo: SYNTH-HIS-P-0001
                 name: 演示患者
                 gender: FEMALE
                 birthDate: '1978-03-15'
-                idCardMasked: 110***********1234
-                phoneMasked: 138****0000
-                inpatientNo: SYNTH-ZY-0001
+                age: 47
+                inpatientNoMasked: SYNT****0001
                 departmentId: '2000000000000000001'
                 departmentName: 演示外科
+                ward: 演示外科病区
+                bedNo: '12'
                 siteId: '3000000000000000001'
                 createdAt: '2026-11-01T09:00:00+08:00'
                 createdBy: '1000000000000000001'
@@ -151,6 +161,7 @@ paths:
   /v1/patients/{patientId}/surgery-applications:
     get:
       operationId: listPatientSurgeryApplications
+      deprecated: true
       tags:
         - 患者与手术申请
       summary: 查询患者的手术申请
@@ -220,6 +231,7 @@ paths:
   /v1/surgery-applications:
     post:
       operationId: createSurgeryApplication
+      deprecated: true
       tags:
         - 患者与手术申请
       summary: 接收手术申请
@@ -278,6 +290,7 @@ paths:
   /v1/surgery-applications/{applicationId}:
     get:
       operationId: getSurgeryApplication
+      deprecated: true
       tags:
         - 患者与手术申请
       summary: 查询手术申请详情
@@ -324,6 +337,7 @@ paths:
   /v1/surgery-applications/{applicationId}/cancel:
     post:
       operationId: cancelSurgeryApplication
+      deprecated: true
       tags:
         - 患者与手术申请
       summary: 取消手术申请
@@ -548,19 +562,22 @@ components:
           description: 雪花 ID 序列化后的字符串，避免前端精度丢失。
     Patient:
       type: object
-      description: 患者主索引只读视图；证件号与手机号为脱敏值。
+      description: |
+        患者主索引只读视图（排程/手术申请上下文）。仅返回最小必要的脱敏字段：
+        姓名、性别、出生日期/年龄、脱敏住院号、科室/病区/床号；**不返回证件号与手机号**
+        （含脱敏值），避免组合重识别（§3.9.3）。
       allOf:
         - $ref: '#/components/schemas/AuditFields'
         - type: object
           required:
             - patientId
             - patientNo
+            - hisPatientNo
             - name
             - gender
             - birthDate
-            - idCardMasked
-            - phoneMasked
-            - inpatientNo
+            - age
+            - inpatientNoMasked
             - departmentId
             - departmentName
             - siteId
@@ -571,6 +588,9 @@ components:
             patientNo:
               type: string
               description: 院内患者编号；示例统一使用 SYNTH-P-xxxx。
+            hisPatientNo:
+              type: string
+              description: HIS 患者号；HIS 申请导入时按此匹配患者快照。
             name:
               type: string
               description: 患者姓名；示例统一使用“演示患者”。
@@ -584,41 +604,46 @@ components:
             birthDate:
               type: string
               format: date
-              description: 出生日期；与年龄组合可能重识别，按最小必要返回。
-            idCardMasked:
+              description: 出生日期；与年龄/科室组合可能重识别，仅详情返回。
+            age:
+              type: integer
+              description: 年龄（岁），由出生日期计算；列表与详情均返回。
+              minimum: 0
+              maximum: 150
+            inpatientNoMasked:
               type: string
-              description: 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
+              description: 脱敏住院号（前 4 + 4 个 * + 后 4）；明文与哈希均不出接口。
               examples:
-                - 110***********1234
-            phoneMasked:
-              type: string
-              description: 脱敏手机号（前 3 后 4）。
-            inpatientNo:
-              type: string
-              description: 住院号明文；仅授权角色可见，传输加密，展示脱敏，访问记审计。
-              x-restricted: true
+                - SYNT****0001
             departmentId:
               type: string
               description: 所属科室标识。
             departmentName:
               type: string
               description: 所属科室名称。
+            ward:
+              type: string
+              description: 病区名称。
+            bedNo:
+              type: string
+              description: 床号；未分配时为空字符串。
             siteId:
               type: string
               description: 院区标识（多院区维度）。
     PatientSummary:
       type: object
-      description: 患者列表视图；不返回出生日期与住院号明文，仅返回脱敏值。
+      description: |
+        患者列表视图；不返回出生日期、证件号、手机号与住院号明文，仅返回年龄与脱敏住院号。
       allOf:
         - $ref: '#/components/schemas/AuditFields'
         - type: object
           required:
             - patientId
             - patientNo
+            - hisPatientNo
             - name
             - gender
-            - idCardMasked
-            - phoneMasked
+            - age
             - inpatientNoMasked
             - departmentId
             - departmentName
@@ -630,6 +655,9 @@ components:
             patientNo:
               type: string
               description: 院内患者编号；示例统一使用 SYNTH-P-xxxx。
+            hisPatientNo:
+              type: string
+              description: HIS 患者号；HIS 申请导入时按此匹配患者快照。
             name:
               type: string
               description: 患者姓名；示例统一使用“演示患者”。
@@ -640,23 +668,28 @@ components:
                 - MALE
                 - FEMALE
                 - UNKNOWN
-            idCardMasked:
-              type: string
-              description: 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
-              examples:
-                - 110***********1234
-            phoneMasked:
-              type: string
-              description: 脱敏手机号（前 3 后 4）。
+            age:
+              type: integer
+              description: 年龄（岁），由出生日期计算。
+              minimum: 0
+              maximum: 150
             inpatientNoMasked:
               type: string
-              description: 脱敏住院号；列表不返回住院号明文。
+              description: 脱敏住院号（前 4 + 4 个 * + 后 4）；列表不返回住院号明文。
+              examples:
+                - SYNT****0001
             departmentId:
               type: string
               description: 所属科室标识。
             departmentName:
               type: string
               description: 所属科室名称。
+            ward:
+              type: string
+              description: 病区名称。
+            bedNo:
+              type: string
+              description: 床号；未分配时为空字符串。
             siteId:
               type: string
               description: 院区标识（多院区维度）。

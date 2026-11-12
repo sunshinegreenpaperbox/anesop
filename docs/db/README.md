@@ -1,7 +1,7 @@
 # 数据库迁移与 schema 规范（db）
 
 > 状态：S0-06 基线 + V3（认证令牌）+ V4（M2 采集骨架）+ V5（数据范围绑定，M2-M0-01）
-> + V6（手机号加解密与用户管理，M2-M0-02）；
+> + V6（手机号加解密与用户管理，M2-M0-02）+ V7（M1 手术申请接收，M2-M1-01）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -17,6 +17,7 @@ db/
 │   ├── V4__m2_anes_acquisition_init.sql    # M2 采集骨架（S0-09）
 │   ├── V5__m0_data_scope.sql               # 数据范围绑定表 sys_org/sys_user_org/sys_user_room + m0:org:*（M2-M0-01）
 │   ├── V6__m0_user_phone_crypto.sql        # sys_user.phone_key_id/phone_updated_at + 一致性约束 + m0:user:*（M2-M0-02）
+│   ├── V7__m1_schedule_application.sql     # m1_sched 患者快照/手术申请/状态历史 + m1:application:*（M2-M1-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -95,6 +96,26 @@ V6 属 expand 段：只新增可空列 `phone_key_id`/`phone_updated_at`、四�
 - **密钥丢失**：`ANESOP_FIELD_KEY` 丢失等于密文永久不可解密（无后门、无兜底明文）；
   轮换需 M1 离线双密钥重加密工具，备份/轮换说明见 `docs/modules/m0/README.md` 第 5 节。
 
+### 4.2 V7（M1 手术申请）回滚说明
+
+V7 属 expand 段：只新增 `m1_sched` schema 与三张表（患者快照/手术申请/状态历史）及两个权限点，
+不修改 V1–V6 任何表或列。回滚不影响 M0 认证、权限、审计与其他模块。
+
+- **应用回滚**：下线 `/v1/scheduling/applications*` 与 `/v1/patients*`（M1 路由/前端入口），
+  停止写入 `m1_sched`；旧版本应用（不识别 V7）可继续运行，因为 M0 表未变更。
+- **库层回滚**（前向修复脚本，需 DBA 审批 + 备份；顺序不可颠倒）：
+  `DROP TABLE m1_sched.application_status_history` →
+  `DROP TABLE m1_sched.surgery_application` →
+  `DROP TABLE m1_sched.patient_snapshot` → `DROP SCHEMA m1_sched`（若为空）→
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN ('...24','...25')` →
+  `DELETE FROM m0_platform.sys_permission WHERE code IN ('m1:application:read','m1:application:write')`。
+- **数据保全**：回滚前必须导出 `m1_sched` 三表（含状态历史）到受控介质并校验行数/校验和；
+  历史表 append-only，不接受“只删申请不删历史”的部分回滚。
+- **不可逆项**：`inpatient_no_hash` 为单向哈希，回滚后无法还原住院号明文；如业务需要，
+  只能由 HIS 重新推送（患者快照按 `his_patient_no` 重建），不得从哈希反推。
+- **重放**：修复后重新执行 V7 会重建空表；已导出数据不得直接回灌（会与 Flyway 版本/唯一键冲突），
+  须走受控数据修复流程并记录操作人与时间。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）
@@ -110,7 +131,7 @@ source scripts/env.sh
 
 测试断言分两条路径：
 
-- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 6 条（V1–V6）、
+- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 7 条（V1–V7）、
   二次 `migrate()` 执行 0 条、V1→V2 升级成功、约束/索引/注释存在、平台预置种子正确、
   `sys_user=0` 且无 `demo_admin`、审计表 UPDATE/DELETE/TRUNCATE 被数据库拒绝；
 - **演示路径**（追加 `db/seed/demo`）：V100 后 `demo_admin`（ALL）、`demo_dept`（DEPT，绑定麻醉科）、
