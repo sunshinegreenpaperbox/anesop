@@ -32,13 +32,17 @@ public interface SysUserRoomMapper {
     /**
      * 术间下生效授权的有效用户，供数据范围示例接口按术间过滤。
      *
+     * <p>成员口径与 ALL 路径（{@code SysUserMapper#selectAllActiveUserIds}）一致：
+     * {@code u.status = 1 AND u.deleted = false}；停用用户不得因历史授权继续可见。
+     *
      * @param roomId 术间标识（逻辑外键）
      * @return 用户标识列表（升序）；无授权时为空
      */
     @Select("""
             SELECT ur.user_id
             FROM m0_platform.sys_user_room ur
-            JOIN m0_platform.sys_user u ON u.id = ur.user_id AND u.deleted = false
+            JOIN m0_platform.sys_user u ON u.id = ur.user_id
+                AND u.status = 1 AND u.deleted = false
             WHERE ur.room_id = #{roomId} AND ur.status = 1
             ORDER BY ur.user_id
             """)

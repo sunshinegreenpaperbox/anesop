@@ -4,8 +4,9 @@
 >
 > 种子分两层：
 >
-> 1. **平台预置基线**：`db/migration/V2__m0_platform_seed_synthetic.sql`，随生产迁移执行，
->    只含 6 角色、17 权限、42 条授权、6 类 22 项字典，**不创建任何用户账号**；
+> 1. **平台预置基线**：`V2`（6 角色、17 权限、42 条授权、6 类 22 项字典）随生产迁移执行，
+>    `V3`/`V5` 再追加 4 个 M0 权限点与 5 条授权（当前 21 权限 / 47 条授权），
+>    **不创建任何用户账号**；
 > 2. **演示账号**：`db/seed/demo/V100__demo_admin_synthetic.sql`，位于**独立 Flyway
 >    location，仅 dev/test 显式启用**，生产 locations 不得包含该目录。
 >
@@ -15,8 +16,8 @@
 
 | 环境 | `spring.flyway.locations` | 内容 |
 |---|---|---|
-| 生产 / staging / uat | `filesystem:/opt/anesop/db/migration` | 仅 V1、V2；`sys_user` 为空 |
-| 本地 / 演示 / 集成测试 | `filesystem:db/migration,filesystem:db/seed/demo` | V1、V2、V100（demo_admin） |
+| 生产 / staging / uat | `filesystem:/opt/anesop/db/migration` | 仅 V1–V5；`sys_user` 为空 |
+| 本地 / 演示 / 集成测试 | `filesystem:db/migration,filesystem:db/seed/demo` | V1–V5 + V100（demo_admin/demo_dept/demo_self） |
 
 - **禁止**把 `db/seed/demo` 加入生产、staging、uat 的 locations；生产挂载目录只读，
   不含 `db/seed/`（见 `docs/db/README.md` §5.3）。
@@ -26,11 +27,18 @@
 
 ## 2. 演示账号
 
-| 用户名 | 初始口令 | 姓名 | 工号 | 角色 | 状态 | 首次登录改密 |
-|---|---|---|---|---|---|---|
-| `demo_admin` | `Anesop@2026` | 演示管理员（合成） | `SYN-DEMO-0001` | `SYS_ADMIN` | 启用 | **必须**（`must_change_password=true`） |
+| 用户名 | 初始口令 | 姓名 | 工号 | 角色 | 数据范围 | 组织/术间绑定 | 状态 | 首次登录改密 |
+|---|---|---|---|---|---|---|---|---|
+| `demo_admin` | `Anesop@2026` | 演示管理员（合成） | `SYN-DEMO-0001` | `SYS_ADMIN` | `ALL` | 院区 `SITE-01`（ALL 不消费） | 启用 | **必须** |
+| `demo_dept` | `Anesop@2026` | 演示科室管理员（合成） | `SYN-DEMO-0002` | `SYS_OR_MANAGER` | `DEPT` | 麻醉科 `DEPT-ANES`（主科室） | 启用 | **必须** |
+| `demo_self` | `Anesop@2026` | 演示麻醉医师（合成） | `SYN-DEMO-0003` | `SYS_ANESTHESIOLOGIST` | `SELF` | 麻醉科（SELF 不消费，不放大范围）+ 术间 `f2000000-...0001` | 启用 | **必须** |
 
-- 固定 UUID：`e0000000-0000-4000-8000-000000000001`；角色 UUID：`a0000000-...-000000000001`。
+- 固定 UUID：`demo_admin`=`e0000000-...000000000001`、`demo_dept`=`...000000000002`、
+  `demo_self`=`...000000000003`；角色 UUID：`SYS_ADMIN`=`a0000000-...000000000001`、
+  `SYS_OR_MANAGER`=`a0000000-...000000000005`、`SYS_ANESTHESIOLOGIST`=`a0000000-...000000000002`。
+- 组织（`sys_org`）：`SITE-01`=`f1000000-...000000000001`、`DEPT-ANES`=`...000000000002`、
+  `DEPT-OR`=`...000000000003`；绑定见 V100 的 `sys_user_org` / `sys_user_room`。
+- 三个演示账号的 `must_change_password` 均为 `true`，首次登录强制改密。
 - 口令哈希：BCrypt，cost=10，`$2y$` 前缀，长度 60；由以下命令生成：
   ```bash
   htpasswd -bnBC 10 "" 'Anesop@2026' | tr -d ':\n'
@@ -52,14 +60,17 @@
 
 数据范围取值见 `sys_role.data_scope`：`ALL`/`SITE`/`DEPT`/`ROOM`/`SELF`（§3.9.2）。
 
-## 4. 权限点（17 个，V2）
+## 4. 权限点（21 个：V2 17 + V3 2 + V5 2）
 
 - 基础：`auth:login`、`user:read`、`user:write`、`role:read`、`role:write`、
   `audit:read`、`dict:read`、`dict:write`
 - 模块占位：`m0:access` … `m8:access`（S0 阶段仅占位，后续按模块细化到菜单/按钮级）
+- M0 认证（V3）：`m0:auth:read`、`m0:auth:write`（仅 `SYS_ADMIN`）
+- M0 组织（V5）：`m0:org:read`、`m0:org:write`；`m0:org:read` 授予 `SYS_ADMIN` 与
+  `SYS_OR_MANAGER`（数据范围示例接口需要该功能权限），`m0:org:write` 仅 `SYS_ADMIN`
 
-授权关系 42 条：`SYS_ADMIN` 拥有全部 17 个；其余角色按岗位最小权限授予登录 +
-职责模块访问。详细映射见 V2 脚本第 3 节。
+授权关系 47 条：`SYS_ADMIN` 拥有全部权限；其余角色按岗位最小权限授予登录 +
+职责模块访问。详细映射见 V2/V3/V5 脚本授权段。
 
 ## 5. 字典（6 类 / 22 项，V2）
 
@@ -78,10 +89,12 @@
 
 - 所有姓名、工号、账号均带“演示/合成/SYN-”标识；
 - 不含任何真实患者、员工、手机号、身份证、住院号；
-- 演示账号只有一个，且强制改密；
+- 演示账号共三个（admin/dept/self），且均强制改密；
 - 若需扩充演示数据，必须继续使用固定 UUID + `SYNTHETIC` 标记，并更新本文件；
 - CI 断言两条路径（`FlywayMigrationTest` / `DemoSeedMigrationTest`）：
   - 生产路径：`sys_user=0`、`sys_user_role=0`，无 `demo_admin`；`sys_role=6`、
-    `sys_permission=17`、`sys_role_permission=42`、`sys_dict_item=22`；
-  - 演示路径：在基线之上 `sys_user=1`、`sys_user_role=1`，`demo_admin` 绑定
-    `SYS_ADMIN`，`must_change_password=true`，BCrypt 校验 `Anesop@2026` 通过。
+    `sys_permission=21`、`sys_role_permission=47`、`sys_dict_item=22`、`sys_org=0`、
+    `sys_user_org=0`、`sys_user_room=0`；
+  - 演示路径：在基线之上 `sys_user=3`、`sys_user_role=3`、`sys_org=3`、`sys_user_org=3`、
+    `sys_user_room=1`；`demo_dept` 绑定麻醉科（`SYS_OR_MANAGER`），`demo_self` 为 `SELF`，
+    三个账号均 `must_change_password=true`，BCrypt 校验 `Anesop@2026` 通过。

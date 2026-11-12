@@ -72,13 +72,17 @@ INSERT INTO m0_platform.sys_org (id, code, name, org_type, parent_id, path, sort
     ('f1000000-0000-4000-8000-000000000003', 'DEPT-OR', '手术室（合成）', 'DEPT',
      'f1000000-0000-4000-8000-000000000001', '/SITE-01/DEPT-OR', 2, 1);
 
-INSERT INTO m0_platform.sys_user_org (user_id, org_id, is_primary) VALUES
+INSERT INTO m0_platform.sys_user_org
+    (user_id, org_id, is_primary, created_at, created_by, updated_at, updated_by) VALUES
     -- demo_admin：院区绑定（ALL 不消费绑定，仅演示数据形状）
-    ('e0000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', true),
+    ('e0000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001',
+     true, now(), NULL, now(), NULL),
     -- demo_dept：主科室=麻醉科（DEPT 的 scopeIds 来源）
-    ('e0000000-0000-4000-8000-000000000002', 'f1000000-0000-4000-8000-000000000002', true),
+    ('e0000000-0000-4000-8000-000000000002', 'f1000000-0000-4000-8000-000000000002',
+     true, now(), NULL, now(), NULL),
     -- demo_self：组织绑定存在但 SELF 角色不消费（不得放大为 DEPT 可见范围）
-    ('e0000000-0000-4000-8000-000000000003', 'f1000000-0000-4000-8000-000000000002', false);
+    ('e0000000-0000-4000-8000-000000000003', 'f1000000-0000-4000-8000-000000000002',
+     false, now(), NULL, now(), NULL);
 
 -- 术间主数据由 M2-M2-01 建立（m1_sched）；此处 room_id 为逻辑外键的合成占位值。
 INSERT INTO m0_platform.sys_user_room (user_id, room_id, status) VALUES

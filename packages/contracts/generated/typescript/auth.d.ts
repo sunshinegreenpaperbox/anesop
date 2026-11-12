@@ -139,8 +139,11 @@ export interface paths {
     }
     /**
      * 按数据范围查询可见用户（示例接口）
-     * @description M2-M0-01 数据范围绑定的受保护示例接口：按调用者生效的数据范围（ALL/SITE/DEPT/ROOM/SELF）
-     *     过滤可见用户标识。数据范围为空（未绑定，fail-closed 为 NONE）或请求对象超出范围时返回 403，
+     * @description M2-M0-01 数据范围绑定的受保护示例接口：除认证外还要求功能权限点 `m0:org:read`
+     *     （Spring Security 授权表达式 `PERM_m0:org:read`），缺失时返回 403——数据范围只决定可见对象，
+     *     不替代功能权限。按调用者生效的数据范围（ALL/SITE/DEPT/ROOM/SELF）过滤可见用户标识：
+     *     SITE 覆盖 `sys_org.path` 整棵子树（院区自身 + 下属科室），DEPT 精确匹配本科室，ROOM 仅授权术间，
+     *     SELF 仅本人。数据范围为空（未绑定，fail-closed 为 NONE）或请求对象超出范围时返回 403，
      *     并由服务端写入 ACCESS_DENIED 审计；只返回用户标识，不含姓名、工号、手机号等敏感字段。
      *     多院区/术间主数据分别由 M0 组织表与 M2-M2-01 术间主数据提供，本接口只做范围过滤示例。
      */
@@ -717,7 +720,7 @@ export interface operations {
   listUsersInDataScope: {
     parameters: {
       query?: {
-        /** @description 组织标识（院区/科室 UUID）；提供时只返回该组织成员，超出数据范围返回 403。 */
+        /** @description 组织标识（院区/科室 UUID）；提供时只返回该组织成员（院区按子树展开），超出数据范围返回 403。 */
         orgId?: string
         /** @description 术间标识（UUID，逻辑外键，主数据见 M2-M2-01）；提供时只返回该术间授权成员，超出数据范围返回 403。 */
         roomId?: string

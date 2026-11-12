@@ -21,7 +21,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 
 | ID | 任务 | 写域 | 依赖 | 状态 |
 |---|---|---|---|---|
-| M2-M0-01 | 数据范围绑定表与解析 | `db/migration/V5*`、`apps/api/modules/m0/**`、契约 auth.yaml | M1 | Ready |
+| M2-M0-01 | 数据范围绑定表与解析 | `db/migration/V5*`、`apps/api/modules/m0/**`、契约 auth.yaml | M1 | Done（独立 review PASS，0 blocking；122 测试） |
 | M2-M0-02 | 手机号加密与 hash 写路径 | `db/migration/V6*`、`apps/api/modules/m0/**`、契约 | M1 | Ready |
 | M2-M0-03 | E2E-04 越权 + 登录 E2E + 覆盖率 ratchet 清理 | `apps/web/e2e/**`、各 `src/test/**`、根 pom | M1 | Ready |
 | M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Ready |
@@ -50,7 +50,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 - 目标：E2E-04 权限越权（登录→无权限访问→403 页面）、登录提交 E2E、E2E-01 排程冲突（依赖 M2-M2-01，
   可拆后置）；清理 m0-impl / gateway 覆盖率 ratchet（补单测至核心域 80/70）；升级 vitest 工具链清除
   devDeps 漏洞例外（glob/tinypool）；删除到期例外并更新 docs/testing/README、audit-exceptions。
-- 验收：check.sh + ci-local 全绿；ratchet/TODO(TEMP) 标记删除且覆盖率达标；E2E 稳定（3 次重跑）。
+- 验收：check.sh + ci-local 全绿；ratchet 与到期临时标记全部删除且覆盖率达标；E2E 稳定（3 次重跑）。
 
 ### M2-M1-01 手术申请接收与校验
 - 目标：按 patient/scheduling 契约实现申请单创建/查询/列表；HIS 适配器（模拟，EXT-01）：接收 HL7/REST

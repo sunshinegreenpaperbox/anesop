@@ -19,9 +19,10 @@ public interface DataScopeQueryService {
      * <p>过滤语义：
      * <ul>
      *   <li>不传 orgId/roomId：ALL → 全部启用用户；否则取组织绑定成员 ∪ 术间绑定成员，
-     *       含 SELF 时并上调用者本人；</li>
-     *   <li>orgId：需为 ALL 或落在 {@link DataScopeAssignments#allowedOrgIds()} 内，否则 403；
-     *       返回该组织的成员；</li>
+     *       含 SELF 时并上调用者本人；SITE 的组织成员按 {@code sys_org.path} 子树展开
+     *       （院区自身 + 全部下属科室）；</li>
+     *   <li>orgId：需为 ALL、落在 {@link DataScopeAssignments#allowedOrgIds()} 内，或
+     *       （SITE 范围）位于授予院区的子树内，否则 403；返回该组织的成员（组织为 SITE 时取子树）；</li>
      *   <li>roomId：需为 ALL 或落在 {@link DataScopeAssignments#allowedRoomIds()} 内，否则 403；
      *       返回该术间的授权成员；</li>
      *   <li>同时传两个过滤条件时取交集，任一超出范围即 403。</li>

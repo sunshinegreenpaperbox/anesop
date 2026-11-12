@@ -26,11 +26,22 @@ public final class AuthPermissions {
     /** M0 认证子域维护权限点（后续 M0 写接口使用，S0-07 先定稿编码）。 */
     public static final String M0_WRITE = "m0:auth:write";
 
+    /**
+     * M0 组织只读权限点（V5 新增，数据范围示例接口 {@code GET /v1/auth/data-scope/users} 使用）。
+     *
+     * <p>数据范围只决定“能看到哪些对象”，不替代功能权限：调用方必须同时具备该权限点，
+     * 否则即使数据范围非空也返回 403。
+     */
+    public static final String M0_ORG_READ = "m0:org:read";
+
     /** 平台系统管理员角色码；数据范围为 ALL，是唯一预置的高权限角色。 */
     public static final String ROLE_SYS_ADMIN = "SYS_ADMIN";
 
     /** Spring Security 授权表达式中的 M0 只读权限。 */
     public static final String AUTHORITY_M0_READ = PERMISSION_PREFIX + M0_READ;
+
+    /** Spring Security 授权表达式中的 M0 组织只读权限。 */
+    public static final String AUTHORITY_M0_ORG_READ = PERMISSION_PREFIX + M0_ORG_READ;
 
     private AuthPermissions() {
     }

@@ -121,7 +121,11 @@ public final class SyntheticAccounts {
                 """, LOCKOUT_ID, "a0000000-0000-4000-8000-000000000002");
     }
 
-    /** 幂等创建无角色账号（数据范围 fail-closed 用例）。 */
+    /**
+     * 幂等创建“有 DEPT 角色、无组织绑定”的账号（数据范围 fail-closed 用例）。
+     *
+     * <p>授予 SYS_OR_MANAGER（V5 起含 m0:org:read），确保 403 来自数据范围为空而非缺权限。
+     */
     public static void ensureUnboundUser(JdbcTemplate jdbcTemplate) {
         String hash = new BCryptPasswordEncoder().encode(UNBOUND_PASSWORD);
         jdbcTemplate.update("""
@@ -133,7 +137,12 @@ public final class SyntheticAccounts {
                     must_change_password = false, failed_attempts = 0, locked_until = NULL,
                     status = 1, deleted = false
                 """, UNBOUND_ID, UNBOUND_USERNAME, hash);
-        jdbcTemplate.update("DELETE FROM m0_platform.sys_user_role WHERE user_id = ?::uuid", UNBOUND_ID);
+        jdbcTemplate.update("""
+                INSERT INTO m0_platform.sys_user_role (user_id, role_id)
+                VALUES (?::uuid, 'a0000000-0000-4000-8000-000000000005') ON CONFLICT DO NOTHING
+                """, UNBOUND_ID);
+        // 仍保持“无组织绑定”，由解析器 fail-closed 为 NONE。
+        jdbcTemplate.update("DELETE FROM m0_platform.sys_user_org WHERE user_id = ?::uuid", UNBOUND_ID);
     }
 
     /** 幂等创建 ROOM 数据范围账号：自定义 ROOM 角色 + 术间 1 绑定（术间 2 不授权）。 */
@@ -157,6 +166,11 @@ public final class SyntheticAccounts {
                 INSERT INTO m0_platform.sys_user_role (user_id, role_id)
                 VALUES (?::uuid, ?::uuid) ON CONFLICT DO NOTHING
                 """, ROOM_USER_ID, ROOM_ROLE_ID);
+        // 示例接口要求 m0:org:read；仅授予该测试角色，不改变迁移基线。
+        jdbcTemplate.update("""
+                INSERT INTO m0_platform.sys_role_permission (role_id, permission_id)
+                VALUES (?::uuid, 'b0000000-0000-4000-8000-000000000020') ON CONFLICT DO NOTHING
+                """, ROOM_ROLE_ID);
         jdbcTemplate.update("""
                 INSERT INTO m0_platform.sys_user_room (user_id, room_id, status)
                 VALUES (?::uuid, ?::uuid, 1) ON CONFLICT DO NOTHING

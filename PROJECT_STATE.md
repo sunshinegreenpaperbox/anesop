@@ -1,6 +1,6 @@
 # PROJECT_STATE — ANESOP 施工状态
 
-> 跨会话唯一状态文件。**每个会话开始先读，结束必须更新。** 最后更新：2026-11-12（**已暂停**：M1 达成；M2-M0-01 WIP 快照 `ee15c8b`）
+> 跨会话唯一状态文件。**每个会话开始先读，结束必须更新。** 最后更新：2026-11-13（**已恢复施工**：M1 达成；M2-M0-01 WIP `ee15c8b` 已验证可编译，评审中）
 > 事实源：`docs/plan/手术麻醉信息系统_施工前方案书_V0.9.docx`（V0.9 讨论稿，未冻结）
 
 ## 1. 当前阶段
@@ -8,9 +8,9 @@
 | 项 | 状态 |
 |---|---|
 | 方案书 | **V1.0 基线已冻结（2026-11-12）**，见 `docs/plan/BASELINE.md` |
-| 施工 | **已暂停（2026-11-12 用户断电指令）**；M1 达成、S0 全完成；M2-M0-01 为 WIP 快照 `ee15c8b`，未验证 |
+| 施工 | **进行中（2026-11-13 恢复）**；M1 达成、S0 全完成；M2-M0-01 完成（评审 PASS），下一步 M2-M0-02 |
 | 目标里程碑 | ~~M1 工程骨架就绪：2026-12-18~~ **已于 2026-11-12 达成**；M2 MVP：2027-01-29；验收：2027-07-02 |
-| 当前焦点 | 恢复点：验证并完成 M2-M0-01（数据范围绑定），再按 M2-backlog 推进 |
+| 当前焦点 | M2：M2-M0-02 手机号加密/hash → M2-M0-03 E2E/ratchet → M2-M1-01 申请接收 |
 | 自动化规则 | `AUTONOMY.md`：不提问、默认决策、阻塞挂号、最终一次性验收 |
 | 环境 | JDK 21（`.toolchain/jdk21`）、Maven 本地仓库 `.m2repo`、Node 26/pnpm 11；**Docker 不可用**（EXT-08） |
 
@@ -36,8 +36,6 @@
 - [x] S0-01 仓库初始化与协作资产（2026-11-12，首个提交）
 - [x] S0-02 monorepo 骨架（2026-11-12，29 模块 reactor + 前端壳 + ADR-0001）
 - [x] S0-03 静态检查与提交规范（2026-11-12，ESLint/Prettier/Checkstyle/SpotBugs/commitlint + check.sh + ADR-0002）
-- [x] S0-02 monorepo 骨架
-- [x] S0-03 静态检查与提交规范
 - [x] S0-04 CI 流水线（2026-11-12；10 job + ci-local 本地等价全绿；无远端未实跑）
 - [x] S0-05 契约基线（OpenAPI 3.1）（2026-11-12；Java 类型生成延至 S0-07 补齐，见 ADR-0003）
 - [x] S0-06 数据库迁移基线（2026-11-12；8 表 + 审计 append-only + 演示种子隔离；评审 B-1 已修）
@@ -46,7 +44,7 @@
 - [x] S0-09 采集网关 POC（2026-11-12；39 测试，10 分钟不丢数/断网补传不重复/重启恢复）
 - [x] S0-10 部署环境（Compose）（2026-11-12，静态校验 PASS 32/0；Docker 不可用 EXT-08，digest 待补）
 - [x] S0-11 测试基座（2026-11-12；JaCoCo 门禁 + Vitest + Playwright + Testcontainers 基座；m0/网关 ratchet 到期 2026-12-18）
-- [ ] S0-12 开发文档与一键起（进行中）
+- [x] S0-12 开发文档与一键起（2026-11-12；README/guides/seed-demo/dev-check/链接 129/0 失效）
 
 **S0 退出准则（M1）评估（2026-11-12）**：6 条中 4 条通过、1 条部分通过（CI 无远端 + 覆盖率 ratchet）、1 条环境受限（Docker EXT-08，已用嵌入式 PG 等价验证）。详见 `docs/acceptance/STATUS.md`。
 
@@ -60,8 +58,8 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 | 项 | 状态 | 需要谁 |
 |---|---|---|
 | Docker/容器运行时（EXT-08） | 不可用，Compose/镜像/Testcontainers 静态校验 | 宿主机/信息科 |
-| **施工暂停** | 2026-11-12 用户临时断电；恢复需人工明确指令 | 用户 |
-| M2-M0-01 WIP | 快照 `ee15c8b` 未编译验证、未 review | 下一会话 |
+| 施工恢复 | 2026-11-13 用户指令恢复；`check.sh` 全绿验证 WIP 可编译（530s） | — |
+| M2-M0-01 | 已完成（review PASS、122 测试、contract-check 通过） | — |
 | GitHub 远端与组织 | 未建，CI/CODEOWNERS/分支保护未实跑 | 项目经理 |
 | 覆盖率 ratchet（m0-impl、gateway 分支） | 到期 2026-12-18，需补单测 | 后端/测试 |
 | devDependencies 漏洞例外（glob/tinypool） | 到期 2026-12-18，需升级 vitest 工具链 | 前端/平台 |
@@ -70,12 +68,10 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 
 ## 6. 下一步（暂停恢复点）
 
-0. **恢复施工时第一件事**：读 `docs/ai/handoffs/2026-11-12-暂停.md`；确认 HEAD=`ee15c8b`、
-   工作树干净；跑 `./scripts/mvn.sh -B -f apps/api/pom.xml verify` 与
-   `bash scripts/contract-check.sh` 验证 M2-M0-01 WIP；修复后补独立 review 并整理为正式提交。
-1. 之后清理 M1 前欠账（可并行）：覆盖率 ratchet 补测、devDeps 漏洞升级、phone 写路径、
-   E2E-01/04（登录与越权）、springdoc 全量 drift（M0 域）。
-   任务卡见 `docs/ai/tasks/M2-backlog.md`（M2-M0-02/03）。
+0. ~~恢复点：验证 M2-M0-01 WIP~~ **已完成（2026-11-13）**：`check.sh` 全绿、独立 review PASS、
+   122 测试、contract-check 通过，WIP 已转正式提交。
+1. 下一步：M2-M0-02（手机号加密/hash 写路径，V6）→ M2-M0-03（E2E-04/登录 E2E + ratchet 清理）
+   → M2-M1-01 申请接收（依赖 M2-M0-01）。任务卡见 `docs/ai/tasks/M2-backlog.md`。
 2. M2 关键路径：E-M1 申请接收（patient/scheduling 契约实现 + HIS 模拟适配器 + 列表/详情页）
    → E-M2 排程工作台与冲突检测（规则引擎 + 冲突算法 + 甘特/看板 + E2E-01）
    → E-M4 术前访视与评估（访视单/ASA/气道/RCRI/Apfel/STOP-BANG/麻醉计划）。

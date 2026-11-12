@@ -23,6 +23,9 @@ class DataScopeAssignmentsTest {
         assertThat(denied.assignments()).extracting(DataScopeAssignment::type).containsExactly(DataScope.NONE);
         assertThat(denied.allowedOrgIds()).isEmpty();
         assertThat(denied.allowedRoomIds()).isEmpty();
+        assertThat(denied.hasObjectScope()).as("拒绝不是\"按对象过滤\"，调用方必须先拒绝").isFalse();
+        assertThat(denied.requiresObjectFilter()).isFalse();
+        assertThat(denied.isSelfOnly()).isFalse();
     }
 
     @Test
@@ -48,6 +51,58 @@ class DataScopeAssignmentsTest {
         assertThat(scopes.isUnrestricted()).isTrue();
         assertThat(scopes.allowedOrgIds()).isEmpty();
         assertThat(scopes.allowedRoomIds()).isEmpty();
+        assertThat(scopes.hasObjectScope()).as("ALL 不需要对象过滤").isFalse();
+        assertThat(scopes.requiresObjectFilter()).isFalse();
+        assertThat(scopes.isSelfOnly()).isFalse();
+    }
+
+    @Test
+    void selfScopeRequiresFilterDespiteEmptyObjectLists() {
+        DataScopeAssignments scopes = DataScopeAssignments.of(
+                List.of(new DataScopeAssignment(DataScope.SELF, List.of())));
+
+        assertThat(scopes.isDenied()).isFalse();
+        assertThat(scopes.isUnrestricted()).isFalse();
+        assertThat(scopes.allowedOrgIds()).as("SELF 的 allowedOrgIds 为空不等于不过滤").isEmpty();
+        assertThat(scopes.allowedRoomIds()).isEmpty();
+        assertThat(scopes.hasObjectScope()).isTrue();
+        assertThat(scopes.requiresObjectFilter()).isTrue();
+        assertThat(scopes.isSelfOnly()).isTrue();
+    }
+
+    @Test
+    void deptScopeRequiresObjectFilterAndIsNotSelfOnly() {
+        DataScopeAssignments scopes = DataScopeAssignments.of(
+                List.of(new DataScopeAssignment(DataScope.DEPT, List.of("dept-1"))));
+
+        assertThat(scopes.isUnrestricted()).isFalse();
+        assertThat(scopes.hasObjectScope()).isTrue();
+        assertThat(scopes.requiresObjectFilter()).isTrue();
+        assertThat(scopes.isSelfOnly()).isFalse();
+        assertThat(scopes.allowedOrgIds()).containsExactly("dept-1");
+    }
+
+    @Test
+    void allMixedWithScopedAssignmentsIsStillUnrestricted() {
+        DataScopeAssignments scopes = DataScopeAssignments.of(List.of(
+                new DataScopeAssignment(DataScope.SELF, List.of()),
+                new DataScopeAssignment(DataScope.DEPT, List.of("dept-1")),
+                new DataScopeAssignment(DataScope.ALL, List.of())));
+
+        assertThat(scopes.isUnrestricted()).isTrue();
+        assertThat(scopes.hasObjectScope()).isTrue();
+        assertThat(scopes.requiresObjectFilter()).as("任一 ALL 即全院可见，不再注入过滤").isFalse();
+        assertThat(scopes.isSelfOnly()).isFalse();
+    }
+
+    @Test
+    void selfMixedWithDeptIsNotSelfOnly() {
+        DataScopeAssignments scopes = DataScopeAssignments.of(List.of(
+                new DataScopeAssignment(DataScope.SELF, List.of()),
+                new DataScopeAssignment(DataScope.DEPT, List.of("dept-1"))));
+
+        assertThat(scopes.isSelfOnly()).isFalse();
+        assertThat(scopes.requiresObjectFilter()).isTrue();
     }
 
     @Test

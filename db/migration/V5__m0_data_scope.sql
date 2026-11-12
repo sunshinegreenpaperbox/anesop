@@ -11,11 +11,16 @@
 --   1) sys_org：组织机构（org_type = SITE 院区 / DEPT 科室），树形（parent_id + path）。
 --      M0 只建“数据范围用的组织骨架”；人员资质/排班主数据仍在 M3，术间主数据在 M1。
 --   2) sys_user_org：用户—组织绑定（数据范围 SITE/DEPT 的 scopeIds 来源），
---      复合主键防重复授权；is_primary 标记主科室，一个用户最多一个主科室。
+--      复合主键防重复授权；is_primary 标记主科室，一个用户最多一个主科室；
+--      updated_at/updated_by 记录授权变更，便于追溯（与 sys_user_room 一致）。
 --   3) sys_user_room：用户—术间绑定（数据范围 ROOM 的 scopeIds 来源）。
 --      术间主数据由 M2-M2-01 在 m1_sched 建立，因此 room_id 为逻辑外键（不建物理外键）。
---   4) 权限点 m0:org:read / m0:org:write（组织维护，M2 组织 CRUD 使用），仅授予 SYS_ADMIN，
---      不改变既有角色与既有种子授权（不破坏 V2/V3 基线）。
+--   4) 权限点 m0:org:read / m0:org:write（组织维护，M2 组织 CRUD 使用）：
+--      m0:org:read 授予 SYS_ADMIN 与 SYS_OR_MANAGER（后者用于数据范围示例接口），
+--      m0:org:write 仍只授予 SYS_ADMIN；不改变既有角色与既有种子授权（不破坏 V2/V3 基线）。
+--
+-- SITE 语义（Q-1）：sys_role.data_scope=SITE 时，范围覆盖 sys_org.path 前缀匹配的整棵子树
+--   （院区自身 + 下属全部科室），由 SysUserOrgMapper 的 path 前缀查询展开；DEPT 只精确匹配。
 --
 -- 迁移纪律：本脚本已合入后禁止修改；变更一律新增 V<版本> 脚本（expand-contract）。
 -- 回滚策略：forward-only。回滚 = 应用侧停止读取绑定表（数据范围 fail-closed 到 NONE）
@@ -66,7 +71,7 @@ COMMENT ON COLUMN m0_platform.sys_org.org_type IS '组织类型：SITE=院区，
 COMMENT ON COLUMN m0_platform.sys_org.parent_id IS
     '父组织 UUID，FK → sys_org.id；院区为根（NULL），科室挂在院区下';
 COMMENT ON COLUMN m0_platform.sys_org.path IS
-    '层级路径（以 / 开头的编码串，如 /SITE-01/ANES），供子树前缀查询与展示；不参与权限判定';
+    '层级路径（以 / 开头的编码串，如 /SITE-01/DEPT-ANES）；SITE 数据范围按此前缀覆盖整棵子树';
 COMMENT ON COLUMN m0_platform.sys_org.sort IS '同级排序号，升序展示';
 COMMENT ON COLUMN m0_platform.sys_org.status IS '状态：1=启用，0=停用；停用组织不再进入数据范围解析';
 COMMENT ON COLUMN m0_platform.sys_org.created_at IS '创建时间（timestamptz，服务端时间）';
@@ -85,6 +90,8 @@ CREATE TABLE m0_platform.sys_user_org (
     is_primary boolean     NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(),
     created_by uuid,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    updated_by uuid,
     CONSTRAINT pk_sys_user_org PRIMARY KEY (user_id, org_id),
     CONSTRAINT fk_sys_user_org_user FOREIGN KEY (user_id)
         REFERENCES m0_platform.sys_user (id) ON DELETE CASCADE,
@@ -104,8 +111,11 @@ COMMENT ON COLUMN m0_platform.sys_user_org.user_id IS '用户 UUID，FK → sys_
 COMMENT ON COLUMN m0_platform.sys_user_org.org_id IS '组织 UUID，FK → sys_org.id；组织删除时级联清理';
 COMMENT ON COLUMN m0_platform.sys_user_org.is_primary IS
     '是否主科室：true=主科室（每用户最多一条，唯一索引 uk_sys_user_org_primary）';
-COMMENT ON COLUMN m0_platform.sys_user_org.created_at IS '绑定时间（timestamptz，服务端时间）';
+COMMENT ON COLUMN m0_platform.sys_user_org.created_at IS '授权/绑定时间（timestamptz，服务端时间）';
 COMMENT ON COLUMN m0_platform.sys_user_org.created_by IS '授权操作人 UUID；系统初始化可为空';
+COMMENT ON COLUMN m0_platform.sys_user_org.updated_at IS
+    '最后更新时间（timestamptz）；变更主科室/重新授权时更新，供授权变更追溯';
+COMMENT ON COLUMN m0_platform.sys_user_org.updated_by IS '最后更新人 UUID；系统任务可为空';
 
 -- -----------------------------------------------------------------------------
 -- 3. sys_user_room 用户—术间绑定（数据范围 ROOM 的 scopeIds 来源）
@@ -143,7 +153,8 @@ COMMENT ON COLUMN m0_platform.sys_user_room.updated_by IS '最后更新人 UUID�
 
 -- -----------------------------------------------------------------------------
 -- 4. 权限点 m0:org:read / m0:org:write（组织维护，M2 组织 CRUD 使用）
---    编码统一三段式 <模块>:<资源>:<动作>；仅授予 SYS_ADMIN，不改变 V2/V3 既有授权。
+--    编码统一三段式 <模块>:<资源>:<动作>；m0:org:read 额外授予 SYS_OR_MANAGER（数据范围示例接口
+--    的功能权限），其余授权不变，不改变 V2/V3 既有授权。
 -- -----------------------------------------------------------------------------
 INSERT INTO m0_platform.sys_permission (id, code, name, type, path, http_method, parent_id, sort) VALUES
     ('b0000000-0000-4000-8000-000000000020', 'm0:org:read', 'M0 组织机构只读', 'API',
@@ -152,5 +163,8 @@ INSERT INTO m0_platform.sys_permission (id, code, name, type, path, http_method,
      '/api/v1/orgs', 'POST', NULL, 112);
 
 INSERT INTO m0_platform.sys_role_permission (role_id, permission_id) VALUES
+    -- SYS_ADMIN：组织读写（V2 基线“全部权限”的延续）
     ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000020'),
-    ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000021');
+    ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000021'),
+    -- SYS_OR_MANAGER（DEPT 数据范围）：数据范围示例接口需要 m0:org:read；不授予写权限
+    ('a0000000-0000-4000-8000-000000000005', 'b0000000-0000-4000-8000-000000000020');

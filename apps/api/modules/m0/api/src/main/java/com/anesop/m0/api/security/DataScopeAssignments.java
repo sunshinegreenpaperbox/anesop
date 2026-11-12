@@ -13,8 +13,13 @@ import java.util.Set;
  *
  * <p>{@link #allowedOrgIds()} 返回 SITE/DEPT 绑定的组织标识并集（来自 {@code sys_user_org}），
  * {@link #allowedRoomIds()} 返回 ROOM 绑定的术间标识并集（来自 {@code sys_user_room}）。
- * ALL/未受限时两列表为空，表示“不受对象集合限制”；SELF 不产生对象标识，按角色语义
- * 过滤到本人数据。集合不可变，线程安全，可缓存于单次请求内复用。
+ *
+ * <p><b>空列表不等于不过滤</b>：{@link DataScope#ALL} 与 {@link DataScope#SELF} 的
+ * {@code allowedOrgIds()}/{@code allowedRoomIds()} 都为空，但语义相反——ALL 是全院可见
+ * （{@link #isUnrestricted()} 为真），SELF 仍必须按本人过滤（{@link #isSelfOnly()} 为真）。
+ * 调用方不得以“对象标识列表为空”推断放行，必须先按 {@link #isDenied()} → {@link #isUnrestricted()}
+ * → {@link #requiresObjectFilter()} 的顺序判断；对象范围（SITE/DEPT/ROOM）与 SELF 都需要注入
+ * 过滤条件，只有 ALL 不需要。集合不可变，线程安全，可缓存于单次请求内复用。
  */
 public final class DataScopeAssignments {
 
@@ -73,6 +78,56 @@ public final class DataScopeAssignments {
     /** 是否全院可见（任一范围断言为 {@link DataScope#ALL}）；被拒绝时恒为 false。 */
     public boolean isUnrestricted() {
         return !isDenied() && assignments.stream().anyMatch(assignment -> assignment.type() == DataScope.ALL);
+    }
+
+    /**
+     * 是否存在需要过滤的对象范围（SITE/DEPT/ROOM）或 SELF 行级范围。
+     *
+     * <p>DENIED 与 ALL 返回 false；DEPT/ROOM/SELF 返回 true。SELF 没有对象标识，但仍需注入
+     * “本人”过滤条件，因此不能用 {@link #allowedOrgIds()} 是否为空来判断。
+     *
+     * @return 是否需要注入数据范围过滤条件
+     */
+    public boolean hasObjectScope() {
+        if (isDenied()) {
+            return false;
+        }
+        return assignments.stream().anyMatch(assignment -> assignment.type() != DataScope.ALL
+                && assignment.type() != DataScope.NONE);
+    }
+
+    /**
+     * 是否仅本人可见（只含 SELF，且不含 ALL/SITE/DEPT/ROOM）。
+     *
+     * @return 仅 SELF 范围时为 true；被拒绝、全院可见或含对象范围时为 false
+     */
+    public boolean isSelfOnly() {
+        if (isDenied() || isUnrestricted()) {
+            return false;
+        }
+        boolean self = false;
+        for (DataScopeAssignment assignment : assignments) {
+            DataScope type = assignment.type();
+            if (type == DataScope.SELF) {
+                self = true;
+            } else {
+                // 出现 ALL/SITE/DEPT/ROOM/NONE 任一非 SELF 范围，即不是“仅本人”。
+                return false;
+            }
+        }
+        return self;
+    }
+
+    /**
+     * 是否必须注入数据范围过滤条件（{@link #hasObjectScope()} 且非全院可见）。
+     *
+     * <p>被拒绝时返回 false——调用方应先按 {@link #isDenied()} 拒绝，而不是“过滤后为空”；
+     * 全院可见（ALL，或 ALL 与其他范围并存）返回 false；DEPT/ROOM/SELF 返回 true。
+     *
+     * @return true 表示查询必须按对象/本人过滤
+     */
+    public boolean requiresObjectFilter() {
+        return hasObjectScope() && !isUnrestricted();
     }
 
     /** 允许的组织标识（SITE + DEPT 的 scopeIds 并集，去重保序）；全院可见时为空列表。 */

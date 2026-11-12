@@ -219,7 +219,7 @@ class FlywayMigrationTest {
                 .containsExactly("ASA", "CASE_STATUS", "OR_ROOM_STATUS", "ROLE_TYPE", "SEX",
                         "SURGERY_URGENCY");
         assertThat(countRows("sys_dict_item")).isEqualTo(22);
-        assertThat(countRows("sys_role_permission")).isEqualTo(46);
+        assertThat(countRows("sys_role_permission")).isEqualTo(47);
 
         // B-1 核心断言：生产迁移路径不产生任何账号，也没有演示账号及其角色绑定。
         assertThat(countRows("sys_user")).as("生产路径 sys_user 必须为 0").isZero();
@@ -287,6 +287,13 @@ class FlywayMigrationTest {
                 "SELECT indexdef FROM pg_indexes WHERE schemaname = 'm0_platform' "
                         + "AND indexname = 'uk_sys_user_org_primary'", String.class))
                 .contains("UNIQUE", "is_primary");
+        // 授权变更可追溯：sys_user_org 与 sys_user_room 一样具备 updated_at/updated_by。
+        assertThat(jdbc.queryForList("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'm0_platform' AND table_name = 'sys_user_org'
+                  AND column_name IN ('updated_at', 'updated_by')
+                ORDER BY column_name
+                """, String.class)).containsExactly("updated_at", "updated_by");
 
         // sys_user_room：唯一 (user_id, room_id) + 术间反向索引；room_id 为逻辑外键（无物理 FK）。
         assertThat(jdbc.queryForObject(
@@ -305,14 +312,14 @@ class FlywayMigrationTest {
                 .as("room_id 是跨模块逻辑外键，不得建物理外键")
                 .isZero();
 
-        // m0:org:* 权限点只授予 SYS_ADMIN，且不改变既有角色授权数量。
+        // m0:org:read 授予 SYS_ADMIN + SYS_OR_MANAGER，m0:org:write 仅 SYS_ADMIN（Q-2）。
         List<String> orgPermissionRoles = jdbc.queryForList("""
                 SELECT r.code FROM m0_platform.sys_permission p
                 JOIN m0_platform.sys_role_permission rp ON rp.permission_id = p.id
                 JOIN m0_platform.sys_role r ON r.id = rp.role_id
                 WHERE p.code LIKE 'm0:org:%' ORDER BY r.code
                 """, String.class);
-        assertThat(orgPermissionRoles).containsExactly("SYS_ADMIN", "SYS_ADMIN");
+        assertThat(orgPermissionRoles).containsExactly("SYS_ADMIN", "SYS_ADMIN", "SYS_OR_MANAGER");
 
         // 生产迁移路径不产生任何组织/绑定数据（只有结构）。
         assertThat(countRows("sys_org")).isZero();

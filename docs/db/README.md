@@ -89,13 +89,15 @@ source scripts/env.sh
 
 测试断言分两条路径：
 
-- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 2 条、
+- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 5 条（V1–V5）、
   二次 `migrate()` 执行 0 条、V1→V2 升级成功、约束/索引/注释存在、平台预置种子正确、
   `sys_user=0` 且无 `demo_admin`、审计表 UPDATE/DELETE/TRUNCATE 被数据库拒绝；
 - **演示路径**（追加 `db/seed/demo`）：V100 后 `demo_admin`（ALL）、`demo_dept`（DEPT，绑定麻醉科）、
   `demo_self`（SELF）存在，`demo_admin` 绑定 `SYS_ADMIN`、`must_change_password=true`、BCrypt 校验演示口令通过；
-- **数据范围**（`DataScopePersistenceIntegrationTest`）：真实 PG 验证 ALL/DEPT/ROOM/SELF、未绑定 fail-closed、
-  并发解析一致；`DataScopeApiIntegrationTest` 验证 `/me` 返回真实 scopeIds、跨科室 403 + ACCESS_DENIED 审计；
+- **数据范围**（`DataScopePersistenceIntegrationTest`，12 用例）：真实 PG 验证 ALL/DEPT/SITE/ROOM/SELF、
+  未绑定 fail-closed、SITE 按 `path` 覆盖子树且不越界兄弟院区、撤销绑定（status=0）与停用组织不再生效、
+  停用用户不出现在 DEPT/ROOM 成员结果、并发解析一致；`DataScopeApiIntegrationTest`（9 用例）
+  验证 `/me` 返回真实 scopeIds、跨科室 403 + ACCESS_DENIED 审计、缺 `m0:org:read` 403；
 - **Mapper 集成**（`MybatisPersistenceTest`）：jsonb/inet TypeHandler 往返、软删除过滤、
   旧 version 更新影响行数为 0、审计触发器在 Mapper 路径仍拒绝改写。
 
@@ -198,16 +200,20 @@ V1 使用的 PG 特性**集中在 `m0_platform` 一个 schema**，避免扩散�
 | 表 | 内容 | 关键约束 |
 |---|---|---|
 | `sys_org` | 组织机构（数据范围对象）：`org_type` = SITE 院区 / DEPT 科室，树形 `parent_id` + `path` | `uk_sys_org_code` 唯一；`ck_sys_org_org_type`；软删除不释放编码 |
-| `sys_user_org` | 用户—组织绑定：SITE/DEPT 范围 `scopeIds` 来源 | 复合主键 `(user_id, org_id)`；`uk_sys_user_org_primary` 保证每用户最多一个主科室 |
+| `sys_user_org` | 用户—组织绑定：SITE/DEPT 范围 `scopeIds` 来源；`updated_at/updated_by` 记录授权变更 | 复合主键 `(user_id, org_id)`；`uk_sys_user_org_primary` 保证每用户最多一个主科室 |
 | `sys_user_room` | 用户—术间绑定：ROOM 范围 `scopeIds` 来源 | 复合主键 `(user_id, room_id)`；`status=1` 才生效；`room_id` 为逻辑外键（术间主数据 M2-M2-01 在 `m1_sched` 建立） |
 
 - 解析语义（fail-closed）：角色声明 SITE/DEPT/ROOM 但无生效绑定、角色范围未知或查询异常 →
   一律 `NONE`（接口 403），不得降级为 ALL/SELF；任一角色 `ALL` 即全院可见。
+- **SITE 子树（Q-1）**：`data_scope=SITE` 时范围覆盖 `sys_org.path` 前缀匹配的整棵子树
+  （院区自身 + 下属全部科室），不是只取院区直属成员；`DEPT` 只精确匹配本科室。
+- 成员口径统一（S-5）：DEPT/ROOM 成员查询与 ALL 路径一致，只返回 `sys_user.status=1` 且未删除用户。
 - 生产迁移路径只建结构，不写组织/绑定数据（`FlywayMigrationTest#dataScopeBindingTablesAreReady` 断言为 0）；
   演示/测试数据只在 `db/seed/demo` 与测试夹具中出现，均为 SYNTHETIC。
 - 回滚：forward-only。回滚时应用侧停止读取绑定表（范围 fail-closed 到 NONE）+ 前向修复；
   不删除表（删除会丢失范围绑定证据，且 Flyway 不执行 undo）。
-- 后续：组织 CRUD 接口（`m0:org:read/write` 已由 V5 授予 SYS_ADMIN）在 M2 组织管理任务落地；
+- 后续：组织 CRUD 接口（`m0:org:read` 已由 V5 授予 SYS_ADMIN 与 SYS_OR_MANAGER，`m0:org:write`
+  仅 SYS_ADMIN）在 M2 组织管理任务落地；
   MyBatis 数据权限拦截器自动注入条件在 M1 排程/记录查询落地。
 
 补充说明：

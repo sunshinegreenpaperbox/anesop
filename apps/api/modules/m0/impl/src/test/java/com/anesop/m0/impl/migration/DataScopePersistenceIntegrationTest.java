@@ -34,8 +34,9 @@ import org.springframework.security.access.AccessDeniedException;
 /**
  * 数据范围绑定解析与示例查询的真实 PostgreSQL 集成测试（M2-M0-01，SYNTHETIC 夹具）。
  *
- * <p>覆盖：admin→ALL、DEPT→本科室 scopeIds、未绑定/无角色→NONE、ROOM 仅绑定可见、
- * SELF 仅本人、越权查询抛 AccessDeniedException、并发解析一致且 fail-closed。
+ * <p>覆盖：admin→ALL、DEPT→本科室 scopeIds、SITE→院区子树、未绑定/无角色→NONE、
+ * ROOM 仅绑定可见、SELF 仅本人、撤销绑定（status=0）与停用组织不再生效、停用用户不出现在
+ * DEPT/ROOM 成员结果、越权查询抛 AccessDeniedException、并发解析一致且 fail-closed。
  * 数据全部为合成数据（固定 UUID、SYN- 前缀），不含任何患者或真实人员信息。
  */
 class DataScopePersistenceIntegrationTest {
@@ -43,6 +44,9 @@ class DataScopePersistenceIntegrationTest {
     private static final UUID SITE_ID = UUID.fromString("f1000000-0000-4000-8000-000000000001");
     private static final UUID DEPT_ANES_ID = UUID.fromString("f1000000-0000-4000-8000-000000000002");
     private static final UUID DEPT_OR_ID = UUID.fromString("f1000000-0000-4000-8000-000000000003");
+    /** 第二院区（SITE-02）及其科室：用于证明 SITE 只覆盖本子树，不越界到兄弟院区。 */
+    private static final UUID SITE_2_ID = UUID.fromString("f1000000-0000-4000-8000-000000000004");
+    private static final UUID DEPT_EXT_ID = UUID.fromString("f1000000-0000-4000-8000-000000000005");
     private static final UUID ROOM_1 = UUID.fromString("f2000000-0000-4000-8000-000000000001");
     private static final UUID ROOM_2 = UUID.fromString("f2000000-0000-4000-8000-000000000002");
 
@@ -54,11 +58,15 @@ class DataScopePersistenceIntegrationTest {
     private static final UUID SELF_USER_ID = UUID.fromString("e0000000-0000-4000-8000-00000000a006");
     private static final UUID UNBOUND_USER_ID = UUID.fromString("e0000000-0000-4000-8000-00000000a007");
     private static final UUID NO_ROLE_USER_ID = UUID.fromString("e0000000-0000-4000-8000-00000000a008");
+    private static final UUID SITE_USER_ID = UUID.fromString("e0000000-0000-4000-8000-00000000a009");
+    /** 第二院区科室成员：SITE-01 的数据范围不得包含他。 */
+    private static final UUID EXT_USER_ID = UUID.fromString("e0000000-0000-4000-8000-00000000a00a");
 
     private static final UUID ROLE_ADMIN = UUID.fromString("a0000000-0000-4000-8000-000000000001");
     private static final UUID ROLE_DEPT = UUID.fromString("a0000000-0000-4000-8000-000000000005");
     private static final UUID ROLE_SELF = UUID.fromString("a0000000-0000-4000-8000-000000000002");
     private static final UUID ROLE_ROOM = UUID.fromString("a0000000-0000-4000-8000-00000000a0f1");
+    private static final UUID ROLE_SITE = UUID.fromString("a0000000-0000-4000-8000-00000000a0f2");
 
     /** 合成口令哈希占位：集成测试不登录，只校验数据范围解析；非任何真实口令。 */
     private static final String SYNTHETIC_PASSWORD_HASH =
@@ -183,6 +191,103 @@ class DataScopePersistenceIntegrationTest {
     }
 
     @Test
+    void siteScopeCoversDescendantDepartmentsOnly() {
+        DataScopeAssignments scopes = resolve(SITE_USER_ID);
+
+        assertThat(scopes.isDenied()).isFalse();
+        assertThat(scopes.isUnrestricted()).isFalse();
+        assertThat(scopes.allowedOrgIds()).containsExactly(SITE_ID.toString());
+        assertThat(scopes.requiresObjectFilter()).isTrue();
+
+        List<String> visible = queryIds(session -> queryService(session).visibleUserIds(SITE_USER_ID, null, null));
+        assertThat(visible)
+                .as("SITE 覆盖院区子树内的院区/科室成员，不含兄弟院区")
+                .containsExactly(
+                        ADMIN_ID.toString(), DEPT_USER_ID.toString(), DEPT_OR_USER_ID.toString(),
+                        ROOM_USER_ID.toString(), SITE_USER_ID.toString())
+                .doesNotContain(EXT_USER_ID.toString(), SELF_USER_ID.toString());
+
+        assertThat(queryIds(session -> queryService(session).visibleUserIds(SITE_USER_ID, SITE_ID, null)))
+                .as("orgId=院区时返回整棵子树成员")
+                .containsExactly(
+                        ADMIN_ID.toString(), DEPT_USER_ID.toString(), DEPT_OR_USER_ID.toString(),
+                        ROOM_USER_ID.toString(), SITE_USER_ID.toString());
+        assertThat(queryIds(session -> queryService(session).visibleUserIds(SITE_USER_ID, DEPT_OR_ID, null)))
+                .as("SITE 可用下属科室 orgId 过滤")
+                .containsExactly(DEPT_OR_USER_ID.toString());
+
+        assertThatThrownBy(() -> queryIds(
+                session -> queryService(session).visibleUserIds(SITE_USER_ID, DEPT_EXT_ID, null)))
+                .as("兄弟院区的科室不在 SITE 子树内，必须 403")
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void revokedRoomBindingIsDeniedAndNotVisible() {
+        jdbc.update("""
+                UPDATE m0_platform.sys_user_room
+                SET status = 0, updated_at = now()
+                WHERE user_id = ?::uuid AND room_id = ?::uuid
+                """, ROOM_USER_ID.toString(), ROOM_1.toString());
+
+        DataScopeAssignments scopes = resolve(ROOM_USER_ID);
+        assertThat(scopes.allowedRoomIds()).as("status=0 的撤销授权不得进入范围").isEmpty();
+        assertThat(scopes.isDenied()).as("唯一 ROOM 授权撤销后必须 fail-closed 为 NONE").isTrue();
+
+        assertThatThrownBy(() -> queryIds(session -> queryService(session).visibleUserIds(ROOM_USER_ID, null, null)))
+                .as("撤销后不得再看到任何数据")
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void disabledOrganisationIsExcludedFromScope() {
+        jdbc.update("UPDATE m0_platform.sys_org SET status = 0, updated_at = now() WHERE id = ?::uuid",
+                DEPT_ANES_ID.toString());
+
+        assertThat(resolve(DEPT_USER_ID).isDenied())
+                .as("绑定组织停用后 DEPT 范围必须 fail-closed")
+                .isTrue();
+        assertThatThrownBy(() -> queryIds(
+                session -> queryService(session).visibleUserIds(DEPT_USER_ID, null, null)))
+                .isInstanceOf(AccessDeniedException.class);
+
+        assertThat(queryIds(session -> queryService(session).visibleUserIds(SITE_USER_ID, null, null)))
+                .as("停用科室成员不参与 SITE 子树")
+                .doesNotContain(DEPT_USER_ID.toString(), ROOM_USER_ID.toString());
+        assertThatThrownBy(() -> queryIds(
+                session -> queryService(session).visibleUserIds(SITE_USER_ID, DEPT_ANES_ID, null)))
+                .as("停用组织不得作为 SITE 子树过滤对象")
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void inactiveUsersAreExcludedFromDepartmentAndRoomMembers() {
+        UUID disabledDeptUser = UUID.fromString("e0000000-0000-4000-8000-00000000a00b");
+        UUID disabledRoomUser = UUID.fromString("e0000000-0000-4000-8000-00000000a00c");
+        insertUser(disabledDeptUser, "syn.disabled-dept");
+        insertUser(disabledRoomUser, "syn.disabled-room");
+        bindOrg(disabledDeptUser, DEPT_ANES_ID, false);
+        bindRoom(disabledRoomUser, ROOM_1);
+
+        jdbc.update("""
+                UPDATE m0_platform.sys_user SET status = 0, updated_at = now()
+                WHERE id IN (?::uuid, ?::uuid)
+                """, disabledDeptUser.toString(), disabledRoomUser.toString());
+
+        assertThat(queryIds(session -> queryService(session).visibleUserIds(DEPT_USER_ID, null, null)))
+                .as("停用用户不出现在 DEPT 成员结果")
+                .containsExactly(DEPT_USER_ID.toString(), ROOM_USER_ID.toString())
+                .doesNotContain(disabledDeptUser.toString());
+        assertThat(queryIds(session -> queryService(session).visibleUserIds(ROOM_USER_ID, null, ROOM_1)))
+                .as("停用用户不出现在 ROOM 成员结果")
+                .containsExactly(ROOM_USER_ID.toString())
+                .doesNotContain(disabledRoomUser.toString());
+        assertThat(queryIds(session -> queryService(session).visibleUserIds(ADMIN_ID, null, null)))
+                .as("ALL 路径与 DEPT/ROOM 的成员口径一致（排除停用用户）")
+                .doesNotContain(disabledDeptUser.toString(), disabledRoomUser.toString());
+    }
+
+    @Test
     void concurrentResolveIsConsistentAndFailClosed() throws Exception {
         int threads = 8;
         int iterations = 20;
@@ -260,16 +365,20 @@ class DataScopePersistenceIntegrationTest {
                 INSERT INTO m0_platform.sys_org (id, code, name, org_type, parent_id, path, sort, status) VALUES
                     (?::uuid, 'SYN-SITE-01', '合成院区', 'SITE', NULL, '/SYN-SITE-01', 1, 1),
                     (?::uuid, 'SYN-DEPT-ANES', '合成麻醉科', 'DEPT', ?::uuid, '/SYN-SITE-01/SYN-DEPT-ANES', 1, 1),
-                    (?::uuid, 'SYN-DEPT-OR', '合成手术室', 'DEPT', ?::uuid, '/SYN-SITE-01/SYN-DEPT-OR', 2, 1)
+                    (?::uuid, 'SYN-DEPT-OR', '合成手术室', 'DEPT', ?::uuid, '/SYN-SITE-01/SYN-DEPT-OR', 2, 1),
+                    (?::uuid, 'SYN-SITE-02', '合成第二院区', 'SITE', NULL, '/SYN-SITE-02', 1, 1),
+                    (?::uuid, 'SYN-DEPT-EXT', '合成外部科室', 'DEPT', ?::uuid, '/SYN-SITE-02/SYN-DEPT-EXT', 1, 1)
                 """, SITE_ID.toString(), DEPT_ANES_ID.toString(), SITE_ID.toString(),
-                DEPT_OR_ID.toString(), SITE_ID.toString());
+                DEPT_OR_ID.toString(), SITE_ID.toString(), SITE_2_ID.toString(),
+                DEPT_EXT_ID.toString(), SITE_2_ID.toString());
     }
 
     private void seedRoles() {
         jdbc.update("""
-                INSERT INTO m0_platform.sys_role (id, code, name, data_scope)
-                VALUES (?::uuid, 'SYN_ROOM', '合成术间角色', 'ROOM')
-                """, ROLE_ROOM.toString());
+                INSERT INTO m0_platform.sys_role (id, code, name, data_scope) VALUES
+                    (?::uuid, 'SYN_ROOM', '合成术间角色', 'ROOM'),
+                    (?::uuid, 'SYN_SITE', '合成院区角色', 'SITE')
+                """, ROLE_ROOM.toString(), ROLE_SITE.toString());
     }
 
     private void seedUsersAndBindings() {
@@ -281,6 +390,8 @@ class DataScopePersistenceIntegrationTest {
         insertUser(SELF_USER_ID, "syn.self");
         insertUser(UNBOUND_USER_ID, "syn.unbound");
         insertUser(NO_ROLE_USER_ID, "syn.no-role");
+        insertUser(SITE_USER_ID, "syn.site");
+        insertUser(EXT_USER_ID, "syn.ext");
 
         bindRole(ADMIN_ID, ROLE_ADMIN);
         bindRole(DEPT_USER_ID, ROLE_DEPT);
@@ -288,7 +399,9 @@ class DataScopePersistenceIntegrationTest {
         bindRole(ROOM_USER_ID, ROLE_ROOM);
         bindRole(ROOM_USER_2_ID, ROLE_ROOM);
         bindRole(SELF_USER_ID, ROLE_SELF);
-        // UNBOUND_USER_ID 有 DEPT 角色但故意不建组织绑定；NO_ROLE_USER_ID 不建角色。
+        bindRole(SITE_USER_ID, ROLE_SITE);
+        // UNBOUND_USER_ID 有 DEPT 角色但故意不建组织绑定；NO_ROLE_USER_ID 不建角色；
+        // EXT_USER_ID 只做第二院区科室成员，用于验证 SITE 子树边界。
 
         bindOrg(ADMIN_ID, SITE_ID, true);
         bindOrg(DEPT_USER_ID, DEPT_ANES_ID, true);
@@ -297,6 +410,8 @@ class DataScopePersistenceIntegrationTest {
         bindOrg(ROOM_USER_ID, DEPT_ANES_ID, true);
         bindRoom(ROOM_USER_ID, ROOM_1);
         bindRoom(ROOM_USER_2_ID, ROOM_2);
+        bindOrg(SITE_USER_ID, SITE_ID, true);
+        bindOrg(EXT_USER_ID, DEPT_EXT_ID, true);
     }
 
     private void insertUser(UUID id, String username) {

@@ -27,7 +27,7 @@
 | POST | `/v1/auth/password` | authenticated | 修改口令（校验旧口令 + 新口令强度）；204；强制改密账号可用 |
 | GET | `/v1/auth/me` | authenticated | 角色、权限点、数据范围、`mustChangePassword` 快照（实时查库） |
 | GET | `/v1/auth/sessions` | `PERM_m0:auth:read` | 当前用户会话分页（page/size），越权 403 |
-| GET | `/v1/auth/data-scope/users` | authenticated + 数据范围 | 数据范围示例接口：按 `orgId`/`roomId` 过滤可见用户标识；范围为空或越权 403 + `ACCESS_DENIED` 审计 |
+| GET | `/v1/auth/data-scope/users` | authenticated + `PERM_m0:org:read` + 数据范围 | 数据范围示例接口：按 `orgId`/`roomId` 过滤可见用户标识；缺功能权限、范围为空或越权 403 + `ACCESS_DENIED` 审计 |
 
 错误响应统一 `{code,message,traceId,details}`：`AUTH_UNAUTHORIZED`(401)、`AUTH_FORBIDDEN`(403)、
 `PARAM_INVALID`(400)、`BUSINESS_RULE_VIOLATION`(422)、`RATE_LIMITED`(429)。
@@ -101,15 +101,26 @@
 - **解析**：`DefaultDataScopeResolver` 先读 `sys_user_role → sys_role.data_scope`，再按类型取绑定：
   `SITE`/`DEPT` ← `sys_user_org`（组织需 status=1、未删除），`ROOM` ← `sys_user_room`（status=1），
   `SELF` 无对象标识。返回 `DataScopeAssignments`（`assignments()` / `isDenied()` /
-  `isUnrestricted()` / `allowedOrgIds()` / `allowedRoomIds()`）。
+  `isUnrestricted()` / `hasObjectScope()` / `isSelfOnly()` / `requiresObjectFilter()` /
+  `allowedOrgIds()` / `allowedRoomIds()`）。
+- **空列表不等于不过滤（S-1）**：ALL 与 SELF 的 `allowedOrgIds()` 都为空，但 ALL 是
+  `isUnrestricted()`、SELF 是 `isSelfOnly()` 且 `requiresObjectFilter()=true`；调用方必须按
+  `isDenied → isUnrestricted → requiresObjectFilter` 判断，不得用“对象列表为空”推断放行。
+- **SITE 子树（Q-1）**：`data_scope=SITE` 时范围覆盖 `sys_org.path` 前缀匹配的整棵子树
+  （院区自身 + 下属全部科室）；`orgId` 过滤允许院区自身与任意下属组织，兄弟院区仍 403；
+  `DEPT` 只精确匹配本科室。
 - **fail-closed**：无角色、范围为空/未知、**声明 SITE/DEPT/ROOM 但无生效绑定**、查询异常 → `NONE`，
   调用方必须拒绝（403），绝不回退为 ALL/SELF；任一角色 `ALL` → 全院可见（不查绑定表）。
 - `/v1/auth/me` 的 `dataScopes[].scopeIds` 返回真实绑定（DEPT→科室 UUID、ROOM→术间 UUID、SELF/ALL→空），
   `siteIds` 取 SITE 绑定（ALL 或无 SITE 绑定时为空数组）。
-- **示例接口** `GET /v1/auth/data-scope/users`：范围为空或 `orgId`/`roomId` 超出范围 → 403 并写
+- **示例接口** `GET /v1/auth/data-scope/users`：首先要求功能权限点 `m0:org:read`
+  （Q-2，数据范围不能替代功能权限）；范围为空或 `orgId`/`roomId` 超出范围 → 403 并写
   `ACCESS_DENIED` 审计；`orgId`+`roomId` 同时给出取交集；只返回用户 UUID，不含姓名/工号/手机号。
-- 后续：组织 CRUD 接口（`m0:org:read`/`m0:org:write` 已由 V5 授予 `SYS_ADMIN`）与 MyBatis 数据权限
-  拦截器自动注入条件在 M1/M2 落地；多院区 `siteIds` 收窄在 M1 组织主数据完成后启用。
+- 成员口径统一（S-5）：DEPT/ROOM 成员查询与 ALL 路径一致，只返回 `sys_user.status=1`
+  且未删除用户；撤销授权（`sys_user_room.status=0`）与停用组织（`sys_org.status=0`）不参与解析。
+- 后续：组织 CRUD 接口（`m0:org:read` 已由 V5 授予 `SYS_ADMIN` + `SYS_OR_MANAGER`，
+  `m0:org:write` 仅 `SYS_ADMIN`）与 MyBatis 数据权限拦截器自动注入条件在 M1/M2 落地；
+  多院区 `siteIds` 收窄在 M1 组织主数据完成后启用。
 
 ## 5. 审计
 
@@ -167,12 +178,14 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 - `AuthAuditFailOpenTest`（1）：审计故障时登录仍 200 且 `auth.audit.failures` 递增。
 - `AuthAcceptanceFlowTest`：验收流程打印 6 步响应与三类审计记录。
 - `DefaultDataScopeResolverTest`（14）：ALL/DEPT/SITE/ROOM/SELF 解析、未绑定/未知/查询异常 fail-closed。
-- `DataScopeAssignmentsTest`（7）：拒绝标记、ALL 不受限、org/room 并集去重、空值忽略。
-- `DataScopePersistenceIntegrationTest`（8，真实 PG）：admin→ALL、DEPT→本科室 scopeIds、未绑定/无角色→NONE、
-  ROOM 仅绑定可见、SELF 仅本人、跨科室 403、8 线程并发解析一致。
-- `DataScopeApiIntegrationTest`（8）：`/me` 返回真实 scopeIds、DEPT 只看本科室、未绑定 403 + 审计、
-  ROOM 越权 403、admin 全院可见、springdoc 暴露新路径。
-- 全量 113 个测试（api-contracts 4、m0-impl 51、api-bootstrap 58），Checkstyle 0 / SpotBugs 0。
+- `DataScopeAssignmentsTest`（11）：拒绝标记、ALL 不受限、SELF/DEPT 过滤语义、空值忽略、
+  org/room 并集去重、ALL 与其他范围并存时仍不受限。
+- `DataScopePersistenceIntegrationTest`（12，真实 PG）：admin→ALL、DEPT→本科室 scopeIds、
+  SITE→院区子树且不越界兄弟院区、未绑定/无角色→NONE、ROOM 仅绑定可见、SELF 仅本人、
+  撤销绑定/停用组织 fail-closed、停用用户不出现在 DEPT/ROOM、跨科室 403、8 线程并发解析一致。
+- `DataScopeApiIntegrationTest`（9）：`/me` 返回真实 scopeIds、DEPT 只看本科室、未绑定 403 + 审计、
+  ROOM 越权 403、缺 `m0:org:read` 403、admin 全院可见、springdoc 暴露新路径。
+- 全量 122 个测试（api-contracts 4、m0-impl 59、api-bootstrap 59），Checkstyle 0 / SpotBugs 0。
 - 集成测试共用嵌入式 PostgreSQL 16（Docker 不可用 EXT-08），不使用 Docker、不使用真实患者数据。
 
 ## 8. 遗留与风险
@@ -182,7 +195,7 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 | Redis 会话/吊销表 | 当前进程内吊销表，多实例部署失效；接口已留，替换实现即可 | M1/部署前 |
 | SSO / AD / LDAP / CA 签名 | 占位，非 LOCAL 认证返回 422 模糊文案 | BLOCKED-EXTERNAL EXT-05 |
 | 数据权限绑定表 | **已完成**（M2-M0-01 / V5）：`sys_org`/`sys_user_org`/`sys_user_room` + scopeIds 解析 | — |
-| 组织 CRUD 与术间主数据 | `m0:org:read/write` 已授权 SYS_ADMIN，但组织维护接口未建；术间主数据由 M2-M2-01 在 `m1_sched` 建立 | M2 |
+| 组织 CRUD 与术间主数据 | `m0:org:read` 已授权 SYS_ADMIN/SYS_OR_MANAGER、`m0:org:write` 仅 SYS_ADMIN，但组织维护接口未建；术间主数据由 M2-M2-01 在 `m1_sched` 建立 | M2 |
 | 数据权限自动注入 | 当前由服务显式校验（示例接口）；MyBatis 拦截器自动注入 WHERE 条件待 M1 排程/记录查询落地 | M1 |
 | 并发会话上限 / 强制下线 | 仅按会话撤销刷新令牌，未限制同一账号并发会话数 | M1 |
 | phone 写路径 | V3 已加 `phone_hash varchar(128)`，实体已映射；`phone_enc`/`phone_hash` 的加密与 HMAC 写入（PhoneHashing + 密钥配置）未实现 | M1 |

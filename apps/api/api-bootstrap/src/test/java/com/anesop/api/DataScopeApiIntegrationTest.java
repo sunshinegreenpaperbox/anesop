@@ -27,7 +27,7 @@ import org.springframework.test.web.servlet.MvcResult;
  *
  * <p>覆盖：/me 返回真实 scopeIds（DEPARTMENT=SITE/DEPT 组织、OWN_PATIENTS=SELF 无对象）、
  * DEPT 用户只能查本科室、未绑定账号 fail-closed→403、ROOM 只可见已绑定术间、
- * cross-department 403 并写 ACCESS_DENIED 审计、admin 全院可见。
+ * cross-department 403 并写 ACCESS_DENIED 审计、缺 m0:org:read 的功能权限 403、admin 全院可见。
  * 全部账号与组织均为 SYNTHETIC 合成数据。
  */
 class DataScopeApiIntegrationTest extends AbstractApiIntegrationTest {
@@ -48,6 +48,7 @@ class DataScopeApiIntegrationTest extends AbstractApiIntegrationTest {
         SyntheticAccounts.resetDemoAccounts(jdbcTemplate);
         SyntheticAccounts.ensureUnboundUser(jdbcTemplate);
         SyntheticAccounts.ensureRoomUser(jdbcTemplate);
+        SyntheticAccounts.ensureSurgeon(jdbcTemplate);
     }
 
     @Test
@@ -164,6 +165,24 @@ class DataScopeApiIntegrationTest extends AbstractApiIntegrationTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("AUTH_FORBIDDEN"));
+    }
+
+    @Test
+    void missingOrgReadPermissionReturns403EvenWithNonEmptyScope() throws Exception {
+        String token = login(SyntheticAccounts.SURGEON_USERNAME, SyntheticAccounts.SURGEON_PASSWORD);
+
+        MvcResult result = mockMvc.perform(get("/v1/auth/data-scope/users")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("AUTH_FORBIDDEN"))
+                .andReturn();
+
+        String traceId = result.getResponse().getHeader("X-Trace-Id");
+        assertThat(accessDeniedAudit(traceId).get("actor_name"))
+                .as("SELF 范围非空但缺少 m0:org:read，数据范围不得替代功能权限")
+                .isEqualTo(SyntheticAccounts.SURGEON_USERNAME);
+        System.out.printf("[M2-M0-01][403] missing perm m0:org:read actor=%s traceId=%s%n",
+                SyntheticAccounts.SURGEON_USERNAME, traceId);
     }
 
     @Test
