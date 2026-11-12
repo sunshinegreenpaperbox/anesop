@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
 - 当前里程碑：**M2 MVP 进行中**（M1 已于 2026-11-12 达成）
-- 当前 Round：10（2026-11-13，恢复施工）
-- 最近提交：`feat(m0)` M2-M0-01 数据范围绑定表与解析（评审 PASS 后转正）
-- 已完成任务：**S0 12/12；M2：M2-M0-01 完成**
-- 进行中：M2-M0-02 手机号加密与 hash 写路径（下一步）
+- 当前 Round：11（2026-11-13）
+- 最近提交：`feat(m0)` M2-M0-02 手机号加密与用户管理（评审 PASS 后转正）
+- 已完成任务：**S0 12/12；M2：M2-M0-01、M2-M0-02 完成**
+- 进行中：M2-M0-03 E2E-04/登录 E2E + 覆盖率 ratchet 清理（下一步）
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M2-M0-02（手机号加密/hash）→ M2-M0-03（E2E/ratchet）→ M2-M1-01 申请接收
+- 下一步：M2-M0-03（E2E/ratchet/devDeps 升级）→ M2-M1-01 申请接收
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 

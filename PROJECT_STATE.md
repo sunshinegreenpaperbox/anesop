@@ -8,9 +8,9 @@
 | 项 | 状态 |
 |---|---|
 | 方案书 | **V1.0 基线已冻结（2026-11-12）**，见 `docs/plan/BASELINE.md` |
-| 施工 | **进行中（2026-11-13 恢复）**；M1 达成、S0 全完成；M2-M0-01 完成（评审 PASS），下一步 M2-M0-02 |
+| 施工 | **进行中（2026-11-13 恢复）**；M1 达成、S0 全完成；M2-M0-01/02 完成（评审 PASS），下一步 M2-M0-03 |
 | 目标里程碑 | ~~M1 工程骨架就绪：2026-12-18~~ **已于 2026-11-12 达成**；M2 MVP：2027-01-29；验收：2027-07-02 |
-| 当前焦点 | M2：M2-M0-02 手机号加密/hash → M2-M0-03 E2E/ratchet → M2-M1-01 申请接收 |
+| 当前焦点 | M2：M2-M0-03 E2E/ratchet → M2-M1-01 申请接收 → M2-M2-01 排程冲突 |
 | 自动化规则 | `AUTONOMY.md`：不提问、默认决策、阻塞挂号、最终一次性验收 |
 | 环境 | JDK 21（`.toolchain/jdk21`）、Maven 本地仓库 `.m2repo`、Node 26/pnpm 11；**Docker 不可用**（EXT-08） |
 
@@ -60,6 +60,7 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 | Docker/容器运行时（EXT-08） | 不可用，Compose/镜像/Testcontainers 静态校验 | 宿主机/信息科 |
 | 施工恢复 | 2026-11-13 用户指令恢复；`check.sh` 全绿验证 WIP 可编译（530s） | — |
 | M2-M0-01 | 已完成（review PASS、122 测试、contract-check 通过） | — |
+| M2-M0-02 | 已完成（review PASS、156 测试、contract-check 通过） | — |
 | GitHub 远端与组织 | 未建，CI/CODEOWNERS/分支保护未实跑 | 项目经理 |
 | 覆盖率 ratchet（m0-impl、gateway 分支） | 到期 2026-12-18，需补单测 | 后端/测试 |
 | devDependencies 漏洞例外（glob/tinypool） | 到期 2026-12-18，需升级 vitest 工具链 | 前端/平台 |
@@ -70,8 +71,8 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 
 0. ~~恢复点：验证 M2-M0-01 WIP~~ **已完成（2026-11-13）**：`check.sh` 全绿、独立 review PASS、
    122 测试、contract-check 通过，WIP 已转正式提交。
-1. 下一步：M2-M0-02（手机号加密/hash 写路径，V6）→ M2-M0-03（E2E-04/登录 E2E + ratchet 清理）
-   → M2-M1-01 申请接收（依赖 M2-M0-01）。任务卡见 `docs/ai/tasks/M2-backlog.md`。
+1. 下一步：M2-M0-03（E2E-04/登录 E2E + 覆盖率 ratchet 清理 + devDeps 升级）→ M2-M1-01
+   申请接收（依赖 M2-M0-01）。任务卡见 `docs/ai/tasks/M2-backlog.md`。
 2. M2 关键路径：E-M1 申请接收（patient/scheduling 契约实现 + HIS 模拟适配器 + 列表/详情页）
    → E-M2 排程工作台与冲突检测（规则引擎 + 冲突算法 + 甘特/看板 + E2E-01）
    → E-M4 术前访视与评估（访视单/ASA/气道/RCRI/Apfel/STOP-BANG/麻醉计划）。

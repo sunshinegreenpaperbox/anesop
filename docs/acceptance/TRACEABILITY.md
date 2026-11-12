@@ -21,3 +21,4 @@
 | 前端 401 刷新重放 | 3.9.5 | auth.yaml | — | http.ts | http.spec.ts | 已实现（S0-08） |
 | 登录→首页→受保护接口 | ACCEPTANCE M1 | auth.yaml | m0/auth | 登录/主布局 | e2e + 真实联调 | 已实现（S0-08/S0-12，Docker 受限） |
 | 数据范围绑定与解析 | 3.9.2 | auth.yaml 0.4.0 | m0/security | — | DataScopePersistenceIntegrationTest / DataScopeApiIntegrationTest | 已实现（M2-M0-01，review PASS） |
+| 手机号加密与脱敏 | 3.9.3 | auth.yaml 0.5.0 | m0/crypto + 用户管理 | — | PhoneCrypto/PhoneHasher/UserAdminApiIntegrationTest | 已实现（M2-M0-02，review PASS） |

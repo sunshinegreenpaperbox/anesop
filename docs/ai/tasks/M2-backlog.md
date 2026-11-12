@@ -22,7 +22,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 | ID | 任务 | 写域 | 依赖 | 状态 |
 |---|---|---|---|---|
 | M2-M0-01 | 数据范围绑定表与解析 | `db/migration/V5*`、`apps/api/modules/m0/**`、契约 auth.yaml | M1 | Done（独立 review PASS，0 blocking；122 测试） |
-| M2-M0-02 | 手机号加密与 hash 写路径 | `db/migration/V6*`、`apps/api/modules/m0/**`、契约 | M1 | Ready |
+| M2-M0-02 | 手机号加密与 hash 写路径 | `db/migration/V6*`、`apps/api/modules/m0/**`、契约 | M1 | Review（V6 + 契约 0.5.0 + 用户管理；待独立 review） |
 | M2-M0-03 | E2E-04 越权 + 登录 E2E + 覆盖率 ratchet 清理 | `apps/web/e2e/**`、各 `src/test/**`、根 pom | M1 | Ready |
 | M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Ready |
 | M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Blocked |
@@ -45,6 +45,13 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
   用户 CRUD 契约（扩展 auth.yaml 或新 m0.yaml 的用户管理端点）、写入/查询/脱敏返回。
 - 验收：明文不入库、`phone_hash` 精确查询命中、密钥轮换说明、日志/响应无明文、越权 403；单测 + 集成。
 - 写域：`db/migration/V6__m0_phone_crypto.sql`、`apps/api/modules/m0/**`、契约、`docs/modules/m0/README.md`。
+- 落地说明（Review）：迁移文件为 `db/migration/V6__m0_user_phone_crypto.sql`（`phone_key_id`/`phone_updated_at`
+  + `ck_sys_user_phone_crypto` 四列一致性约束 + `phone_hash` 部分索引 + `m0:user:read|write` 仅授 SYS_ADMIN，
+  V2 历史 `user:read/write` 保留）；`PhoneCrypto`（AES-256-GCM，`ANESOP_FIELD_KEY`）、`PhoneHasher`
+  （HMAC-SHA-256，`ANESOP_PHONE_PEPPER`）、`FieldCryptoKeyProvider`（prod 缺失/非法拒绝启动，dev/test 自动生成并 WARN）；
+  `UserAdminService` + `GET/POST /v1/auth/users`、`GET/PUT /v1/auth/users/{userId}`、
+  `/password-reset`（契约 0.5.0，baseline/TS/Java 同步）；DTO 只返回 `phoneMasked`；
+  USER_CREATE/USER_UPDATE/PASSWORD_RESET 审计 detail 不含手机号。测试：24 单测 + 7 集成 + 迁移与启动守卫用例。
 
 ### M2-M0-03 E2E 与覆盖率清理
 - 目标：E2E-04 权限越权（登录→无权限访问→403 页面）、登录提交 E2E、E2E-01 排程冲突（依赖 M2-M2-01，
@@ -83,7 +90,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 1. 覆盖率 ratchet（到期 2026-12-18，ADR-0008）。
 2. devDependencies 漏洞例外（glob/tinypool，到期 2026-12-18）。
 3. data_scope 绑定表（M2-M0-01）。
-4. phone 写路径（M2-M0-02）。
+4. phone 写路径（M2-M0-02）——已完成，待 review。
 5. E2E-01/04 与登录提交 E2E（M2-M0-03 部分）。
 6. springdoc 全量导出 vs baseline drift（M0 域）。
 7. nginx 非 root 镜像（M6 前，EXT-08 解除后实测）。
