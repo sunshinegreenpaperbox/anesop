@@ -3,3 +3,9 @@ packages:
   - packages/*
 storeDir: .pnpm-store
 cacheDir: .pnpm-cache
+# 依赖安装脚本：pnpm 10 默认忽略、pnpm 11 起需显式批准。
+# allowBuilds 为 pnpm 11 字段；onlyBuiltDependencies 为 pnpm 10 字段，二者并存以兼容 CI 工具链。
+allowBuilds:
+  esbuild: true
+onlyBuiltDependencies:
+  - esbuild

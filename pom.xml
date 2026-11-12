@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    ANESOP 父 POM（S0-02）。
+    继承 spring-boot-starter-parent 以获得 Boot 依赖管理与插件基线；
+    所有第三方版本在此统一锁定，子模块不得自写版本（见 AGENTS.md「技术栈锁定」）。
+  -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.4.5</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.anesop</groupId>
+  <artifactId>anesop-parent</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>ANESOP :: Parent</name>
+  <description>ANESOP 麻醉信息平台父 POM：版本锁定与构建基线</description>
+
+  <modules>
+    <module>apps/api</module>
+  </modules>
+
+  <properties>
+    <java.version>21</java.version>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <!-- 持久层与数据库迁移 -->
+    <mybatis-plus.version>3.5.9</mybatis-plus.version>
+    <flyway.version>10.20.1</flyway.version>
+    <h2.version>2.3.232</h2.version>
+    <!-- PostgreSQL JDBC 驱动版本由 Spring Boot BOM 管理，不在此覆盖 -->
+
+    <!-- 接口文档：springdoc-openapi-bom:2.7.0 未在 Maven Central 发布，
+         故锁定 starter 2.7.0（与 Boot 3.4.x 对齐），由本文件 dependencyManagement 统一版本 -->
+    <springdoc.version>2.7.0</springdoc.version>
+
+    <!-- 测试与架构校验 -->
+    <archunit.version>1.3.0</archunit.version>
+    <testcontainers.version>1.20.4</testcontainers.version>
+
+    <!-- 集成组件：本阶段只锁版本属性，依赖在 S0-09 采集网关任务中引入 -->
+    <camel.version>4.14.0</camel.version>
+    <hapi.version>2.5.1</hapi.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Testcontainers BOM（1.20.4；覆盖 Boot 3.4.5 默认的 1.20.6，见 CONTRACT 说明） -->
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- MyBatis-Plus：Spring Boot 3 专用 starter -->
+      <dependency>
+        <groupId>com.baomidou</groupId>
+        <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        <version>${mybatis-plus.version}</version>
+      </dependency>
+
+      <!-- Flyway：核心 + PostgreSQL 方言（Boot BOM 亦管理，此处显式锁定同一版本） -->
+      <dependency>
+        <groupId>org.flywaydb</groupId>
+        <artifactId>flyway-core</artifactId>
+        <version>${flyway.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.flywaydb</groupId>
+        <artifactId>flyway-database-postgresql</artifactId>
+        <version>${flyway.version}</version>
+      </dependency>
+
+      <!-- springdoc-openapi（starter 2.7.0，对齐 Boot 3.4.x） -->
+      <dependency>
+        <groupId>org.springdoc</groupId>
+        <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+        <version>${springdoc.version}</version>
+      </dependency>
+
+      <!-- ArchUnit：模块边界用例 -->
+      <dependency>
+        <groupId>com.tngtech.archunit</groupId>
+        <artifactId>archunit-junit5</artifactId>
+        <version>${archunit.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <!-- 可执行 JAR 只在 api-bootstrap 激活；其余模块不打包成 boot jar -->
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

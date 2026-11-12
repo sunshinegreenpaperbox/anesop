@@ -7,9 +7,9 @@
 
 | ID | 任务 | 写域 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|---|
-| S0-01 | 仓库初始化与协作资产 | 根目录、`.github/` | — | 0.5 天 | Ready |
-| S0-02 | monorepo 骨架 | `apps/`、`packages/`、`services/`、`db/`、`deploy/`、`pom.xml`、`package.json` | S0-01 | 2 天 | Ready |
-| S0-03 | 静态检查与提交规范 | 根配置文件、`scripts/` | S0-02 | 1 天 | Ready |
+| S0-01 | 仓库初始化与协作资产 | 根目录、`.github/` | — | 0.5 天 | Done |
+| S0-02 | monorepo 骨架 | `apps/`、`packages/`、`services/`、`db/`、`deploy/`、`pom.xml`、`package.json` | S0-01 | 2 天 | Done |
+| S0-03 | 静态检查与提交规范 | 根配置文件、`scripts/` | S0-02 | 1 天 | In Progress |
 | S0-04 | CI 流水线 | `.github/workflows/`、`scripts/` | S0-02/03/11 | 1.5 天 | Ready |
 | S0-05 | 契约基线（OpenAPI 3.1） | `packages/contracts/`、`docs/api/` | S0-02 | 2 天 | Ready |
 | S0-06 | 数据库迁移基线 | `db/migration/`、`apps/api/modules/m0/` | S0-02 | 1.5 天 | Ready |

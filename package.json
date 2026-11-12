@@ -1,0 +1,16 @@
+{
+  "name": "anesop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ANESOP 麻醉信息平台 monorepo（前端工作区与统一脚本入口）",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -C apps/web build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -C apps/web exec vue-tsc --noEmit",
+    "test:unit": "pnpm -r --if-present test:unit",
+    "e2e": "pnpm -r --if-present e2e"
+  }
+}

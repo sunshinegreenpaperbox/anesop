@@ -1,0 +1,59 @@
+# ANESOP API 基础配置（S0-02 骨架）
+# 只放基础设施配置；业务配置随各模块在后续任务中补充。
+spring:
+  application:
+    name: anesop-api
+  profiles:
+    default: dev
+  jackson:
+    time-zone: Asia/Shanghai
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  info:
+    env:
+      enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+  default-produces-media-type: application/json
+
+info:
+  app:
+    name: ANESOP
+    description: 麻醉信息平台（围术期全流程）
+
+---
+# 开发环境
+spring:
+  config:
+    activate:
+      on-profile: dev
+logging:
+  level:
+    com.anesop: DEBUG
+
+---
+# 测试环境（CI / 本地自动化测试）
+spring:
+  config:
+    activate:
+      on-profile: test
+logging:
+  level:
+    com.anesop: INFO

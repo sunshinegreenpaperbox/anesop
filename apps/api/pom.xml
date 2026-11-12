@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.anesop</groupId>
+    <artifactId>anesop-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>anesop-api</artifactId>
+  <packaging>pom</packaging>
+  <name>ANESOP :: API（模块化单体）</name>
+  <description>M0–M8 模块聚合：每个模块分 api（对外契约）与 impl（实现与数据访问）</description>
+
+  <modules>
+    <module>api-bootstrap</module>
+    <module>modules/m0</module>
+    <module>modules/m1</module>
+    <module>modules/m2</module>
+    <module>modules/m3</module>
+    <module>modules/m4</module>
+    <module>modules/m5</module>
+    <module>modules/m6</module>
+    <module>modules/m7</module>
+    <module>modules/m8</module>
+  </modules>
+</project>
