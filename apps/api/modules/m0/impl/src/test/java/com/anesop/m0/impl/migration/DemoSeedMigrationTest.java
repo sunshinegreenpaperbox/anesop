@@ -51,10 +51,17 @@ class DemoSeedMigrationTest {
                 "SELECT count(*) FROM m0_platform.sys_role", Integer.class)).isEqualTo(6);
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM m0_platform.sys_dict_item", Integer.class)).isEqualTo(22);
+        // M2-M0-01 追加 demo_dept / demo_self 两个受限演示账号（SYNTHETIC）。
         assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM m0_platform.sys_user", Integer.class)).isEqualTo(1);
+                "SELECT count(*) FROM m0_platform.sys_user", Integer.class)).isEqualTo(3);
         assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM m0_platform.sys_user_role", Integer.class)).isEqualTo(1);
+                "SELECT count(*) FROM m0_platform.sys_user_role", Integer.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_org", Integer.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_user_org", Integer.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_user_room", Integer.class)).isEqualTo(1);
 
         Map<String, Object> admin = jdbc.queryForMap(
                 "SELECT id, username, display_name, employee_no, password_hash, must_change_password, status "
@@ -78,6 +85,35 @@ class DemoSeedMigrationTest {
                         + "WHERE u.username = 'demo_admin'",
                 String.class);
         assertThat(adminRoleCode).isEqualTo("SYS_ADMIN");
+
+        // 数据范围演示：DEPT 用户绑定麻醉科，SELF 用户按角色且不因绑定放大范围。
+        String deptScope = jdbc.queryForObject("""
+                SELECT o.code FROM m0_platform.sys_user u
+                JOIN m0_platform.sys_user_org uo ON uo.user_id = u.id
+                JOIN m0_platform.sys_org o ON o.id = uo.org_id
+                WHERE u.username = 'demo_dept' AND uo.is_primary
+                """, String.class);
+        assertThat(deptScope).isEqualTo("DEPT-ANES");
+        assertThat(jdbc.queryForObject("""
+                SELECT r.data_scope FROM m0_platform.sys_user u
+                JOIN m0_platform.sys_user_role ur ON ur.user_id = u.id
+                JOIN m0_platform.sys_role r ON r.id = ur.role_id
+                WHERE u.username = 'demo_dept'
+                """, String.class)).isEqualTo("DEPT");
+        assertThat(jdbc.queryForObject("""
+                SELECT r.data_scope FROM m0_platform.sys_user u
+                JOIN m0_platform.sys_user_role ur ON ur.user_id = u.id
+                JOIN m0_platform.sys_role r ON r.id = ur.role_id
+                WHERE u.username = 'demo_self'
+                """, String.class)).isEqualTo("SELF");
+        assertThat(jdbc.queryForList("""
+                SELECT o.org_type FROM m0_platform.sys_org o ORDER BY o.code
+                """, String.class)).containsExactly("DEPT", "DEPT", "SITE");
+        System.out.printf("[M2-M0-01][demo] demo_dept dept=%s sys_org=%d sys_user_org=%d sys_user_room=%d%n",
+                deptScope,
+                jdbc.queryForObject("SELECT count(*) FROM m0_platform.sys_org", Integer.class),
+                jdbc.queryForObject("SELECT count(*) FROM m0_platform.sys_user_org", Integer.class),
+                jdbc.queryForObject("SELECT count(*) FROM m0_platform.sys_user_room", Integer.class));
         System.out.printf("[B-1][demo] locations=%s sys_user=%d demo_admin=%s role=%s must_change_password=%s%n",
                 MigrationTestSupport.demoLocations(),
                 jdbc.queryForObject("SELECT count(*) FROM m0_platform.sys_user", Integer.class),

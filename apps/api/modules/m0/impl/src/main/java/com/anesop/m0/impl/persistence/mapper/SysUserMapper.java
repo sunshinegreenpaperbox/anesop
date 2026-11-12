@@ -2,9 +2,11 @@ package com.anesop.m0.impl.persistence.mapper;
 
 import com.anesop.m0.impl.persistence.entity.SysUser;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import java.util.List;
 import java.util.UUID;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 /**
@@ -53,6 +55,21 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
               AND locked_until <= now()
             """)
     int resetExpiredLock(@Param("userId") UUID userId);
+
+    /**
+     * 全部启用用户标识（未删除且 status=1）；数据范围 ALL 的示例查询使用。
+     *
+     * <p>只返回主键，不返回姓名/工号/手机号；调用方仍需按最小必要原则使用。
+     *
+     * @return 用户标识列表（升序）
+     */
+    @Select("""
+            SELECT id
+            FROM m0_platform.sys_user
+            WHERE deleted = false AND status = 1
+            ORDER BY id
+            """)
+    List<UUID> selectAllActiveUserIds();
 
     /**
      * 修改口令并清除强制改密标记、失败计数与锁定（成功改密后允许立即登录）。

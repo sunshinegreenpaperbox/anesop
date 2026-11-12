@@ -5,6 +5,8 @@ import com.anesop.m0.api.security.DataScopeAssignment;
 import com.anesop.m0.api.security.DataScopeAssignments;
 import com.anesop.m0.api.security.DataScopeResolver;
 import com.anesop.m0.impl.persistence.mapper.SysRoleMapper;
+import com.anesop.m0.impl.persistence.mapper.SysUserOrgMapper;
+import com.anesop.m0.impl.persistence.mapper.SysUserRoomMapper;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -16,15 +18,22 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * 数据权限解析实现（S0-07 / S-8）：读取 {@code sys_role.data_scope}（联表 sys_user_role）。
+ * 数据权限解析实现（M2-M0-01，方案书 §3.9.2）。
+ *
+ * <p>解析顺序：{@code sys_role.data_scope}（联表 sys_user_role）→ 按范围类型取绑定表
+ * {@code sys_user_org}（SITE/DEPT）与 {@code sys_user_room}（ROOM，仅 status=1）。
  *
  * <p>安全语义（fail-closed）：
  * <ul>
- *   <li>用户无角色、所有角色范围为空、出现未知取值或查询异常 → 返回
- *       {@link DataScopeAssignments#denied()}（{@link DataScope#NONE}），调用方必须拒绝；</li>
- *   <li>合法取值 ALL/SITE/DEPT/ROOM/SELF 按角色映射，去重后返回；含 ALL 即视为 ALL；</li>
- *   <li>角色/用户与科室、术间、患者的绑定表（scopeIds）在 M1 补齐。</li>
+ *   <li>用户无角色、角色范围为空、出现未知取值（含 NONE）或查询异常 → 返回
+ *       {@link DataScopeAssignments#denied()}，调用方必须拒绝；</li>
+ *   <li>任一角色 ALL → 直接返回 ALL（不受绑定表影响，也不为它查绑定表）；</li>
+ *   <li>SITE/DEPT/ROOM 属于“必须有绑定”的范围：角色声明了但绑定行为空时整体拒绝，
+ *       避免配置缺失被静默降级为“看全部”或“看空”；SELF 按角色语义无需绑定；</li>
+ *   <li>多个角色取并集（去重、保序）；scopeIds 为字符串 UUID，排序稳定便于断言与审计。</li>
  * </ul>
+ *
+ * <p>实现无状态（不缓存用户范围），权限与绑定变更即时生效；并发解析互不影响。
  */
 @Component
 public class DefaultDataScopeResolver implements DataScopeResolver {
@@ -32,13 +41,19 @@ public class DefaultDataScopeResolver implements DataScopeResolver {
     private static final Logger LOG = LoggerFactory.getLogger(DefaultDataScopeResolver.class);
 
     private final SysRoleMapper roleMapper;
+    private final SysUserOrgMapper userOrgMapper;
+    private final SysUserRoomMapper userRoomMapper;
 
-    public DefaultDataScopeResolver(SysRoleMapper roleMapper) {
+    public DefaultDataScopeResolver(SysRoleMapper roleMapper,
+            SysUserOrgMapper userOrgMapper,
+            SysUserRoomMapper userRoomMapper) {
         this.roleMapper = roleMapper;
+        this.userOrgMapper = userOrgMapper;
+        this.userRoomMapper = userRoomMapper;
     }
 
     @Override
-    public List<DataScopeAssignment> resolve(UUID userId) {
+    public DataScopeAssignments resolve(UUID userId) {
         if (userId == null) {
             return DataScopeAssignments.denied();
         }
@@ -66,13 +81,60 @@ public class DefaultDataScopeResolver implements DataScopeResolver {
         }
 
         if (scopes.contains(DataScope.ALL)) {
-            return List.of(new DataScopeAssignment(DataScope.ALL, List.of()));
+            return DataScopeAssignments.of(List.of(new DataScopeAssignment(DataScope.ALL, List.of())));
         }
+
         List<DataScopeAssignment> assignments = new ArrayList<>(scopes.size());
-        for (DataScope scope : scopes) {
-            assignments.add(new DataScopeAssignment(scope, List.of()));
+        try {
+            for (DataScope scope : scopes) {
+                List<String> scopeIds = switch (scope) {
+                    case SITE -> orgScopeIds(userId, DataScope.SITE);
+                    case DEPT -> orgScopeIds(userId, DataScope.DEPT);
+                    case ROOM -> roomScopeIds(userId);
+                    case SELF -> List.of();
+                    default -> null;
+                };
+                if (scopeIds == null) {
+                    LOG.warn("数据范围类型不支持，按拒绝处理：userId={}", userId);
+                    return DataScopeAssignments.denied();
+                }
+                if (requiresBinding(scope) && scopeIds.isEmpty()) {
+                    // 角色声明了 SITE/DEPT/ROOM 但没有任何生效绑定 → 拒绝（未绑定不得放行）。
+                    LOG.warn("数据范围缺少绑定，按拒绝处理：userId={}, scope={}", userId, scope);
+                    return DataScopeAssignments.denied();
+                }
+                assignments.add(new DataScopeAssignment(scope, scopeIds));
+            }
+        } catch (RuntimeException queryFailure) {
+            LOG.error("读取数据范围绑定表失败，按拒绝处理：userId={}", userId, queryFailure);
+            return DataScopeAssignments.denied();
         }
-        return List.copyOf(assignments);
+        return DataScopeAssignments.of(assignments);
+    }
+
+    private List<String> orgScopeIds(UUID userId, DataScope orgType) {
+        return toStrings(userOrgMapper.selectOrgIdsByUserIdAndType(userId, orgType.name()));
+    }
+
+    private List<String> roomScopeIds(UUID userId) {
+        return toStrings(userRoomMapper.selectActiveRoomIdsByUserId(userId));
+    }
+
+    private static boolean requiresBinding(DataScope scope) {
+        return scope == DataScope.SITE || scope == DataScope.DEPT || scope == DataScope.ROOM;
+    }
+
+    private static List<String> toStrings(List<UUID> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        Set<String> unique = new LinkedHashSet<>();
+        for (UUID id : ids) {
+            if (id != null) {
+                unique.add(id.toString());
+            }
+        }
+        return List.copyOf(unique);
     }
 
     private static DataScope parse(String raw) {

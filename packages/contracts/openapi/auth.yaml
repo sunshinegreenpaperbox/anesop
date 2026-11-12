@@ -6,7 +6,7 @@ info:
     ANESOP 平台 M0 公共支撑的认证域契约。覆盖本地/AD/LDAP/SSO 登录、JWT 刷新、登出与
     “当前用户 + 角色 + 权限点 + 数据范围”查询，对应方案书 §2.4.1（M0 公共支撑）与
     §3.9.2（RBAC 与数据权限）。所有示例均为 SYNTHETIC 合成数据，不含真实患者或账号信息。
-  version: 0.3.0
+  version: 0.4.0
   contact:
     name: ANESOP 项目组
   license:
@@ -253,6 +253,51 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /v1/auth/data-scope/users:
+    get:
+      operationId: listUsersInDataScope
+      tags:
+        - 认证与令牌
+      summary: 按数据范围查询可见用户（示例接口）
+      description: |
+        M2-M0-01 数据范围绑定的受保护示例接口：按调用者生效的数据范围（ALL/SITE/DEPT/ROOM/SELF）
+        过滤可见用户标识。数据范围为空（未绑定，fail-closed 为 NONE）或请求对象超出范围时返回 403，
+        并由服务端写入 ACCESS_DENIED 审计；只返回用户标识，不含姓名、工号、手机号等敏感字段。
+        多院区/术间主数据分别由 M0 组织表与 M2-M2-01 术间主数据提供，本接口只做范围过滤示例。
+      parameters:
+        - name: orgId
+          in: query
+          description: 组织标识（院区/科室 UUID）；提供时只返回该组织成员，超出数据范围返回 403。
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: roomId
+          in: query
+          description: 术间标识（UUID，逻辑外键，主数据见 M2-M2-01）；提供时只返回该术间授权成员，超出数据范围返回 403。
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 可见用户标识列表（UUID 字符串，去重升序）；无可见数据时为空数组。
+          content:
+            application/json:
+              schema:
+                type: array
+                description: 可见用户标识列表。
+                items:
+                  type: string
+              example:
+                - '10000000-0000-4000-8000-000000000001'
+                - '10000000-0000-4000-8000-000000000002'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 components:
   securitySchemes:
     bearerAuth:
@@ -495,7 +540,9 @@ components:
       description: |
         数据权限范围，对应 §3.9.2 的全院/院区/科室/术间/本人患者五类。
         与 sys_role.data_scope 一一映射：ALL→ALL、SITE→SITE、DEPT→DEPARTMENT、
-        ROOM→ROOM、SELF→OWN_PATIENTS；M1 起 scopeIds 由范围绑定表填充。
+        ROOM→ROOM、SELF→OWN_PATIENTS；M2-M0-01 起 scopeIds 由绑定表填充
+        （SITE/DEPT 取 sys_user_org、ROOM 取 sys_user_room；未绑定或查询失败时 dataScopes 为空数组，
+        表示无任何数据权限，即 fail-closed）。
       required:
         - type
         - scopeIds

@@ -17,6 +17,7 @@ import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m0.api.security.AuthService;
 import com.anesop.m0.api.security.AuthUser;
 import com.anesop.m0.api.security.DataScopeAssignment;
+import com.anesop.m0.api.security.DataScopeAssignments;
 import com.anesop.m0.api.security.DataScopeResolver;
 import com.anesop.m0.api.security.PasswordPolicy;
 import com.anesop.m0.impl.persistence.entity.SysRefreshToken;
@@ -280,11 +281,15 @@ public class AuthServiceImpl implements AuthService {
     private AuthUser loadAuthUser(SysUser user) {
         List<String> roles = roleMapper.selectCodesByUserId(user.getId());
         List<String> permissions = permissionMapper.selectCodesByUserId(user.getId());
-        List<DataScopeAssignment> dataScopes = dataScopeResolver.resolve(user.getId());
+        DataScopeAssignments dataScopes = dataScopeResolver.resolve(user.getId());
         boolean mustChangePassword = user.getMustChangePassword() == null || user.getMustChangePassword();
-        // 院区列表在多院区装配（M1）后由组织表解析；单院部署返回空数组。
+        // siteIds 取 SITE 绑定（M2-M0-01）：ALL/无 SITE 绑定时为空数组，表示不按院区收窄。
+        List<String> siteIds = dataScopes.assignments().stream()
+                .filter(assignment -> assignment.type() == com.anesop.m0.api.security.DataScope.SITE)
+                .flatMap(assignment -> assignment.scopeIds().stream())
+                .toList();
         return new AuthUser(user.getId(), user.getUsername(), user.getDisplayName(), null,
-                mustChangePassword, roles, permissions, dataScopes, List.of());
+                mustChangePassword, roles, permissions, dataScopes.assignments(), siteIds);
     }
 
     private CreatedRefreshToken createRefreshToken(UUID userId, AuthRequestContext context) {

@@ -2,7 +2,10 @@ package com.anesop.m0.impl.migration;
 
 import com.anesop.m0.impl.persistence.handler.UuidTypeHandler;
 import com.anesop.m0.impl.persistence.mapper.SysAuditLogMapper;
+import com.anesop.m0.impl.persistence.mapper.SysRoleMapper;
 import com.anesop.m0.impl.persistence.mapper.SysUserMapper;
+import com.anesop.m0.impl.persistence.mapper.SysUserOrgMapper;
+import com.anesop.m0.impl.persistence.mapper.SysUserRoomMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
@@ -40,6 +43,10 @@ final class MybatisTestSupport {
         SqlSessionFactory sqlSessionFactory = factory.getObject();
         sqlSessionFactory.getConfiguration().addMapper(SysUserMapper.class);
         sqlSessionFactory.getConfiguration().addMapper(SysAuditLogMapper.class);
+        // M2-M0-01：数据范围解析与示例查询所需的角色/组织/术间绑定 Mapper。
+        sqlSessionFactory.getConfiguration().addMapper(SysRoleMapper.class);
+        sqlSessionFactory.getConfiguration().addMapper(SysUserOrgMapper.class);
+        sqlSessionFactory.getConfiguration().addMapper(SysUserRoomMapper.class);
         return sqlSessionFactory;
     }
 }

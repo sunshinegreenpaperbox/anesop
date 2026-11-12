@@ -130,6 +130,29 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/auth/data-scope/users': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 按数据范围查询可见用户（示例接口）
+     * @description M2-M0-01 数据范围绑定的受保护示例接口：按调用者生效的数据范围（ALL/SITE/DEPT/ROOM/SELF）
+     *     过滤可见用户标识。数据范围为空（未绑定，fail-closed 为 NONE）或请求对象超出范围时返回 403，
+     *     并由服务端写入 ACCESS_DENIED 审计；只返回用户标识，不含姓名、工号、手机号等敏感字段。
+     *     多院区/术间主数据分别由 M0 组织表与 M2-M2-01 术间主数据提供，本接口只做范围过滤示例。
+     */
+    get: operations['listUsersInDataScope']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -225,7 +248,9 @@ export interface components {
     /**
      * @description 数据权限范围，对应 §3.9.2 的全院/院区/科室/术间/本人患者五类。
      *     与 sys_role.data_scope 一一映射：ALL→ALL、SITE→SITE、DEPT→DEPARTMENT、
-     *     ROOM→ROOM、SELF→OWN_PATIENTS；M1 起 scopeIds 由范围绑定表填充。
+     *     ROOM→ROOM、SELF→OWN_PATIENTS；M2-M0-01 起 scopeIds 由绑定表填充
+     *     （SITE/DEPT 取 sys_user_org、ROOM 取 sys_user_room；未绑定或查询失败时 dataScopes 为空数组，
+     *     表示无任何数据权限，即 fail-closed）。
      */
     DataScope: {
       /**
@@ -685,6 +710,40 @@ export interface operations {
           'application/json': components['schemas']['SessionPage']
         }
       }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  listUsersInDataScope: {
+    parameters: {
+      query?: {
+        /** @description 组织标识（院区/科室 UUID）；提供时只返回该组织成员，超出数据范围返回 403。 */
+        orgId?: string
+        /** @description 术间标识（UUID，逻辑外键，主数据见 M2-M2-01）；提供时只返回该术间授权成员，超出数据范围返回 403。 */
+        roomId?: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 可见用户标识列表（UUID 字符串，去重升序）；无可见数据时为空数组。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example [
+           *       "10000000-0000-4000-8000-000000000001",
+           *       "10000000-0000-4000-8000-000000000002"
+           *     ]
+           */
+          'application/json': string[]
+        }
+      }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
     }

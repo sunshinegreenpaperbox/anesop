@@ -1,8 +1,10 @@
 # M0 公共支撑 — 认证与权限骨架（S0-07）
 
-> 状态：S0-07 完成（安全评审 B-1/B-2/B-3 与 S-1…S-11 已修）。依据：`packages/contracts/openapi/auth.yaml` 0.3.0、方案书 §2.1.2（角色 R1–R11）、
+> 状态：S0-07 完成（安全评审 B-1/B-2/B-3 与 S-1…S-11 已修）+ M2-M0-01 数据范围绑定（V5）。
+> 依据：`packages/contracts/openapi/auth.yaml` 0.4.0、方案书 §2.1.2（角色 R1–R11）、
 > §2.4.1（M0 公共支撑）、§3.9.1（等保身份鉴别/审计）、§3.9.2（RBAC 与数据权限）、§3.9.5（OAuth2/JWT）。
-> 迁移：`db/migration/V1`（结构）、`V2`（平台预置）、`V3__m0_auth_token.sql`（刷新令牌 + `m0:auth:read`/`m0:auth:write` + `phone_hash`）。
+> 迁移：`db/migration/V1`（结构）、`V2`（平台预置）、`V3__m0_auth_token.sql`（刷新令牌 + `m0:auth:read`/`m0:auth:write` + `phone_hash`）、
+> `V5__m0_data_scope.sql`（`sys_org`/`sys_user_org`/`sys_user_room` + `m0:org:read`/`m0:org:write`，M2-M0-01）。
 
 ## 0. 使用方式（本文档怎么用）
 
@@ -25,6 +27,7 @@
 | POST | `/v1/auth/password` | authenticated | 修改口令（校验旧口令 + 新口令强度）；204；强制改密账号可用 |
 | GET | `/v1/auth/me` | authenticated | 角色、权限点、数据范围、`mustChangePassword` 快照（实时查库） |
 | GET | `/v1/auth/sessions` | `PERM_m0:auth:read` | 当前用户会话分页（page/size），越权 403 |
+| GET | `/v1/auth/data-scope/users` | authenticated + 数据范围 | 数据范围示例接口：按 `orgId`/`roomId` 过滤可见用户标识；范围为空或越权 403 + `ACCESS_DENIED` 审计 |
 
 错误响应统一 `{code,message,traceId,details}`：`AUTH_UNAUTHORIZED`(401)、`AUTH_FORBIDDEN`(403)、
 `PARAM_INVALID`(400)、`BUSINESS_RULE_VIOLATION`(422)、`RATE_LIMITED`(429)。
@@ -86,17 +89,27 @@
 > 说明：R12 一期是否启用未定，不建账号角色；M1 只新增上表标注“M1”的角色，不改 V2 已有角色码。
 > 数据范围值域：`ALL / SITE / DEPT / ROOM / SELF`（`sys_role.data_scope`）。
 
-## 4. 数据权限（S-8：读取 data_scope，默认拒绝）
+## 4. 数据权限（M2-M0-01：角色范围 + 绑定表，默认拒绝）
 
 - `DataScope`（m0-api）：`ALL/SITE/DEPT/ROOM/SELF`，另含内部拒绝标记 `NONE`（不输出到契约）。
   契约输出映射 `ALL→ALL`、`SITE→SITE`、`DEPT→DEPARTMENT`、`ROOM→ROOM`、`SELF→OWN_PATIENTS`；
   `NONE` 映射为空 `dataScopes` 数组。
-- `DefaultDataScopeResolver`：联表 `sys_user_role → sys_role.data_scope` 读取用户角色范围；
-  无角色、空值、未知取值或查询异常一律 fail-closed 返回 `NONE`
-  （`DataScopeAssignments.isDenied(...)` 辅助判断），绝不回退为 ALL/SELF。
-- 多个角色取并集（含 ALL 即 ALL）；角色/用户与科室、术间、患者的绑定表（`scopeIds`）
-  在 M1 补齐。`siteIds` 单院部署返回空数组，多院区在 M1 由组织表解析。
-- MyBatis 数据权限拦截器（§3.9.2 自动注入条件）不在 S0 范围，M1 实现。
+- **绑定表（V5）**：`sys_org`（`org_type`=SITE 院区 / DEPT 科室，树形 `parent_id`+`path`）、
+  `sys_user_org`（用户—组织，复合主键 + 每用户最多一个主键 `is_primary`）、
+  `sys_user_room`（用户—术间，唯一 `(user_id, room_id)`，`status=1` 才生效；`room_id` 为逻辑外键，
+  术间主数据由 M2-M2-01 在 `m1_sched` 建立）。
+- **解析**：`DefaultDataScopeResolver` 先读 `sys_user_role → sys_role.data_scope`，再按类型取绑定：
+  `SITE`/`DEPT` ← `sys_user_org`（组织需 status=1、未删除），`ROOM` ← `sys_user_room`（status=1），
+  `SELF` 无对象标识。返回 `DataScopeAssignments`（`assignments()` / `isDenied()` /
+  `isUnrestricted()` / `allowedOrgIds()` / `allowedRoomIds()`）。
+- **fail-closed**：无角色、范围为空/未知、**声明 SITE/DEPT/ROOM 但无生效绑定**、查询异常 → `NONE`，
+  调用方必须拒绝（403），绝不回退为 ALL/SELF；任一角色 `ALL` → 全院可见（不查绑定表）。
+- `/v1/auth/me` 的 `dataScopes[].scopeIds` 返回真实绑定（DEPT→科室 UUID、ROOM→术间 UUID、SELF/ALL→空），
+  `siteIds` 取 SITE 绑定（ALL 或无 SITE 绑定时为空数组）。
+- **示例接口** `GET /v1/auth/data-scope/users`：范围为空或 `orgId`/`roomId` 超出范围 → 403 并写
+  `ACCESS_DENIED` 审计；`orgId`+`roomId` 同时给出取交集；只返回用户 UUID，不含姓名/工号/手机号。
+- 后续：组织 CRUD 接口（`m0:org:read`/`m0:org:write` 已由 V5 授予 `SYS_ADMIN`）与 MyBatis 数据权限
+  拦截器自动注入条件在 M1/M2 落地；多院区 `siteIds` 收窄在 M1 组织主数据完成后启用。
 
 ## 5. 审计
 
@@ -153,7 +166,13 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 - `RateLimitIntegrationTest`（2）：低阈值验证登录/刷新 429。
 - `AuthAuditFailOpenTest`（1）：审计故障时登录仍 200 且 `auth.audit.failures` 递增。
 - `AuthAcceptanceFlowTest`：验收流程打印 6 步响应与三类审计记录。
-- 全量 78 个测试（api-contracts 4、m0-impl 28、api-bootstrap 46），Checkstyle 0 / SpotBugs 0。
+- `DefaultDataScopeResolverTest`（14）：ALL/DEPT/SITE/ROOM/SELF 解析、未绑定/未知/查询异常 fail-closed。
+- `DataScopeAssignmentsTest`（7）：拒绝标记、ALL 不受限、org/room 并集去重、空值忽略。
+- `DataScopePersistenceIntegrationTest`（8，真实 PG）：admin→ALL、DEPT→本科室 scopeIds、未绑定/无角色→NONE、
+  ROOM 仅绑定可见、SELF 仅本人、跨科室 403、8 线程并发解析一致。
+- `DataScopeApiIntegrationTest`（8）：`/me` 返回真实 scopeIds、DEPT 只看本科室、未绑定 403 + 审计、
+  ROOM 越权 403、admin 全院可见、springdoc 暴露新路径。
+- 全量 113 个测试（api-contracts 4、m0-impl 51、api-bootstrap 58），Checkstyle 0 / SpotBugs 0。
 - 集成测试共用嵌入式 PostgreSQL 16（Docker 不可用 EXT-08），不使用 Docker、不使用真实患者数据。
 
 ## 8. 遗留与风险
@@ -162,7 +181,9 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 |---|---|---|
 | Redis 会话/吊销表 | 当前进程内吊销表，多实例部署失效；接口已留，替换实现即可 | M1/部署前 |
 | SSO / AD / LDAP / CA 签名 | 占位，非 LOCAL 认证返回 422 模糊文案 | BLOCKED-EXTERNAL EXT-05 |
-| 数据权限绑定表 | `data_scope` 已读取并 fail-closed；用户-科室/术间/患者绑定表未建（scopeIds 为空） | M1 |
+| 数据权限绑定表 | **已完成**（M2-M0-01 / V5）：`sys_org`/`sys_user_org`/`sys_user_room` + scopeIds 解析 | — |
+| 组织 CRUD 与术间主数据 | `m0:org:read/write` 已授权 SYS_ADMIN，但组织维护接口未建；术间主数据由 M2-M2-01 在 `m1_sched` 建立 | M2 |
+| 数据权限自动注入 | 当前由服务显式校验（示例接口）；MyBatis 拦截器自动注入 WHERE 条件待 M1 排程/记录查询落地 | M1 |
 | 并发会话上限 / 强制下线 | 仅按会话撤销刷新令牌，未限制同一账号并发会话数 | M1 |
 | phone 写路径 | V3 已加 `phone_hash varchar(128)`，实体已映射；`phone_enc`/`phone_hash` 的加密与 HMAC 写入（PhoneHashing + 密钥配置）未实现 | M1 |
 | 跨服务 trace 透传 | `X-Trace-Id` 由本服务生成，网关跨服务透传未做 | M1 |

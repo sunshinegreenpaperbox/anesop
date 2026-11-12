@@ -1,6 +1,7 @@
 # 数据库迁移与 schema 规范（db）
 
-> 状态：S0-06 基线（V1 结构 + V2 平台预置；演示种子为独立 location）。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
+> 状态：S0-06 基线 + V3（认证令牌）+ V4（M2 采集骨架）+ V5（数据范围绑定，M2-M0-01）；
+> 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
 
@@ -12,9 +13,11 @@ db/
 │   ├── V1__m0_platform_init.sql         # M0 结构基线（表/约束/索引/触发器）
 │   ├── V2__m0_platform_seed_synthetic.sql  # 平台预置基线（角色/权限/字典，无账号）
 │   ├── V3__m0_auth_token.sql               # 刷新令牌表 + m0:auth:* 权限点 + sys_user.phone_hash（S0-07）
+│   ├── V4__m2_anes_acquisition_init.sql    # M2 采集骨架（S0-09）
+│   ├── V5__m0_data_scope.sql               # 数据范围绑定表 sys_org/sys_user_org/sys_user_room + m0:org:*（M2-M0-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
-    └── V100__demo_admin_synthetic.sql   # demo_admin（SYNTHETIC，禁止进入生产）
+    └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
 ```
 
 - 命名固定为 `V<版本>__<描述>.sql`（双下划线，描述小写下划线，如
@@ -89,8 +92,10 @@ source scripts/env.sh
 - **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 2 条、
   二次 `migrate()` 执行 0 条、V1→V2 升级成功、约束/索引/注释存在、平台预置种子正确、
   `sys_user=0` 且无 `demo_admin`、审计表 UPDATE/DELETE/TRUNCATE 被数据库拒绝；
-- **演示路径**（追加 `db/seed/demo`）：V100 后 `demo_admin` 存在、绑定 `SYS_ADMIN`、
-  `must_change_password=true`、BCrypt 校验演示口令通过；
+- **演示路径**（追加 `db/seed/demo`）：V100 后 `demo_admin`（ALL）、`demo_dept`（DEPT，绑定麻醉科）、
+  `demo_self`（SELF）存在，`demo_admin` 绑定 `SYS_ADMIN`、`must_change_password=true`、BCrypt 校验演示口令通过；
+- **数据范围**（`DataScopePersistenceIntegrationTest`）：真实 PG 验证 ALL/DEPT/ROOM/SELF、未绑定 fail-closed、
+  并发解析一致；`DataScopeApiIntegrationTest` 验证 `/me` 返回真实 scopeIds、跨科室 403 + ACCESS_DENIED 审计；
 - **Mapper 集成**（`MybatisPersistenceTest`）：jsonb/inet TypeHandler 往返、软删除过滤、
   旧 version 更新影响行数为 0、审计触发器在 Mapper 路径仍拒绝改写。
 
@@ -180,13 +185,30 @@ V1 使用的 PG 特性**集中在 `m0_platform` 一个 schema**，避免扩散�
 
 | 编号 | 事项 | 承接点 |
 |---|---|---|
-| S-1 | user → dept/room 绑定表（用户与科室/术间的数据范围绑定） | S0-07 / M1 |
+| S-1 | user → dept/room 绑定表（用户与科室/术间的数据范围绑定） | **已完成**：V5 + `DefaultDataScopeResolver`（M2-M0-01） |
 | S-2 | `SYS_ADMIN` 权限拆分（平台管理员与业务管理员分离） | M1 实施基线 |
 | S-5 | `phone_hash` 列已由 V3 expand 就绪（varchar(128)，与 `phone_enc` 配套）；加密/HMAC 写路径 | M1 |
 | S-9 | 数据库最小权限 GRANT / initdb 脚本（迁移账号与应用账号分离） | S0-07 或 S0-10 |
 | Q-2 | 患者/术间表归属哪个 schema（M1 与 M2 边界） | M1 |
 | Q-3 | 多院区 `tenant_id`/`site_id` 字段引入时点（expand-contract） | M1 前 |
 | Q-4 | 审计按月分区/归档的门槛（行数、留存窗口与运维流程） | 首个真实数据前 |
+
+### 8.1 数据范围绑定表（V5，M2-M0-01）
+
+| 表 | 内容 | 关键约束 |
+|---|---|---|
+| `sys_org` | 组织机构（数据范围对象）：`org_type` = SITE 院区 / DEPT 科室，树形 `parent_id` + `path` | `uk_sys_org_code` 唯一；`ck_sys_org_org_type`；软删除不释放编码 |
+| `sys_user_org` | 用户—组织绑定：SITE/DEPT 范围 `scopeIds` 来源 | 复合主键 `(user_id, org_id)`；`uk_sys_user_org_primary` 保证每用户最多一个主科室 |
+| `sys_user_room` | 用户—术间绑定：ROOM 范围 `scopeIds` 来源 | 复合主键 `(user_id, room_id)`；`status=1` 才生效；`room_id` 为逻辑外键（术间主数据 M2-M2-01 在 `m1_sched` 建立） |
+
+- 解析语义（fail-closed）：角色声明 SITE/DEPT/ROOM 但无生效绑定、角色范围未知或查询异常 →
+  一律 `NONE`（接口 403），不得降级为 ALL/SELF；任一角色 `ALL` 即全院可见。
+- 生产迁移路径只建结构，不写组织/绑定数据（`FlywayMigrationTest#dataScopeBindingTablesAreReady` 断言为 0）；
+  演示/测试数据只在 `db/seed/demo` 与测试夹具中出现，均为 SYNTHETIC。
+- 回滚：forward-only。回滚时应用侧停止读取绑定表（范围 fail-closed 到 NONE）+ 前向修复；
+  不删除表（删除会丢失范围绑定证据，且 Flyway 不执行 undo）。
+- 后续：组织 CRUD 接口（`m0:org:read/write` 已由 V5 授予 SYS_ADMIN）在 M2 组织管理任务落地；
+  MyBatis 数据权限拦截器自动注入条件在 M1 排程/记录查询落地。
 
 补充说明：
 

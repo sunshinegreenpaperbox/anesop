@@ -76,7 +76,9 @@ class FlywayMigrationTest {
 
         assertThat(tables).contains(
                 "sys_user", "sys_role", "sys_permission", "sys_user_role", "sys_role_permission",
-                "sys_audit_log", "sys_dict_type", "sys_dict_item", "sys_refresh_token");
+                "sys_audit_log", "sys_dict_type", "sys_dict_item", "sys_refresh_token",
+                // M2-M0-01（V5）：数据范围绑定表
+                "sys_org", "sys_user_org", "sys_user_room");
         assertThat(historyCount()).isGreaterThanOrEqualTo(3);
     }
 
@@ -205,18 +207,19 @@ class FlywayMigrationTest {
 
         List<String> permissionCodes = jdbc.queryForList(
                 "SELECT code FROM m0_platform.sys_permission ORDER BY code", String.class);
-        assertThat(permissionCodes).hasSize(19)
+        assertThat(permissionCodes).hasSize(21)
                 .contains("auth:login", "user:read", "user:write", "role:read", "role:write",
                         "audit:read", "dict:read", "dict:write")
                 .contains("m0:access", "m1:access", "m2:access", "m3:access", "m4:access",
                         "m5:access", "m6:access", "m7:access", "m8:access")
-                .contains("m0:auth:read", "m0:auth:write");
+                .contains("m0:auth:read", "m0:auth:write")
+                .contains("m0:org:read", "m0:org:write");
 
         assertThat(jdbc.queryForList("SELECT code FROM m0_platform.sys_dict_type ORDER BY code", String.class))
                 .containsExactly("ASA", "CASE_STATUS", "OR_ROOM_STATUS", "ROLE_TYPE", "SEX",
                         "SURGERY_URGENCY");
         assertThat(countRows("sys_dict_item")).isEqualTo(22);
-        assertThat(countRows("sys_role_permission")).isEqualTo(44);
+        assertThat(countRows("sys_role_permission")).isEqualTo(46);
 
         // B-1 核心断言：生产迁移路径不产生任何账号，也没有演示账号及其角色绑定。
         assertThat(countRows("sys_user")).as("生产路径 sys_user 必须为 0").isZero();
@@ -259,6 +262,64 @@ class FlywayMigrationTest {
                 phoneHashColumns, refreshTokenTable,
                 jdbc.queryForList("SELECT code FROM m0_platform.sys_permission "
                         + "WHERE code LIKE 'm0:auth:%' ORDER BY code", String.class));
+    }
+
+    @Test
+    void dataScopeBindingTablesAreReady() {
+        migrateToLatest();
+
+        // sys_org：类型/状态/路径约束 + 唯一编码索引（数据范围对象）。
+        String orgTypeCheck = jdbc.queryForObject(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_sys_org_org_type'",
+                String.class);
+        assertThat(orgTypeCheck).contains("SITE", "DEPT");
+        assertThat(jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'm0_platform' "
+                        + "AND indexname = 'uk_sys_org_code'", String.class))
+                .contains("UNIQUE", "code");
+
+        // sys_user_org：复合主键 (user_id, org_id) + 主科室部分唯一索引。
+        String userOrgPrimaryKey = jdbc.queryForObject(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'pk_sys_user_org'",
+                String.class);
+        assertThat(userOrgPrimaryKey).contains("user_id", "org_id");
+        assertThat(jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'm0_platform' "
+                        + "AND indexname = 'uk_sys_user_org_primary'", String.class))
+                .contains("UNIQUE", "is_primary");
+
+        // sys_user_room：唯一 (user_id, room_id) + 术间反向索引；room_id 为逻辑外键（无物理 FK）。
+        assertThat(jdbc.queryForObject(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'pk_sys_user_room'",
+                String.class))
+                .contains("user_id", "room_id");
+        assertThat(jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'm0_platform' "
+                        + "AND indexname = 'idx_sys_user_room_room_id'", String.class))
+                .contains("room_id");
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM information_schema.table_constraints "
+                        + "WHERE table_schema = 'm0_platform' AND table_name = 'sys_user_room' "
+                        + "AND constraint_type = 'FOREIGN KEY' AND constraint_name = 'fk_sys_user_room_room'",
+                Integer.class))
+                .as("room_id 是跨模块逻辑外键，不得建物理外键")
+                .isZero();
+
+        // m0:org:* 权限点只授予 SYS_ADMIN，且不改变既有角色授权数量。
+        List<String> orgPermissionRoles = jdbc.queryForList("""
+                SELECT r.code FROM m0_platform.sys_permission p
+                JOIN m0_platform.sys_role_permission rp ON rp.permission_id = p.id
+                JOIN m0_platform.sys_role r ON r.id = rp.role_id
+                WHERE p.code LIKE 'm0:org:%' ORDER BY r.code
+                """, String.class);
+        assertThat(orgPermissionRoles).containsExactly("SYS_ADMIN", "SYS_ADMIN");
+
+        // 生产迁移路径不产生任何组织/绑定数据（只有结构）。
+        assertThat(countRows("sys_org")).isZero();
+        assertThat(countRows("sys_user_org")).isZero();
+        assertThat(countRows("sys_user_room")).isZero();
+        System.out.printf("[M2-M0-01][migration] sys_org=%d sys_user_org=%d sys_user_room=%d orgPermissions=%s%n",
+                countRows("sys_org"), countRows("sys_user_org"), countRows("sys_user_room"), orgPermissionRoles);
     }
 
     @Test
