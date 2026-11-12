@@ -66,9 +66,12 @@ rules:
       functionOptions:
         match: '[\u4e00-\u9fa5]'
 
-  # —— 项目约定：每个 operation 必须声明 401/403/404/409 ——
+  # —— 项目约定：错误响应的存在性与语义 ——
+  # 401 必备；需认证的 operation 必备 403；带 requestBody 必备 400；
+  # 路径含 {资源参数} 必备 404；409 仅允许状态变更操作声明；
+  # 所有 4xx/5xx 必须 $ref 到共享 components.responses 组件。
   error-responses:
-    description: 每个 operation 必须声明 401/403/404/409 四类错误响应。
+    description: 每个 operation 的错误响应必须齐全、条件化且引用共享 Error 响应组件。
     message: '{{error}}'
     severity: error
     given: $.paths[*][get,put,post,delete,patch]

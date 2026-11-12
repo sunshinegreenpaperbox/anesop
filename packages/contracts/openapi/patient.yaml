@@ -6,7 +6,7 @@ info:
     ANESOP 患者域契约。患者主索引以 HIS 为权威来源，本系统只读同步并按数据权限返回；
     手术申请以 HIS 申请号为幂等键接收，对应方案书 §2.4.1（M0 公共支撑）、§2.4.2（M1 手术排程）
     与 §3.5.3（I-01a/I-01b）。所有示例均为 SYNTHETIC 合成数据。
-  version: 0.1.0
+  version: 0.2.0
   contact:
     name: ANESOP 项目组
   license:
@@ -73,7 +73,7 @@ paths:
             default: 20
       responses:
         '200':
-          description: 患者分页列表。
+          description: 患者分页列表；不返回出生日期与住院号明文，仅返回脱敏值。
           content:
             application/json:
               schema:
@@ -84,10 +84,9 @@ paths:
                     patientNo: SYNTH-P-0001
                     name: 演示患者
                     gender: FEMALE
-                    birthDate: '1978-03-15'
-                    idCardMasked: 110101********1234
+                    idCardMasked: 110***********1234
                     phoneMasked: 138****0000
-                    inpatientNo: SYNTH-ZY-0001
+                    inpatientNoMasked: SYNTH-ZY-****-0001
                     departmentId: '2000000000000000001'
                     departmentName: 演示外科
                     siteId: '3000000000000000001'
@@ -105,10 +104,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/patients/{patientId}:
     get:
       operationId: getPatient
@@ -136,7 +131,7 @@ paths:
                 name: 演示患者
                 gender: FEMALE
                 birthDate: '1978-03-15'
-                idCardMasked: 110101********1234
+                idCardMasked: 110***********1234
                 phoneMasked: 138****0000
                 inpatientNo: SYNTH-ZY-0001
                 departmentId: '2000000000000000001'
@@ -153,8 +148,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/patients/{patientId}/surgery-applications:
     get:
       operationId: listPatientSurgeryApplications
@@ -224,8 +217,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/surgery-applications:
     post:
       operationId: createSurgeryApplication
@@ -276,14 +267,14 @@ paths:
                 updatedAt: '2026-11-08T10:00:00+08:00'
                 updatedBy: '1000000000000000001'
                 version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
   /v1/surgery-applications/{applicationId}:
     get:
       operationId: getSurgeryApplication
@@ -330,8 +321,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/surgery-applications/{applicationId}/cancel:
     post:
       operationId: cancelSurgeryApplication
@@ -365,6 +354,8 @@ paths:
                 $ref: '#/components/schemas/IdResponse'
               example:
                 id: '6000000000000000001'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -381,6 +372,19 @@ components:
       bearerFormat: JWT
       description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 头中。
   responses:
+    BadRequest:
+      description: 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0005
+            details:
+              - field: plannedSurgeryDate
+                reason: 必须为 YYYY-MM-DD 格式的日期
     Unauthorized:
       description: 未认证：未携带令牌、令牌过期或签名无效。
       content:
@@ -429,6 +433,19 @@ components:
             details:
               - field: version
                 reason: 提交版本落后于服务端当前版本
+    UnprocessableEntity:
+      description: 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 手术申请语义校验未通过
+            traceId: SYNTH-TRACE-0006
+            details:
+              - field: patientId
+                reason: 患者不在当前院区主索引内
   schemas:
     ErrorDetail:
       type: object
@@ -570,13 +587,70 @@ components:
               description: 出生日期；与年龄组合可能重识别，按最小必要返回。
             idCardMasked:
               type: string
-              description: 脱敏证件号（前 6 后 4）；完整值不出接口。
+              description: 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
+              examples:
+                - 110***********1234
             phoneMasked:
               type: string
               description: 脱敏手机号（前 3 后 4）。
             inpatientNo:
               type: string
-              description: 住院号；直接标识，按数据权限控制并记审计。
+              description: 住院号明文；仅授权角色可见，传输加密，展示脱敏，访问记审计。
+              x-restricted: true
+            departmentId:
+              type: string
+              description: 所属科室标识。
+            departmentName:
+              type: string
+              description: 所属科室名称。
+            siteId:
+              type: string
+              description: 院区标识（多院区维度）。
+    PatientSummary:
+      type: object
+      description: 患者列表视图；不返回出生日期与住院号明文，仅返回脱敏值。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - patientId
+            - patientNo
+            - name
+            - gender
+            - idCardMasked
+            - phoneMasked
+            - inpatientNoMasked
+            - departmentId
+            - departmentName
+            - siteId
+          properties:
+            patientId:
+              type: string
+              description: 患者标识（雪花 ID 字符串）。
+            patientNo:
+              type: string
+              description: 院内患者编号；示例统一使用 SYNTH-P-xxxx。
+            name:
+              type: string
+              description: 患者姓名；示例统一使用“演示患者”。
+            gender:
+              type: string
+              description: 性别。
+              enum:
+                - MALE
+                - FEMALE
+                - UNKNOWN
+            idCardMasked:
+              type: string
+              description: 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
+              examples:
+                - 110***********1234
+            phoneMasked:
+              type: string
+              description: 脱敏手机号（前 3 后 4）。
+            inpatientNoMasked:
+              type: string
+              description: 脱敏住院号；列表不返回住院号明文。
             departmentId:
               type: string
               description: 所属科室标识。
@@ -597,7 +671,7 @@ components:
           type: array
           description: 当前页患者列表。
           items:
-            $ref: '#/components/schemas/Patient'
+            $ref: '#/components/schemas/PatientSummary'
         meta:
           $ref: '#/components/schemas/PageMeta'
     SurgeryApplication:

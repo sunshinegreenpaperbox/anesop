@@ -4,9 +4,10 @@ info:
   summary: 术前访视、麻醉记录单读写、锁单与术后随访
   description: |
     ANESOP 麻醉记录域契约，对应方案书 §2.4.3（M2 麻醉信息管理）与 §3.4.2（麻醉记录单/事件实体）。
-    硬规则：记录以事件时间为准、补录标注录入时间与原因、锁单后只能生成修订版本、三方核查未完成
-    不允许锁单。所有示例均为 SYNTHETIC 合成数据。
-  version: 0.1.0
+    硬规则：记录以事件时间为准、补录标注录入时间与原因、锁单后只能生成修订版本、三方核查
+    （ThreeWayCheck 的 timeOutAt/signOutAt 均须记录）未完成不允许锁单。
+    所有示例均为 SYNTHETIC 合成数据。
+  version: 0.2.0
   contact:
     name: ANESOP 项目组
   license:
@@ -69,8 +70,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
     put:
       operationId: updatePreopVisit
       tags:
@@ -130,6 +129,8 @@ paths:
                 updatedAt: '2026-11-25T15:10:00+08:00'
                 updatedBy: '1000000000000000001'
                 version: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -189,8 +190,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
     put:
       operationId: updateAnesthesiaRecord
       tags:
@@ -255,6 +254,8 @@ paths:
                 updatedAt: '2026-12-01T08:56:00+08:00'
                 updatedBy: '1000000000000000001'
                 version: 6
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -271,7 +272,8 @@ paths:
       summary: 锁单
       description: |
         锁单后记录不可直接修改，修改只能生成修订版本并保留原值、修改人、时间、原因。
-        三方核查未完成或版本冲突时返回 409；CA 签名失败不阻断锁单，签名状态置为 PENDING。
+        三方核查未完成（缺少 ThreeWayCheck 的 timeOutAt 或 signOutAt）或版本冲突时返回 409；
+        CA 签名失败不阻断锁单，签名状态置为 PENDING。
       parameters:
         - name: recordId
           in: path
@@ -301,6 +303,129 @@ paths:
                 lockedAt: '2026-12-01T11:30:00+08:00'
                 lockedBy: '1000000000000000001'
                 signatureStatus: PENDING
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/records/{recordId}/three-way-checks:
+    get:
+      operationId: getThreeWayCheck
+      tags:
+        - 麻醉记录
+      summary: 查询三方核查
+      description: 返回记录单关联的 Time-out 与 Sign-out 核查记录；尚未创建时返回 404。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 三方核查记录。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreeWayCheck'
+              example:
+                checkId: '1500000000000000001'
+                recordId: '1200000000000000001'
+                timeOutAt: '2026-12-01T08:50:00+08:00'
+                timeOutBy: '1000000000000000002'
+                signOutAt: '2026-12-01T10:55:00+08:00'
+                signOutBy: '1000000000000000001'
+                specimenChecked: true
+                implantChecked: true
+                createdAt: '2026-12-01T10:55:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-01T10:55:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: upsertThreeWayCheck
+      tags:
+        - 麻醉记录
+      summary: 创建或更新三方核查
+      description: |
+        创建或更新记录单的三方核查（Time-out / Sign-out）。同一记录单 1:1，首次创建返回 201，
+        已存在时更新返回 200；记录已锁定时返回 409，避免锁单后补签。核查是否完成是锁单前置条件。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertThreeWayCheckRequest'
+            example:
+              timeOutAt: '2026-12-01T08:50:00+08:00'
+              timeOutBy: '1000000000000000002'
+              signOutAt: '2026-12-01T10:55:00+08:00'
+              signOutBy: '1000000000000000001'
+              specimenChecked: true
+              implantChecked: true
+              version: 1
+      responses:
+        '200':
+          description: 三方核查更新成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreeWayCheck'
+              example:
+                checkId: '1500000000000000001'
+                recordId: '1200000000000000001'
+                timeOutAt: '2026-12-01T08:50:00+08:00'
+                timeOutBy: '1000000000000000002'
+                signOutAt: '2026-12-01T10:55:00+08:00'
+                signOutBy: '1000000000000000001'
+                specimenChecked: true
+                implantChecked: true
+                createdAt: '2026-12-01T10:55:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-01T11:10:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 2
+        '201':
+          description: 三方核查创建成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreeWayCheck'
+              example:
+                checkId: '1500000000000000001'
+                recordId: '1200000000000000001'
+                timeOutAt: '2026-12-01T08:50:00+08:00'
+                timeOutBy: '1000000000000000002'
+                signOutAt: '2026-12-01T10:55:00+08:00'
+                signOutBy: '1000000000000000001'
+                specimenChecked: true
+                implantChecked: true
+                createdAt: '2026-12-01T10:55:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-01T10:55:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -383,10 +508,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
     post:
       operationId: createFollowUp
       tags:
@@ -431,14 +552,16 @@ paths:
                 updatedAt: '2026-12-02T10:00:00+08:00'
                 updatedBy: '1000000000000000001'
                 version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
   /v1/anesthesia/follow-ups/{followUpId}:
     get:
       operationId: getFollowUp
@@ -483,8 +606,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
 components:
   securitySchemes:
     bearerAuth:
@@ -493,6 +614,19 @@ components:
       bearerFormat: JWT
       description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 头中。
   responses:
+    BadRequest:
+      description: 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0005
+            details:
+              - field: timeOutAt
+                reason: Time-out 完成时间不能晚于 Sign-out 完成时间
     Unauthorized:
       description: 未认证：未携带令牌、令牌过期或签名无效。
       content:
@@ -529,7 +663,7 @@ components:
             traceId: SYNTH-TRACE-0003
             details: []
     Conflict:
-      description: 记录状态冲突、锁单后修改或乐观锁版本冲突。
+      description: 记录状态冲突：三方核查未完成、锁单后修改或乐观锁版本冲突。
       content:
         application/json:
           schema:
@@ -541,6 +675,19 @@ components:
             details:
               - field: version
                 reason: 提交版本落后于服务端当前版本
+    UnprocessableEntity:
+      description: 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 锁单前置条件未满足
+            traceId: SYNTH-TRACE-0006
+            details:
+              - field: threeWayCheck
+                reason: 三方核查未完成
   schemas:
     ErrorDetail:
       type: object
@@ -721,9 +868,8 @@ components:
               maximum: 8
             dasiScore:
               type: number
-              description: 杜克活动状态指数 DASI。
+              description: 杜克活动状态指数 DASI；按院方口径配置（通行 DASI 0–58.2，待临床确认）。
               minimum: 0
-              maximum: 10
             anesthesiaPlan:
               type: string
               description: 麻醉计划（演示文本）。
@@ -781,9 +927,8 @@ components:
           maximum: 8
         dasiScore:
           type: number
-          description: DASI 指数。
+          description: DASI 指数；按院方口径配置（通行 DASI 0–58.2，待临床确认）。
           minimum: 0
-          maximum: 10
         anesthesiaPlan:
           type: string
           description: 麻醉计划。
@@ -907,6 +1052,101 @@ components:
               description: 时间轴事件列表。
               items:
                 $ref: '#/components/schemas/AnesthesiaEvent'
+            threeWayCheckCompleted:
+              type: boolean
+              readOnly: true
+              description: 三方核查（Time-out 与 Sign-out）是否均已完成；只读摘要，锁单前置条件。
+            threeWayCheckTimeOutAt:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              readOnly: true
+              description: Time-out 完成时间摘要；未完成为 null。
+            threeWayCheckSignOutAt:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              readOnly: true
+              description: Sign-out 完成时间摘要；未完成为 null。
+    ThreeWayCheck:
+      type: object
+      description: 三方核查记录（Time-out / Sign-out）；同一记录单 1:1，是锁单前置条件。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - checkId
+            - recordId
+            - timeOutAt
+            - timeOutBy
+            - signOutAt
+            - signOutBy
+            - specimenChecked
+            - implantChecked
+          properties:
+            checkId:
+              type: string
+              description: 三方核查记录标识。
+            recordId:
+              type: string
+              description: 关联麻醉记录单标识。
+            timeOutAt:
+              type: string
+              format: date-time
+              description: 切皮前 Time-out 完成时间。
+            timeOutBy:
+              type: string
+              description: Time-out 执行人用户标识。
+            signOutAt:
+              type: string
+              format: date-time
+              description: 出室前 Sign-out 完成时间。
+            signOutBy:
+              type: string
+              description: Sign-out 执行人用户标识。
+            specimenChecked:
+              type: boolean
+              description: 标本核对是否一致。
+            implantChecked:
+              type: boolean
+              description: 植入物与耗材核对是否一致。
+    UpsertThreeWayCheckRequest:
+      type: object
+      description: 创建或更新三方核查的请求；六个核查字段均必填，更新时回传 version。
+      required:
+        - timeOutAt
+        - timeOutBy
+        - signOutAt
+        - signOutBy
+        - specimenChecked
+        - implantChecked
+      properties:
+        timeOutAt:
+          type: string
+          format: date-time
+          description: 切皮前 Time-out 完成时间。
+        timeOutBy:
+          type: string
+          description: Time-out 执行人用户标识。
+        signOutAt:
+          type: string
+          format: date-time
+          description: 出室前 Sign-out 完成时间，不得早于 timeOutAt。
+        signOutBy:
+          type: string
+          description: Sign-out 执行人用户标识。
+        specimenChecked:
+          type: boolean
+          description: 标本核对是否一致。
+        implantChecked:
+          type: boolean
+          description: 植入物与耗材核对是否一致。
+        version:
+          type: integer
+          description: 当前版本号；更新已存在的核查记录时必填。
+          minimum: 1
     UpdateAnesthesiaRecordRequest:
       type: object
       description: 麻醉记录单保存请求；锁单后调用返回 409。

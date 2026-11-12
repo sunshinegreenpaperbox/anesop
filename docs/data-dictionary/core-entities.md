@@ -14,8 +14,8 @@
 | `patient_no` | varchar | 是 | 院内患者编号 | 契约 `Patient.patientNo`；格式与唯一性【待确认】 |
 | `name` | varchar | 是 | 患者姓名（直接标识） | §3.9.3；按角色脱敏展示 |
 | `gender` | varchar | 【待确认】 | 性别 | 契约暂列；编码字典【待确认】 |
-| `birth_date` | date | 【待确认】 | 出生日期 | 契约暂列；精度与是否返回【待确认】 |
-| `id_card_cipher` | text | 否 | 证件号密文（AES-256-GCM） | §3.9.3 |
+| `birth_date` | date | 【待确认】 | 出生日期 | 契约仅详情返回，列表不返回；精度【待确认】 |
+| `id_card_cipher` | text | 否 | 证件号密文（AES-256-GCM） | §3.9.3；接口返回 `idCardMasked`（前 3 + 11\* + 后 4，不含出生日期段） |
 | `id_card_hash` | varchar | 否 | 证件号哈希，供精确匹配 | §3.9.3 |
 | `phone_cipher` | text | 否 | 手机号密文 | §3.9.3 |
 | `phone_hash` | varchar | 否 | 手机号哈希 | §3.9.3 |
@@ -26,7 +26,7 @@
 | 审计字段 | — | 是 | `created_by/created_at/updated_by/updated_at` | §3.4.3 |
 | `deleted_at` | timestamptz | 否 | 软删除时间 | §3.4.3 |
 
-说明：患者主索引以 HIS 为权威源（I-01a），本系统只读同步；证件号、手机号只存密文与哈希，接口返回脱敏值（§3.9.3）。
+说明：患者主索引以 HIS 为权威源（I-01a），本系统只读同步；证件号、手机号只存密文与哈希，接口返回脱敏值（§3.9.3）。列表接口返回 `PatientSummary`，不含 `birthDate` 与住院号明文；详情接口返回 `Patient`，住院号为 `x-restricted` 字段（仅授权角色、传输加密、展示脱敏、访问记审计）。
 
 ### 1.2 术间 `operating_room`
 
@@ -148,7 +148,7 @@
 | `rcri_score` | smallint | 是 | RCRI 评分 | §2.4.3 |
 | `apfel_score` | smallint | 是 | Apfel PONV 评分 | §2.4.3 |
 | `stop_bang_score` | smallint | 是 | STOP-BANG 评分 | §2.4.3 |
-| `dasi_score` | numeric | 是 | DASI 指数 | §2.4.3 |
+| `dasi_score` | numeric | 是 | DASI 指数 | §2.4.3；按院方口径配置，通行 DASI 0–58.2，【待确认】 |
 | `anesthesia_plan` | text | 是 | 麻醉计划 | §2.4.3 |
 | `consent_signed` | boolean | 是 | 知情同意是否签署 | §2.4.3 |
 | `status` | varchar | 是 | 访视状态 | 契约枚举 |
@@ -174,7 +174,7 @@
 | 审计字段 | — | 是 | 审计字段 | §3.4.3 |
 | `deleted_at` | timestamptz | 否 | 软删除 | §3.4.3 |
 
-说明：锁单后不可直接改，修改生成修订版本并保留原值、修改人、时间、原因（§2.4.3）；三方核查未完成不允许锁单。
+说明：锁单后不可直接改，修改生成修订版本并保留原值、修改人、时间、原因（§2.4.3）；三方核查未完成不允许锁单，核查记录见 3.8。
 
 ### 3.3 麻醉事件 `anesthesia_event`
 
@@ -258,6 +258,22 @@
 
 说明：随访任务由 M2 生成并超时提醒；PCA 与神经阻滞随访字段在 M2 细化【待确认】。
 
+### 3.8 三方核查 `three_way_check`
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `check_id` | bigint | 是 | 主键 | 契约 `ThreeWayCheck` |
+| `record_id` | bigint | 是 | 麻醉记录单；1:1 | §2.4.3 |
+| `time_out_at` | timestamptz | 是 | 切皮前 Time-out 完成时间 | §2.4.3 |
+| `time_out_by` | bigint | 是 | Time-out 执行人 | §2.4.3、§3.9.2 |
+| `sign_out_at` | timestamptz | 是 | 出室前 Sign-out 完成时间 | §2.4.3 |
+| `sign_out_by` | bigint | 是 | Sign-out 执行人 | §2.4.3、§3.9.2 |
+| `specimen_checked` | boolean | 是 | 标本核对是否一致 | §2.4.3 |
+| `implant_checked` | boolean | 是 | 植入物与耗材核对是否一致 | §2.4.3 |
+| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
+
+说明：三方核查是锁单前置条件，`time_out_at` 与 `sign_out_at` 均记录后才允许锁单（§2.4.3）；记录单接口通过 `threeWayCheck*` 只读摘要字段暴露完成状态。核查记录是否独立成表【待确认】。
+
 ## 4. 与契约的对应
 
 | 契约 Schema | 数据库实体 | 说明 |
@@ -268,6 +284,7 @@
 | `Schedule` | `schedule` | 冲突检测与版本 |
 | `PreopVisit` | `preop_visit` | 评分与麻醉计划 |
 | `AnesthesiaRecord` | `anesthesia_record` | 状态机与锁单 |
+| `ThreeWayCheck` | `three_way_check` | 三方核查，锁单前置条件 |
 | `AnesthesiaEvent` | `anesthesia_event` | 事件时间/录入时间分离 |
 | `FollowUp` | `follow_up` | 24/48 小时随访 |
 | `CurrentUser`、`DataScope` | `sys_user`、`sys_role_data_scope` 等 | 权限投影，不是单表 |
@@ -279,7 +296,8 @@
 2. 术间设备配置结构、实时状态承载、隔离字段命名。
 3. 角色/权限/数据范围四张表的最终表名、权限点编码规范。
 4. 排程 `sequence_no` 唯一约束、跨天排程与改台记录是否独立成表。
-5. 麻醉记录单修订版本表、`record_hash` 算法与 CA 签名字段。
-6. 用药剂量单位/途径字典、麻精双人核对签名字段与空安瓿台账。
-7. 生命体征指标编码、单位、采样间隔、波形存储（D-04）。
-8. 复苏记录评分项与转出阈值、随访量表口径。
+5. 麻醉记录单修订版本表、`record_hash` 算法与 CA 签名字段；三方核查是否独立成表。
+6. DASI 评分范围（通行 0–58.2）与院方口径，待临床确认。
+7. 用药剂量单位/途径字典、麻精双人核对签名字段与空安瓿台账。
+8. 生命体征指标编码、单位、采样间隔、波形存储（D-04）。
+9. 复苏记录评分项与转出阈值、随访量表口径。

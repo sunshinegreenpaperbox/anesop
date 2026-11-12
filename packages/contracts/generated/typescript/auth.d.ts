@@ -159,11 +159,6 @@ export interface components {
       /** @description 乐观锁版本号，从 1 开始；更新必须回传。 */
       version: number
     }
-    /** @description 仅返回资源标识的通用响应。 */
-    IdResponse: {
-      /** @description 雪花 ID 序列化后的字符串，避免前端精度丢失。 */
-      id: string
-    }
     /** @description 登录请求；authType 决定走本地口令、AD/LDAP 还是 SSO。 */
     LoginRequest: {
       /** @description 登录账号（工号或域账号），非患者标识。 */
@@ -260,6 +255,28 @@ export interface components {
     }
   }
   responses: {
+    /** @description 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。 */
+    BadRequest: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "PARAM_INVALID",
+         *       "message": "请求参数校验失败",
+         *       "traceId": "SYNTH-TRACE-0005",
+         *       "details": [
+         *         {
+         *           "field": "username",
+         *           "reason": "登录账号不能为空"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
     /** @description 未认证：未携带令牌、令牌过期或签名无效。 */
     Unauthorized: {
       headers: {
@@ -299,38 +316,21 @@ export interface components {
         'application/json': components['schemas']['Error']
       }
     }
-    /** @description 资源不存在，或存在但不在当前用户数据权限内（不泄露存在性）。 */
-    NotFound: {
+    /** @description 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。 */
+    UnprocessableEntity: {
       headers: {
         [name: string]: unknown
       }
       content: {
         /**
          * @example {
-         *       "code": "RESOURCE_NOT_FOUND",
-         *       "message": "资源不存在或不可见",
-         *       "traceId": "SYNTH-TRACE-0003",
-         *       "details": []
-         *     }
-         */
-        'application/json': components['schemas']['Error']
-      }
-    }
-    /** @description 业务状态冲突、乐观锁版本冲突或重复提交。 */
-    Conflict: {
-      headers: {
-        [name: string]: unknown
-      }
-      content: {
-        /**
-         * @example {
-         *       "code": "STATE_CONFLICT",
-         *       "message": "当前状态不允许该操作或版本已过期",
-         *       "traceId": "SYNTH-TRACE-0004",
+         *       "code": "BUSINESS_RULE_VIOLATION",
+         *       "message": "账号状态或认证方式不允许登录",
+         *       "traceId": "SYNTH-TRACE-0006",
          *       "details": [
          *         {
-         *           "field": "version",
-         *           "reason": "提交版本落后于服务端当前版本"
+         *           "field": "authType",
+         *           "reason": "该账号未开通所选认证方式"
          *         }
          *       ]
          *     }
@@ -406,10 +406,9 @@ export interface operations {
           'application/json': components['schemas']['TokenResponse']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
-      403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
     }
   }
   refreshToken: {
@@ -469,10 +468,8 @@ export interface operations {
           'application/json': components['schemas']['TokenResponse']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
-      403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   logout: {
@@ -484,24 +481,14 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description 登出成功，返回被吊销的会话标识。 */
-      200: {
+      /** @description 登出成功；令牌已吊销，无响应体。 */
+      204: {
         headers: {
           [name: string]: unknown
         }
-        content: {
-          /**
-           * @example {
-           *       "id": "4000000000000000001"
-           *     }
-           */
-          'application/json': components['schemas']['IdResponse']
-        }
+        content?: never
       }
       401: components['responses']['Unauthorized']
-      403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   getCurrentUser: {
@@ -550,8 +537,6 @@ export interface operations {
       }
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   listSessions: {
@@ -605,8 +590,6 @@ export interface operations {
       }
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
 }

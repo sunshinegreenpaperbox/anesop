@@ -6,7 +6,7 @@ info:
     ANESOP 手术排程域契约，对应方案书 §2.4.2（M1 手术排程管理）与 §3.4.2（排程/台次实体）。
     硬规则：同术间时段不重叠、冲突不得强行保存、急诊加台优先于择期、停台改台必选原因码。
     所有示例均为 SYNTHETIC 合成数据。
-  version: 0.1.0
+  version: 0.2.0
   contact:
     name: ANESOP 项目组
   license:
@@ -74,10 +74,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/scheduling/schedules:
     get:
       operationId: listSchedules
@@ -167,10 +163,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
     post:
       operationId: createSchedule
       tags:
@@ -220,14 +212,16 @@ paths:
                 updatedAt: '2026-11-09T11:20:00+08:00'
                 updatedBy: '1000000000000000001'
                 version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
   /v1/scheduling/schedules/{scheduleId}:
     get:
       operationId: getSchedule
@@ -276,8 +270,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/scheduling/conflicts/check:
     post:
       operationId: checkScheduleConflict
@@ -316,14 +308,12 @@ paths:
                     severity: BLOCKING
                     message: 与已发布台次 OR-01 第 1 台时段重叠
                     conflictingScheduleId: '8000000000000000001'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/scheduling/emergency-cases:
     post:
       operationId: addEmergencyCase
@@ -357,14 +347,16 @@ paths:
                 scheduleId: '8000000000000000002'
                 approvalRequired: true
                 conflicts: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
   /v1/scheduling/schedules/{scheduleId}/cancel:
     post:
       operationId: cancelSchedule
@@ -398,6 +390,8 @@ paths:
                 $ref: '#/components/schemas/IdResponse'
               example:
                 id: '8000000000000000001'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -414,6 +408,19 @@ components:
       bearerFormat: JWT
       description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 头中。
   responses:
+    BadRequest:
+      description: 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0005
+            details:
+              - field: plannedEnd
+                reason: 计划结束时间必须晚于计划开始时间
     Unauthorized:
       description: 未认证：未携带令牌、令牌过期或签名无效。
       content:
@@ -462,6 +469,19 @@ components:
             details:
               - field: plannedStart
                 reason: 与已发布台次时段重叠
+    UnprocessableEntity:
+      description: 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 排程语义校验未通过
+            traceId: SYNTH-TRACE-0006
+            details:
+              - field: roomId
+                reason: 该术间不满足申请要求的隔离条件
   schemas:
     ErrorDetail:
       type: object

@@ -6,7 +6,7 @@ info:
     ANESOP 平台 M0 公共支撑的认证域契约。覆盖本地/AD/LDAP/SSO 登录、JWT 刷新、登出与
     “当前用户 + 角色 + 权限点 + 数据范围”查询，对应方案书 §2.4.1（M0 公共支撑）与
     §3.9.2（RBAC 与数据权限）。所有示例均为 SYNTHETIC 合成数据，不含真实患者或账号信息。
-  version: 0.1.0
+  version: 0.2.0
   contact:
     name: ANESOP 项目组
   license:
@@ -67,14 +67,12 @@ paths:
                         - '2000000000000000001'
                   siteIds:
                     - '3000000000000000001'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
   /v1/auth/refresh:
     post:
       operationId: refreshToken
@@ -117,14 +115,10 @@ paths:
                         - '2000000000000000001'
                   siteIds:
                     - '3000000000000000001'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/auth/logout:
     post:
       operationId: logout
@@ -133,22 +127,10 @@ paths:
       summary: 登出当前会话
       description: 吊销当前访问令牌与刷新令牌，并结束服务端会话；重复登出按幂等处理。
       responses:
-        '200':
-          description: 登出成功，返回被吊销的会话标识。
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/IdResponse'
-              example:
-                id: '4000000000000000001'
+        '204':
+          description: 登出成功；令牌已吊销，无响应体。
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/auth/me:
     get:
       operationId: getCurrentUser
@@ -183,10 +165,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/auth/sessions:
     get:
       operationId: listSessions
@@ -242,10 +220,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
 components:
   securitySchemes:
     bearerAuth:
@@ -254,6 +228,19 @@ components:
       bearerFormat: JWT
       description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
   responses:
+    BadRequest:
+      description: 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0005
+            details:
+              - field: username
+                reason: 登录账号不能为空
     Unauthorized:
       description: 未认证：未携带令牌、令牌过期或签名无效。
       content:
@@ -278,30 +265,19 @@ components:
             details:
               - field: dataScope
                 reason: 当前角色不包含该科室数据范围
-    NotFound:
-      description: 资源不存在，或存在但不在当前用户数据权限内（不泄露存在性）。
+    UnprocessableEntity:
+      description: 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            code: RESOURCE_NOT_FOUND
-            message: 资源不存在或不可见
-            traceId: SYNTH-TRACE-0003
-            details: []
-    Conflict:
-      description: 业务状态冲突、乐观锁版本冲突或重复提交。
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: STATE_CONFLICT
-            message: 当前状态不允许该操作或版本已过期
-            traceId: SYNTH-TRACE-0004
+            code: BUSINESS_RULE_VIOLATION
+            message: 账号状态或认证方式不允许登录
+            traceId: SYNTH-TRACE-0006
             details:
-              - field: version
-                reason: 提交版本落后于服务端当前版本
+              - field: authType
+                reason: 该账号未开通所选认证方式
   schemas:
     ErrorDetail:
       type: object
@@ -393,15 +369,6 @@ components:
           type: integer
           description: 乐观锁版本号，从 1 开始；更新必须回传。
           minimum: 1
-    IdResponse:
-      type: object
-      description: 仅返回资源标识的通用响应。
-      required:
-        - id
-      properties:
-        id:
-          type: string
-          description: 雪花 ID 序列化后的字符串，避免前端精度丢失。
     LoginRequest:
       type: object
       description: 登录请求；authType 决定走本地口令、AD/LDAP 还是 SSO。

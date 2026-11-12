@@ -203,12 +203,44 @@ export interface components {
        * @description 出生日期；与年龄组合可能重识别，按最小必要返回。
        */
       birthDate: string
-      /** @description 脱敏证件号（前 6 后 4）；完整值不出接口。 */
+      /**
+       * @description 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
+       * @example 110***********1234
+       */
       idCardMasked: string
       /** @description 脱敏手机号（前 3 后 4）。 */
       phoneMasked: string
-      /** @description 住院号；直接标识，按数据权限控制并记审计。 */
+      /** @description 住院号明文；仅授权角色可见，传输加密，展示脱敏，访问记审计。 */
       inpatientNo: string
+      /** @description 所属科室标识。 */
+      departmentId: string
+      /** @description 所属科室名称。 */
+      departmentName: string
+      /** @description 院区标识（多院区维度）。 */
+      siteId: string
+    }
+    /** @description 患者列表视图；不返回出生日期与住院号明文，仅返回脱敏值。 */
+    PatientSummary: components['schemas']['AuditFields'] & {
+      /** @description 患者标识（雪花 ID 字符串）。 */
+      patientId: string
+      /** @description 院内患者编号；示例统一使用 SYNTH-P-xxxx。 */
+      patientNo: string
+      /** @description 患者姓名；示例统一使用“演示患者”。 */
+      name: string
+      /**
+       * @description 性别。
+       * @enum {string}
+       */
+      gender: 'MALE' | 'FEMALE' | 'UNKNOWN'
+      /**
+       * @description 脱敏证件号：保留前 3 位 + 11 个 * + 后 4 位（共 18 位），不保留出生日期段；完整值不出接口。
+       * @example 110***********1234
+       */
+      idCardMasked: string
+      /** @description 脱敏手机号（前 3 后 4）。 */
+      phoneMasked: string
+      /** @description 脱敏住院号；列表不返回住院号明文。 */
+      inpatientNoMasked: string
       /** @description 所属科室标识。 */
       departmentId: string
       /** @description 所属科室名称。 */
@@ -219,7 +251,7 @@ export interface components {
     /** @description 患者分页结果。 */
     PatientPage: {
       /** @description 当前页患者列表。 */
-      items: components['schemas']['Patient'][]
+      items: components['schemas']['PatientSummary'][]
       meta: components['schemas']['PageMeta']
     }
     /** @description HIS 手术申请映射；applicationNo 为幂等键。 */
@@ -302,6 +334,28 @@ export interface components {
     }
   }
   responses: {
+    /** @description 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。 */
+    BadRequest: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "PARAM_INVALID",
+         *       "message": "请求参数校验失败",
+         *       "traceId": "SYNTH-TRACE-0005",
+         *       "details": [
+         *         {
+         *           "field": "plannedSurgeryDate",
+         *           "reason": "必须为 YYYY-MM-DD 格式的日期"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
     /** @description 未认证：未携带令牌、令牌过期或签名无效。 */
     Unauthorized: {
       headers: {
@@ -380,6 +434,28 @@ export interface components {
         'application/json': components['schemas']['Error']
       }
     }
+    /** @description 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。 */
+    UnprocessableEntity: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "BUSINESS_RULE_VIOLATION",
+         *       "message": "手术申请语义校验未通过",
+         *       "traceId": "SYNTH-TRACE-0006",
+         *       "details": [
+         *         {
+         *           "field": "patientId",
+         *           "reason": "患者不在当前院区主索引内"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
   }
   parameters: never
   requestBodies: never
@@ -410,7 +486,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description 患者分页列表。 */
+      /** @description 患者分页列表；不返回出生日期与住院号明文，仅返回脱敏值。 */
       200: {
         headers: {
           [name: string]: unknown
@@ -424,10 +500,9 @@ export interface operations {
            *           "patientNo": "SYNTH-P-0001",
            *           "name": "演示患者",
            *           "gender": "FEMALE",
-           *           "birthDate": "1978-03-15",
-           *           "idCardMasked": "110101********1234",
+           *           "idCardMasked": "110***********1234",
            *           "phoneMasked": "138****0000",
-           *           "inpatientNo": "SYNTH-ZY-0001",
+           *           "inpatientNoMasked": "SYNTH-ZY-****-0001",
            *           "departmentId": "2000000000000000001",
            *           "departmentName": "演示外科",
            *           "siteId": "3000000000000000001",
@@ -451,8 +526,6 @@ export interface operations {
       }
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   getPatient: {
@@ -480,7 +553,7 @@ export interface operations {
            *       "name": "演示患者",
            *       "gender": "FEMALE",
            *       "birthDate": "1978-03-15",
-           *       "idCardMasked": "110101********1234",
+           *       "idCardMasked": "110***********1234",
            *       "phoneMasked": "138****0000",
            *       "inpatientNo": "SYNTH-ZY-0001",
            *       "departmentId": "2000000000000000001",
@@ -499,7 +572,6 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   listPatientSurgeryApplications: {
@@ -563,7 +635,6 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   createSurgeryApplication: {
@@ -622,10 +693,10 @@ export interface operations {
           'application/json': components['schemas']['SurgeryApplication']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
     }
   }
   getSurgeryApplication: {
@@ -674,7 +745,6 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   cancelSurgeryApplication: {
@@ -714,6 +784,7 @@ export interface operations {
           'application/json': components['schemas']['IdResponse']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']

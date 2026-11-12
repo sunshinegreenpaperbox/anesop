@@ -67,9 +67,35 @@ export interface paths {
     /**
      * 锁单
      * @description 锁单后记录不可直接修改，修改只能生成修订版本并保留原值、修改人、时间、原因。
-     *     三方核查未完成或版本冲突时返回 409；CA 签名失败不阻断锁单，签名状态置为 PENDING。
+     *     三方核查未完成（缺少 ThreeWayCheck 的 timeOutAt 或 signOutAt）或版本冲突时返回 409；
+     *     CA 签名失败不阻断锁单，签名状态置为 PENDING。
      */
     post: operations['lockAnesthesiaRecord']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/three-way-checks': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询三方核查
+     * @description 返回记录单关联的 Time-out 与 Sign-out 核查记录；尚未创建时返回 404。
+     */
+    get: operations['getThreeWayCheck']
+    put?: never
+    /**
+     * 创建或更新三方核查
+     * @description 创建或更新记录单的三方核查（Time-out / Sign-out）。同一记录单 1:1，首次创建返回 201，
+     *     已存在时更新返回 200；记录已锁定时返回 409，避免锁单后补签。核查是否完成是锁单前置条件。
+     */
+    post: operations['upsertThreeWayCheck']
     delete?: never
     options?: never
     head?: never
@@ -209,7 +235,7 @@ export interface components {
       apfelScore: number
       /** @description STOP-BANG OSA 筛查得分。 */
       stopBangScore: number
-      /** @description 杜克活动状态指数 DASI。 */
+      /** @description 杜克活动状态指数 DASI；按院方口径配置（通行 DASI 0–58.2，待临床确认）。 */
       dasiScore: number
       /** @description 麻醉计划（演示文本）。 */
       anesthesiaPlan: string
@@ -241,7 +267,7 @@ export interface components {
       apfelScore?: number
       /** @description STOP-BANG 得分。 */
       stopBangScore?: number
-      /** @description DASI 指数。 */
+      /** @description DASI 指数；按院方口径配置（通行 DASI 0–58.2，待临床确认）。 */
       dasiScore?: number
       /** @description 麻醉计划。 */
       anesthesiaPlan?: string
@@ -316,6 +342,66 @@ export interface components {
       endedAt?: string | null
       /** @description 时间轴事件列表。 */
       events: components['schemas']['AnesthesiaEvent'][]
+      /** @description 三方核查（Time-out 与 Sign-out）是否均已完成；只读摘要，锁单前置条件。 */
+      readonly threeWayCheckCompleted?: boolean
+      /**
+       * Format: date-time
+       * @description Time-out 完成时间摘要；未完成为 null。
+       */
+      readonly threeWayCheckTimeOutAt?: string | null
+      /**
+       * Format: date-time
+       * @description Sign-out 完成时间摘要；未完成为 null。
+       */
+      readonly threeWayCheckSignOutAt?: string | null
+    }
+    /** @description 三方核查记录（Time-out / Sign-out）；同一记录单 1:1，是锁单前置条件。 */
+    ThreeWayCheck: components['schemas']['AuditFields'] & {
+      /** @description 三方核查记录标识。 */
+      checkId: string
+      /** @description 关联麻醉记录单标识。 */
+      recordId: string
+      /**
+       * Format: date-time
+       * @description 切皮前 Time-out 完成时间。
+       */
+      timeOutAt: string
+      /** @description Time-out 执行人用户标识。 */
+      timeOutBy: string
+      /**
+       * Format: date-time
+       * @description 出室前 Sign-out 完成时间。
+       */
+      signOutAt: string
+      /** @description Sign-out 执行人用户标识。 */
+      signOutBy: string
+      /** @description 标本核对是否一致。 */
+      specimenChecked: boolean
+      /** @description 植入物与耗材核对是否一致。 */
+      implantChecked: boolean
+    }
+    /** @description 创建或更新三方核查的请求；六个核查字段均必填，更新时回传 version。 */
+    UpsertThreeWayCheckRequest: {
+      /**
+       * Format: date-time
+       * @description 切皮前 Time-out 完成时间。
+       */
+      timeOutAt: string
+      /** @description Time-out 执行人用户标识。 */
+      timeOutBy: string
+      /**
+       * Format: date-time
+       * @description 出室前 Sign-out 完成时间，不得早于 timeOutAt。
+       */
+      signOutAt: string
+      /** @description Sign-out 执行人用户标识。 */
+      signOutBy: string
+      /** @description 标本核对是否一致。 */
+      specimenChecked: boolean
+      /** @description 植入物与耗材核对是否一致。 */
+      implantChecked: boolean
+      /** @description 当前版本号；更新已存在的核查记录时必填。 */
+      version?: number
     }
     /** @description 麻醉记录单保存请求；锁单后调用返回 409。 */
     UpdateAnesthesiaRecordRequest: {
@@ -418,6 +504,28 @@ export interface components {
     }
   }
   responses: {
+    /** @description 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。 */
+    BadRequest: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "PARAM_INVALID",
+         *       "message": "请求参数校验失败",
+         *       "traceId": "SYNTH-TRACE-0005",
+         *       "details": [
+         *         {
+         *           "field": "timeOutAt",
+         *           "reason": "Time-out 完成时间不能晚于 Sign-out 完成时间"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
     /** @description 未认证：未携带令牌、令牌过期或签名无效。 */
     Unauthorized: {
       headers: {
@@ -474,7 +582,7 @@ export interface components {
         'application/json': components['schemas']['Error']
       }
     }
-    /** @description 记录状态冲突、锁单后修改或乐观锁版本冲突。 */
+    /** @description 记录状态冲突：三方核查未完成、锁单后修改或乐观锁版本冲突。 */
     Conflict: {
       headers: {
         [name: string]: unknown
@@ -489,6 +597,28 @@ export interface components {
          *         {
          *           "field": "version",
          *           "reason": "提交版本落后于服务端当前版本"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
+    /** @description 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。 */
+    UnprocessableEntity: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "BUSINESS_RULE_VIOLATION",
+         *       "message": "锁单前置条件未满足",
+         *       "traceId": "SYNTH-TRACE-0006",
+         *       "details": [
+         *         {
+         *           "field": "threeWayCheck",
+         *           "reason": "三方核查未完成"
          *         }
          *       ]
          *     }
@@ -553,7 +683,6 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   updatePreopVisit: {
@@ -620,6 +749,7 @@ export interface operations {
           'application/json': components['schemas']['PreopVisit']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
@@ -680,7 +810,6 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   updateAnesthesiaRecord: {
@@ -756,6 +885,7 @@ export interface operations {
           'application/json': components['schemas']['AnesthesiaRecord']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
@@ -802,6 +932,136 @@ export interface operations {
           'application/json': components['schemas']['LockRecordResult']
         }
       }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  getThreeWayCheck: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（雪花 ID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 三方核查记录。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "checkId": "1500000000000000001",
+           *       "recordId": "1200000000000000001",
+           *       "timeOutAt": "2026-12-01T08:50:00+08:00",
+           *       "timeOutBy": "1000000000000000002",
+           *       "signOutAt": "2026-12-01T10:55:00+08:00",
+           *       "signOutBy": "1000000000000000001",
+           *       "specimenChecked": true,
+           *       "implantChecked": true,
+           *       "createdAt": "2026-12-01T10:55:00+08:00",
+           *       "createdBy": "1000000000000000001",
+           *       "updatedAt": "2026-12-01T10:55:00+08:00",
+           *       "updatedBy": "1000000000000000001",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['ThreeWayCheck']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  upsertThreeWayCheck: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（雪花 ID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "timeOutAt": "2026-12-01T08:50:00+08:00",
+         *       "timeOutBy": "1000000000000000002",
+         *       "signOutAt": "2026-12-01T10:55:00+08:00",
+         *       "signOutBy": "1000000000000000001",
+         *       "specimenChecked": true,
+         *       "implantChecked": true,
+         *       "version": 1
+         *     }
+         */
+        'application/json': components['schemas']['UpsertThreeWayCheckRequest']
+      }
+    }
+    responses: {
+      /** @description 三方核查更新成功。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "checkId": "1500000000000000001",
+           *       "recordId": "1200000000000000001",
+           *       "timeOutAt": "2026-12-01T08:50:00+08:00",
+           *       "timeOutBy": "1000000000000000002",
+           *       "signOutAt": "2026-12-01T10:55:00+08:00",
+           *       "signOutBy": "1000000000000000001",
+           *       "specimenChecked": true,
+           *       "implantChecked": true,
+           *       "createdAt": "2026-12-01T10:55:00+08:00",
+           *       "createdBy": "1000000000000000001",
+           *       "updatedAt": "2026-12-01T11:10:00+08:00",
+           *       "updatedBy": "1000000000000000001",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['ThreeWayCheck']
+        }
+      }
+      /** @description 三方核查创建成功。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "checkId": "1500000000000000001",
+           *       "recordId": "1200000000000000001",
+           *       "timeOutAt": "2026-12-01T08:50:00+08:00",
+           *       "timeOutBy": "1000000000000000002",
+           *       "signOutAt": "2026-12-01T10:55:00+08:00",
+           *       "signOutBy": "1000000000000000001",
+           *       "specimenChecked": true,
+           *       "implantChecked": true,
+           *       "createdAt": "2026-12-01T10:55:00+08:00",
+           *       "createdBy": "1000000000000000001",
+           *       "updatedAt": "2026-12-01T10:55:00+08:00",
+           *       "updatedBy": "1000000000000000001",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['ThreeWayCheck']
+        }
+      }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
@@ -867,8 +1127,6 @@ export interface operations {
       }
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   createFollowUp: {
@@ -924,10 +1182,11 @@ export interface operations {
           'application/json': components['schemas']['FollowUp']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
     }
   }
   getFollowUp: {
@@ -974,7 +1233,6 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
 }

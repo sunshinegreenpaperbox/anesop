@@ -387,6 +387,28 @@ export interface components {
     }
   }
   responses: {
+    /** @description 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。 */
+    BadRequest: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "PARAM_INVALID",
+         *       "message": "请求参数校验失败",
+         *       "traceId": "SYNTH-TRACE-0005",
+         *       "details": [
+         *         {
+         *           "field": "plannedEnd",
+         *           "reason": "计划结束时间必须晚于计划开始时间"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
     /** @description 未认证：未携带令牌、令牌过期或签名无效。 */
     Unauthorized: {
       headers: {
@@ -465,6 +487,28 @@ export interface components {
         'application/json': components['schemas']['Error']
       }
     }
+    /** @description 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。 */
+    UnprocessableEntity: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "BUSINESS_RULE_VIOLATION",
+         *       "message": "排程语义校验未通过",
+         *       "traceId": "SYNTH-TRACE-0006",
+         *       "details": [
+         *         {
+         *           "field": "roomId",
+         *           "reason": "该术间不满足申请要求的隔离条件"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
   }
   parameters: never
   requestBodies: never
@@ -521,8 +565,6 @@ export interface operations {
       }
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   listSchedules: {
@@ -590,8 +632,6 @@ export interface operations {
       }
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   createSchedule: {
@@ -650,10 +690,11 @@ export interface operations {
           'application/json': components['schemas']['Schedule']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
     }
   }
   getSchedule: {
@@ -704,7 +745,6 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   checkScheduleConflict: {
@@ -756,10 +796,9 @@ export interface operations {
           'application/json': components['schemas']['ConflictCheckResult']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
-      409: components['responses']['Conflict']
     }
   }
   addEmergencyCase: {
@@ -801,10 +840,11 @@ export interface operations {
           'application/json': components['schemas']['EmergencyAddResult']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
-      404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
     }
   }
   cancelSchedule: {
@@ -844,6 +884,7 @@ export interface operations {
           'application/json': components['schemas']['IdResponse']
         }
       }
+      400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
