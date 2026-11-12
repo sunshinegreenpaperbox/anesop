@@ -1,0 +1,23 @@
+# 构建上下文 = 仓库根；此文件随 api.Dockerfile 生效（Docker 23+/BuildKit）
+# 目的：只把 Maven 构建所需内容送进 context，避免 apps/web/node_modules、.git、
+#       target、本地工具链与 .env 等进入镜像构建上下文。
+**
+
+!pom.xml
+!apps
+!apps/**
+!db
+!db/**
+!config
+!config/**
+
+# 构建产物与本地工具链必须排除（即使上级目录被放行）
+**/target
+**/node_modules
+**/.mvn
+**/.toolchain
+**/.m2repo
+**/.env
+**/.env.*
+**/*.log
+**/.git

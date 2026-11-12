@@ -1,0 +1,47 @@
+# =============================================================================
+# Prometheus 采集配置（单院基线，30 天保留）
+# 挂载到 /etc/prometheus/prometheus.yml；Prometheus 同时连 anesop-net 与 monitoring-net。
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    site: anesop
+    env: prod
+
+scrape_configs:
+  # 自身健康
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
+  # 应用指标（§3.8.3：JVM、HTTP、连接池、队列深度、采集在线率）
+  # 依赖：api 需引入 micrometer-registry-prometheus 并在 management.endpoints 暴露
+  #       prometheus 端点；当前骨架（S0-02）仅暴露 health,info,metrics，
+  #       该 job 在补齐依赖前会 404 —— 登记为 S0-10 遗留，见 docs/deploy/README.md。
+  - job_name: anesop-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["api:8080"]
+
+  # TODO(metrics,EXT-08): PostgreSQL exporter 待引入并评审（postgres-exporter），
+  #   目标形如 ["postgres-exporter:9187"]；未引入前不采集数据库指标。
+  # - job_name: postgres
+  #   static_configs:
+  #     - targets: ["postgres-exporter:9187"]
+
+  # TODO(metrics,EXT-08): Redis exporter（redis_exporter）待引入，
+  #   目标形如 ["redis-exporter:9121"]。
+  # - job_name: redis
+  #   static_configs:
+  #     - targets: ["redis-exporter:9121"]
+
+  # TODO(metrics,EXT-08): RabbitMQ prometheus 插件或 rabbitmq_exporter 待启用，
+  #   目标形如 ["rabbitmq:15692"] 或 ["rabbitmq-exporter:9419"]。
+  # - job_name: rabbitmq
+  #   static_configs:
+  #     - targets: ["rabbitmq:15692"]
+
+  # TODO(metrics,EXT-08): MinIO 指标（/minio/v2/metrics/cluster）需单独 job，
+  #   且需 MinIO 侧开启指标端点，待首次可运行环境验证。

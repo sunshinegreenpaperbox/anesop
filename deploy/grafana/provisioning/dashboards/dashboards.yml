@@ -1,0 +1,18 @@
+# =============================================================================
+# Grafana 仪表盘自动加载（目录随版本迭代补充 JSON；当前只建 provider）
+# 挂载到 /etc/grafana/provisioning/dashboards/dashboards.yml
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: anesop
+    orgId: 1
+    folder: ANESOP
+    type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,22 @@
+# 构建上下文 = 仓库根；此文件随 web.Dockerfile 生效（Docker 23+/BuildKit）
+# 目的：只把 pnpm workspace 构建所需内容送进 context，避免宿主 node_modules、
+#       dist、.git 与 .env 进入镜像构建上下文。
+**
+
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!apps
+!apps/web
+!apps/web/**
+!packages
+!packages/**
+
+# 依赖与产物必须排除（宿主 node_modules 与镜像架构/链接不兼容）
+**/node_modules
+**/dist
+**/.vite
+**/*.log
+**/.env
+**/.env.*
+**/.git

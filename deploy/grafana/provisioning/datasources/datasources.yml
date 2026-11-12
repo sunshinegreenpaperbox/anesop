@@ -1,0 +1,29 @@
+# =============================================================================
+# Grafana 数据源自动配置（Prometheus + Loki）
+# 挂载到 /etc/grafana/provisioning/datasources/datasources.yml
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: anesop-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+
+  - name: Loki
+    uid: anesop-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: false
+    editable: false
+    jsonData:
+      maxLines: 1000
+      # 日志与追踪号关联可在 M2 引入 tracing 后补充 derivedFields

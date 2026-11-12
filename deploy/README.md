@@ -7,17 +7,41 @@ MinIO、Nginx、API、Web，以及监控（Prometheus + Grafana + Loki）。
 
 ```text
 deploy/
-├── compose/     # docker compose（S0-10 落地）
+├── compose/
+│   ├── docker-compose.yml        # 9 服务 / 2 网络 / 7 卷（S0-10）
+│   ├── .env.example              # 变量模板，仅 CHANGE_ME 占位
+│   ├── api.Dockerfile            # Java 21 多阶段，运行阶段非 root
+│   ├── web.Dockerfile            # pnpm 构建 + Nginx 1.27 运行
+│   └── *.Dockerfile.dockerignore # 构建上下文裁剪（BuildKit）
+├── nginx/
+│   ├── anesop.conf               # TLS/安全头/SPA fallback//api 反代
+│   └── certs/                    # 证书挂载点（仓库不含证书）
+├── prometheus/prometheus.yml
+├── grafana/provisioning/         # 数据源 + 仪表盘 provider
+├── loki/loki-config.yml
 └── README.md
 ```
 
 ## 规则
 
-- 镜像按 digest 引用，不用 `latest`；
+- 镜像按 digest 引用，不用 `latest`（当前精确 tag + `# TODO(digest,EXT-08)`）；
 - 数据卷与配置分离，密钥走环境变量 / secret，不入库；
 - 健康检查与启动依赖顺序显式声明；
 - 生产发布须 `release.yml` 变更单审批，应用回滚目标 10 分钟。
 
+## 快速入口
+
+```bash
+bash scripts/compose-check.sh                 # 静态校验（Docker 不可用时跳过运行时项）
+cp deploy/compose/.env.example deploy/compose/.env
+docker compose -f deploy/compose/docker-compose.yml up -d
+```
+
+完整步骤、端口/卷/网络、升级回滚、EXT-08 与 digest 补全见
+`docs/deploy/README.md`；备份恢复见 `docs/deploy/backup-restore.md`。
+
 ## 状态
 
-S0-02 仅建目录与说明。本机 Docker 当前不可用，Compose 与一键起由 S0-10 编写并做静态校验（EXT-08）。
+S0-10 已完成清单、镜像构建文件、监控配置、部署/备份文档与纯静态校验。
+本机 Docker 不可用（EXT-08），未执行 pull/build/up/compose config；首次可运行环境
+须补镜像 digest、实跑验收与镜像扫描。生产部署仍须人工签字，自动化施工不执行生产发布。

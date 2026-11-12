@@ -1,0 +1,436 @@
+# =============================================================================
+# ANESOP 单院生产基线（Docker Compose）
+#
+# 用法（在仓库根）：
+#   cp deploy/compose/.env.example deploy/compose/.env   # 按院方环境改值，禁止入库
+#   docker compose -f deploy/compose/docker-compose.yml up -d
+#   docker compose -f deploy/compose/docker-compose.yml --profile monitoring up -d
+#
+# 设计约束（docs/ai/corpus/chapters/03_总体技术方案.md §3.7/§3.8）：
+#   - 仅 web 暴露宿主 80/443；数据组件与 api 只在内部网络；监控端口绑 127.0.0.1；
+#   - 所有依赖显式 healthcheck + depends_on(condition: service_healthy)；
+#   - 数据卷与配置分离，密钥只经 .env 注入（.env 已被 .gitignore 忽略）；
+#   - 镜像禁用 :latest；digest 待首次可运行环境补全（EXT-08）。
+#
+# 环境受限（EXT-08）：本机 Docker daemon 不可用，本文件仅经静态校验，
+# 未执行 docker compose config / pull / build / up；首次部署须在具备 Docker 24+
+# 的宿主机上补 digest 并实跑验收（见 docs/deploy/README.md）。
+# =============================================================================
+
+name: anesop
+
+services:
+  # ---------------------------------------------------------------------------
+  # 数据层
+  # ---------------------------------------------------------------------------
+  postgres:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:
+    image: postgres:16.4
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: ${TZ}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    expose:
+      - "5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - anesop-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:
+    image: redis:7.2.5
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      TZ: ${TZ}
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD}
+      - --appendonly
+      - "yes"
+      - --maxmemory-policy
+      - noeviction
+    expose:
+      - "6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - anesop-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  rabbitmq:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:
+    image: rabbitmq:3.13.7-management
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASSWORD: ${RABBITMQ_DEFAULT_PASSWORD}
+      TZ: ${TZ}
+    expose:
+      - "5672"
+      - "15672"
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    networks:
+      - anesop-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  minio:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:
+    image: minio/minio:RELEASE.2024-08-17T01-24-54Z
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      TZ: ${TZ}
+    command: ["server", "/data", "--console-address", ":9001"]
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - anesop-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # 应用层
+  # ---------------------------------------------------------------------------
+  api:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:（基础镜像与最终镜像都补）
+    # 显式镜像名 + 发布 tag，保证可回滚（禁止 latest；默认值仅用于本地首次构建）
+    image: anesop/api:${ANESOP_API_TAG:-1.0.0}
+    build:
+      # 构建上下文 = 仓库根（与 Dockerfile 内注释一致）
+      context: ../..
+      dockerfile: deploy/compose/api.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE}
+      SPRING_FLYWAY_LOCATIONS: ${SPRING_FLYWAY_LOCATIONS}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: "5672"
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASSWORD}
+      ANESOP_JWT_SECRET: ${ANESOP_JWT_SECRET}
+      TZ: ${TZ}
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    networks:
+      - anesop-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  web:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:（基础镜像与最终镜像都补）
+    image: anesop/web:${ANESOP_WEB_TAG:-1.0.0}
+    build:
+      # 构建上下文 = 仓库根
+      context: ../..
+      dockerfile: deploy/compose/web.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ}
+    ports:
+      # 唯一对院区/终端暴露的入口（§3.7.1：终端一律经 Nginx）
+      - "80:80"
+      - "443:443"
+    volumes:
+      # 证书只读挂载；仓库不存放任何真实证书/私钥（deploy/nginx/certs/README.md）
+      - ../nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/healthz | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - anesop-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # 监控层（profile: monitoring，默认不启动；端口只绑 127.0.0.1）
+  # ---------------------------------------------------------------------------
+  prometheus:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:
+    image: prom/prometheus:v2.55.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9090/-/healthy | grep -qi healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - anesop-net
+      - monitoring-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  grafana:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:
+    image: grafana/grafana:11.2.2
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      TZ: ${TZ}
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/api/health | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - monitoring-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  loki:
+    # TODO(digest,EXT-08): 首次可运行环境补 @sha256:
+    image: grafana/loki:3.1.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ}
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ../loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - lokidata:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready | grep -q ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - monitoring-net
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# -----------------------------------------------------------------------------
+# 网络：业务面与监控面隔离（§3.7.1 网络分区）
+# -----------------------------------------------------------------------------
+networks:
+  anesop-net:
+    name: anesop-net
+    driver: bridge
+  monitoring-net:
+    name: anesop-monitoring
+    driver: bridge
+
+# -----------------------------------------------------------------------------
+# 命名卷：数据与配置分离；备份见 docs/deploy/backup-restore.md
+# -----------------------------------------------------------------------------
+volumes:
+  pgdata:
+    name: anesop-pgdata
+  redisdata:
+    name: anesop-redisdata
+  rabbitmqdata:
+    name: anesop-rabbitmqdata
+  miniodata:
+    name: anesop-miniodata
+  promdata:
+    name: anesop-promdata
+  grafanadata:
+    name: anesop-grafanadata
+  lokidata:
+    name: anesop-lokidata
