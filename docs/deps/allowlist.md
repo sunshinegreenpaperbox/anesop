@@ -72,8 +72,8 @@
 | prettier | 3.9.10 | MIT | 格式化（S0-03） | 前端负责人 |
 | @commitlint/cli | 19.8.1 | MIT | 提交信息校验（S0-03） | 平台组 |
 | @commitlint/config-conventional | 19.8.1 | MIT | Conventional Commits 规则 | 平台组 |
-| vitest | 3.2.7 | MIT | 前端单测（S0-11） | 前端负责人 |
-| @vitest/coverage-v8 | 3.2.7 | MIT | v8 覆盖率报告与阈值（S0-11） | 前端负责人 |
+| vitest | 4.1.12 | MIT | 前端单测（S0-11；M2-M0-03 升级清除 tinypool 漏洞链） | 前端负责人 |
+| @vitest/coverage-v8 | 4.1.12 | MIT | v8 覆盖率报告与阈值（S0-11；随 vitest 升级） | 前端负责人 |
 | @vue/test-utils | 2.4.6 | MIT | Vue 组件测试（S0-11） | 前端负责人 |
 | jsdom | 26.1.0 | MIT | Vitest DOM 环境（S0-11） | 前端负责人 |
 | @playwright/test | 1.65.0 | Apache-2.0 | E2E 冒烟（S0-11） | 前端负责人 |
@@ -109,3 +109,13 @@
   （CLASS retention、无运行时依赖、不随产品分发第三方代码），用于抑制 SpotBugs
   `EI_EXPOSE_REP2` 字段/构造器注入误报；不使用官方 `spotbugs-annotations`（LGPL-2.1，
   需法务结论）。M1 重新评估；如改用官方依赖须先登记本表并由法务确认。
+
+## 六、pnpm overrides（传递依赖安全修复）
+
+| 包 | 版本 | 许可证 | 原因 | 引入任务 |
+|---|---|---|---|---|
+| glob | 14.0.6 | ISC | 修复 CLI 注入 GHSA-5j98-mcp5-4vw2（仅测试/CLI 工具链，不进入交付物） | M2-M0-03 |
+| minimatch | 11.0.8 | ISC | 修复 ReDoS，glob 14 依赖链 | M2-M0-03 |
+
+override 仅影响测试与 CLI 工具链；升级后用 `pnpm audit --dev --audit-level high`（npmjs registry）
+验证 0 high/critical，并跑 `pnpm test:unit`/`lint`/`build`/`e2e` 全绿。

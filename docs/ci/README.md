@@ -45,7 +45,8 @@
   凭据，真实凭据由 `ci/secret-scan` 负责；排除项写在工作流命令注释中，不使用全局抑制。
 - `ci/deps-license` 的漏洞策略：**生产依赖树** high/critical 硬阻断；**devDependencies** 的
   high/critical 必须逐条登记在 `docs/ci/audit-exceptions.md`（含 GHSA、责任人、`expires`），
-  未登记或过期同样阻断。当前 3 条 dev-only 例外（glob、tinypool ×2）到期 2026-12-18。
+  未登记或过期同样阻断。2026-11-13（M2-M0-03）升级 vitest 4.1.12 并 override
+  glob 14.0.6 / minimatch 11.0.8 后，devDependencies 漏洞为 **0**，阻断级例外清零。
 - `ci/secret-scan` 不使用 `gitleaks/gitleaks-action`（组织仓库需商业 license），改为固定版本
   CLI 直接下载，因此**不需要任何 secret**。
 - 10 个 job 均未使用 `continue-on-error`，唯一例外是 `ci/image-scan` 的镜像构建步骤
@@ -195,8 +196,10 @@ CI 中不因 EXT-08 跳过任何代码/配置类门禁（lint、typecheck、单�
   `pnpm install --frozen-lockfile`；lockfile 一致性由 CI 的 install 步骤把关。
 - **gitleaks 全历史扫描**首次运行可能命中历史提交中的合成凭据；`docs/ci/gitleaks.toml`
   只精确豁免已登记的合成值/演示种子，不放行目录级真实凭据。
-- **devDependencies 漏洞**（glob/tinypool）当前以例外表管理，到期 2026-12-18；到期前须升级
-  vitest/相关工具链，否则 `ci/deps-license` 自动转红。
+- **devDependencies 漏洞**：2026-11-13 已升级 vitest/@vitest/coverage-v8 到 4.1.12，
+  并以 `pnpm-workspace.yaml` 的 `overrides` 固定 glob 14.0.6、minimatch 11.0.8；
+  `pnpm audit --dev` 为 0 漏洞，例外表不再有 dev high/critical 条目。升级工具链后须复跑
+  `pnpm test:unit` / `pnpm lint` / `pnpm build` / `pnpm e2e`。
 - **白名单历史缺口**（`docs/ci/deps-allowlist-baseline.txt`）4 条 direct 依赖（spring-context、
   spring-aop、aspectjweaver、jackson-datatype-jsr310）待补 `docs/deps/allowlist.md`；新增依赖
   不受基线保护，必须直接进白名单。

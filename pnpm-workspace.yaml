@@ -14,3 +14,13 @@ onlyBuiltDependencies:
   - esbuild
   - vue-demi
 # @scarf/scarf 是 @stoplight/spectral-cli 的遥测依赖，安装脚本无功能作用；pnpm 11 严格模式需显式忽略。
+
+# 依赖漏洞 override（M2-M0-03，2026-11-13）：消除 devDeps high/critical 与已知 moderate。
+# - vitest 4.1.12 已移除 tinypool 漏洞链；glob 14 / minimatch 11 修复 CLI 注入与 ReDoS。
+# 升级受限：js-beautify/test-exclude 声明 glob ^13，此处强制到 14 的兼容修复版本，
+# 仅用于 CLI/测试工具链（不进入交付物），改动后需 pnpm test:unit / lint / build 全绿。
+overrides:
+  glob: 14.0.6
+  minimatch: 11.0.8
+minimumReleaseAgeExclude:
+  - glob@14.0.6

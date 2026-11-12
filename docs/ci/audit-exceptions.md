@@ -5,25 +5,22 @@
 > `pnpm audit --prod --audit-level high` 硬门禁（不受本表影响）。
 >
 > 维护：S0-04 起草；到期前由责任人升级依赖或重新评审续期。
-> 到期：**2026-12-18**（M1 前，与 JaCoCo/白名单 ratchet 同批清理）。
+> 复核：**2026-11-13（M2-M0-03）**。vitest 3.2.7 → 4.1.12、新增 `glob@14.0.6` /
+> `minimatch@11.0.8` override 后，`pnpm audit --dev` 为 **0 漏洞**；glob/tinypool 三类
+> high/critical 例外全部失效并删除，阻断级例外清零。
 
 ## 一、阻断级例外（high/critical，逐条登记）
 
 | GHSA | 包 | 严重度 | 依赖面 | 说明 | 处置与责任人 | 期限 |
 |---|---|---|---|---|---|---|
-| GHSA-5j98-mcp5-4vw2 | glob >=10.2.0 <10.5.0 | high | dev（eslint/test-exclude/js-beautify） | 仅 CLI `-c/--cmd` 参数注入，构建脚本不拼接不可信输入 | 升级 vitest/openapi 相关工具链时随 glob 一并升级；前端负责人 | expires=2026-12-18 |
-| GHSA-5gmw-xhrv-c9v3 | tinypool <=2.1.0 | critical | dev（vitest worker） | 原型污染链需攻击者控制 worker 选项；仅本地/CI 测试进程 | 升级 vitest ≥4.1.11（当前 3.2.7），由 S0-08 依赖刷新或 Dependabot PR 承载；前端负责人 | expires=2026-12-18 |
-| GHSA-85c8-ppgw-ccpr | tinypool <2.1.2 | critical | dev（vitest worker） | 同上，原型污染到 RCE；测试进程不接受外部输入 | 同上；前端负责人 | expires=2026-12-18 |
+| （无） | — | — | — | 2026-11-13 复核：glob（GHSA-5j98-mcp5-4vw2）、tinypool（GHSA-5gmw-xhrv-c9v3、GHSA-85c8-ppgw-ccpr）已分别随 `glob@14.0.6` override 与 `vitest@4.1.12` 消除 | 前端负责人 | 已关闭 |
 
 ## 二、记录项（低于阻断线，仅登记）
 
 | GHSA | 包 | 严重度 | 依赖面 | 备注 |
 |---|---|---|---|---|
 | GHSA-5m5x-9j46-h678 | element-plus <=2.11.0 | moderate | prod | el-link 输入校验不足；当前 2.9.11，S0-08 升级到 ≥2.11.1 时消除 |
-| GHSA-82fw-gwwq-j7x9 | vitest / @vitest/mocker | moderate | dev | 随 vitest 升级消除 |
-| GHSA-qxg6-89mg-rqv8 | @vitest/mocker | moderate | dev | 随 vitest 升级消除 |
-| GHSA-3g3m-2fjr-6pw4 | glob | moderate | dev | AbortSignal 取消绕过；随 glob 升级消除 |
-| GHSA-g3hv-75wg-m249 | minimatch | moderate | dev | ReDoS；随工具链升级消除 |
+| — | vitest / @vitest/mocker / glob / minimatch | — | dev | 2026-11-13 已随 vitest 4.1.12 + glob 14.0.6 + minimatch 11.0.8 全部消除，仅保留本行作为复核记录 |
 
 ## 三、新增例外的流程
 
