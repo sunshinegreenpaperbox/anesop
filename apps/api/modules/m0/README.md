@@ -22,7 +22,7 @@
 | `sys_dict_type` / `sys_dict_item` | 字典；同类型内 code 唯一 |
 | `sys_refresh_token` | 刷新令牌（SHA-256 哈希、有效期、撤销时间、客户端信息）；V3 |
 
-## 结构
+## 目录与结构
 
 ```text
 m0/
@@ -37,7 +37,24 @@ m0/
 - 允许：`m0-impl` → `m0-api`；其他模块 → `m0-api`；
 - 禁止：任何模块 → `m0-impl`；`m0-impl` → 其他模块 `impl`；模块间循环依赖。
 
-## 测试与运行
+## 如何运行
+
+本模块不单独启动，由 `api-bootstrap` 统一装配：
+
+```bash
+source scripts/env.sh
+./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am -DskipTests package
+export ANESOP_DB_URL=jdbc:postgresql://127.0.0.1:5432/anesop
+export ANESOP_DB_USER=anesop ANESOP_DB_PASSWORD=anesop
+java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.active=dev
+```
+
+`dev` profile 加载 `db/migration` + `db/seed/demo` 并允许进程内 JWT 密钥；`prod` 只加载
+`db/migration`、关闭 springdoc，缺失 `ANESOP_JWT_SECRET` 或存在 `demo_*` 账号时拒绝启动。
+运行需 PostgreSQL 16（Docker 不可用，EXT-08）。联调步骤见
+[`docs/guides/demo.md`](../../../../docs/guides/demo.md)。
+
+## 如何测试
 
 ```bash
 source scripts/env.sh
@@ -53,6 +70,23 @@ source scripts/env.sh
   软删除与乐观锁（S-4）。
 - `MigrationUpgradePathTest`：V1 → V2 升级、history 递增、命名/版本连续且无 undo 脚本。
 - Docker 不可用（EXT-08），集成测试使用 Zonky 嵌入式 PostgreSQL 16；Testcontainers 仅保留 BOM。
+
+## 关键契约
+
+- 本域契约：`packages/contracts/openapi/auth.yaml`（登录/刷新/登出/改密/当前用户/会话）；
+  服务端实现以契约为准，operationId 与 `docs/modules/m0/README.md` 一致。
+- 跨模块能力经 `m0-api`：`AuthPrincipal`、`AuditWriter`、`DataScopeResolver` 等；其他模块
+  不得依赖 `m0-impl`、不得直连 `m0_platform` 表。
+- 权限码：`<模块>:<资源>:<动作>`（如 `m0:auth:read`），授权表达式加 `PERM_` 前缀；
+  角色码加 `ROLE_` 前缀。角色 R1–R11 映射见 [`docs/modules/m0/README.md`](../../../../docs/modules/m0/README.md)。
+- 契约变更走 [`docs/guides/dev-workflow.md`](../../../../docs/guides/dev-workflow.md) 的门禁：
+  spectral + oasdiff + 生成物漂移 + 双人评审（权限/审计属核心域）。
+
+## 负责人（占位）
+
+- Owner：`@anesop/m0-platform-security`、`@anesop/security-review`（双人评审；CODEOWNERS 占位团队）
+- 备份：`@anesop/maintainers`
+- 状态：S0-06/07 已交付认证、RBAC、审计与迁移；后续按 M0 任务扩展字典/消息/文件等能力。
 
 ## 状态
 

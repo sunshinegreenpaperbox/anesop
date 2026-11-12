@@ -18,7 +18,7 @@
 | S0-09 | 采集网关 POC | `services/device-gateway/`、`db/migration/`（V4） | S0-02/06 | 3 天 | Done |
 | S0-10 | 部署环境（Compose） | `deploy/compose/`、`scripts/` | S0-02 | 1.5 天 | Done |
 | S0-11 | 测试基座 | 各模块 `src/test/`、`e2e/`、根 pom | S0-02 | 2 天 | Done（JaCoCo/Vitest/Playwright/Testcontainers；m0、网关有到期 ratchet） |
-| S0-12 | 开发文档与一键起 | `README.md`、`docs/`、`scripts/` | S0-02/10 | 1 天 | Ready |
+| S0-12 | 开发文档与一键起 | `README.md`、`docs/`、`scripts/` | S0-02/10 | 1 天 | Done |
 
 **并行建议**：01→02 串行；之后 03/05/06/10 并行；再 04/07/09；最后 08/11/12。总控最多同时开 3 个队友。
 
@@ -110,11 +110,20 @@
 - 验收：新人按 README 30 分钟内跑起来；环境变量无缺失；链接有效。
 - 写域：`README.md`、`docs/`、`scripts/`。
 
-## S0 退出准则（M1 判定）
+## S0 退出准则（M1 判定）— 2026-11-12 评估
 
-1. `docker compose up -d` 后登录→首页→一个受保护接口打通；
-2. CI 10 个检查全绿，覆盖率达标；
-3. 契约 lint + 生成 + 兼容检查通过；
-4. 空库与升级库迁移均通过；
-5. 采集 POC 断网补传通过；
-6. 新人按 README 30 分钟内可运行。
+1. `docker compose up -d` 后登录→首页→一个受保护接口打通 —— **环境受限（EXT-08）**：
+   Compose 静态校验 PASS 32/0；本地以嵌入式 PG16 + api-bootstrap jar + Vite 实测
+   登录→/me→改密→重登链路通过（S0-08/S0-12 证据）。
+2. CI 10 个检查全绿、覆盖率达标 —— **部分通过（环境受限 + ratchet）**：10 job 文件落地并与
+   branch-protection 逐字对齐，`scripts/ci-local.sh --fast` 9m13s 全绿；无 GitHub 远端未实跑。
+   覆盖率：api-bootstrap 85.11/60.42、gateway 83.58/62.06（行达标）、m0 聚合 87.25/63.95；
+   m0-impl 单模块与 gateway 分支为临时 ratchet（到期 2026-12-18）。
+3. 契约 lint + 生成 + 兼容检查通过 —— **通过**：spectral 0/0、oasdiff 4 域无破坏、
+   生成物漂移 PASS、TS/Java DTO 同源（auth.yaml 0.3.0）。
+4. 空库与升级库迁移均通过 —— **通过**：V1–V4 + V100 空库/幂等/升级/append-only 测试；
+   生产 locations 无演示账号。
+5. 采集 POC 断网补传通过 —— **通过**：39 测试；10 分钟 660 帧不丢、断网恢复补传不重复、
+   重启恢复（S0-09 证据）。
+6. 新人按 README 30 分钟内可运行 —— **通过**：实测快速开始约 7 分钟（缓存态），
+   链接 129/0 失效；`scripts/dev-check.sh` PASS。

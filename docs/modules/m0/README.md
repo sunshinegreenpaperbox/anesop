@@ -4,6 +4,17 @@
 > §2.4.1（M0 公共支撑）、§3.9.1（等保身份鉴别/审计）、§3.9.2（RBAC 与数据权限）、§3.9.5（OAuth2/JWT）。
 > 迁移：`db/migration/V1`（结构）、`V2`（平台预置）、`V3__m0_auth_token.sql`（刷新令牌 + `m0:auth:read`/`m0:auth:write` + `phone_hash`）。
 
+## 0. 使用方式（本文档怎么用）
+
+| 你要做什么 | 从这里开始 |
+|---|---|
+| 本地跑起登录/改密/会话 | [`docs/guides/quickstart.md`](../../guides/quickstart.md) → [`docs/guides/demo.md`](../../guides/demo.md) |
+| 看/改实现 | [`apps/api/modules/m0/README.md`](../../../apps/api/modules/m0/README.md)（模块边界、测试命令、状态） |
+| 改接口字段 | 先改 [`packages/contracts/openapi/auth.yaml`](../../../packages/contracts/openapi/auth.yaml)，再 `bash scripts/gen-contracts.sh --all`；禁止手改生成物 |
+| 改权限码/角色映射 | 本文件第 3 节 + `db/migration`（新增版本，不改已执行脚本），权限/审计属核心域需双人评审 |
+| 查审计 | `m0_platform.sys_audit_log`（只追加）；查询示例见 [`docs/guides/demo.md`](../../guides/demo.md) 第 4 节 |
+| 跑测试 | `./scripts/mvn.sh -B -pl apps/api/modules/m0/impl -am test` |
+
 ## 1. 接口（与契约 operationId 一致）
 
 | 方法 | 路径 | 授权 | 说明 |

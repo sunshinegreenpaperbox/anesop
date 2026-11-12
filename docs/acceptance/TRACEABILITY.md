@@ -13,3 +13,10 @@
 | 权限与数据范围 | 3.9.2 | auth.yaml | m0/auth | 菜单/按钮 | PermissionTest | 待验（S0-07） |
 | 质控指标计算 | 2.4.8 | quality.yaml（M7 建） | m7 | 质控看板 | QcIndicatorTest | 待验 |
 | 驾驶舱态势 | 2.4.9 | dashboard.yaml（M8 建） | m8 | 大屏 | DashboardSmokeTest | 待验 |
+| 登录/刷新/撤销 | 3.9.2/3.9.5 | auth.yaml | m0/auth | 登录/改密页 | AuthApiIntegrationTest（bootstrap） | 已实现（S0-07） |
+| 权限越权 403 + 审计 | 3.9.1/3.9.2 | auth.yaml | m0/audit | 403 页/菜单过滤 | AuthApiIntegrationTest（ACCESS_DENIED） | 已实现（S0-07） |
+| 审计 append-only | 3.9.1 | — | db/V1 触发器 | — | FlywayMigrationTest | 已实现（S0-06） |
+| 演示数据隔离 | 3.9.1 | — | db/seed/demo | — | DemoSeedMigrationTest | 已实现（S0-06） |
+| 契约兼容与生成物漂移 | 3.5 | 4 域 | — | 生成 TS/Java DTO | contract-check（lint/breaking/drift） | 已实现（S0-05/S0-07） |
+| 前端 401 刷新重放 | 3.9.5 | auth.yaml | — | http.ts | http.spec.ts | 已实现（S0-08） |
+| 登录→首页→受保护接口 | ACCEPTANCE M1 | auth.yaml | m0/auth | 登录/主布局 | e2e + 真实联调 | 已实现（S0-08/S0-12，Docker 受限） |

@@ -4,7 +4,10 @@
 > 当前只交付设计令牌（`tokens.css` + `tokens.ts`）；共享展示组件随 M1 起按需新增，
 > 新增组件前先确认是否已有 Element Plus 组件可满足，避免重复造轮子。
 
-## 1. 文件与导出
+## 1. 职责与目录
+
+**职责**：作为全前端唯一的设计令牌事实源，提供 CSS 变量、TS 投影与 Element Plus 主题映射；
+当前不提供业务组件，共享展示组件随 M1 起按需新增。
 
 | 文件 | 用途 |
 |---|---|
@@ -97,7 +100,47 @@ success/warning/danger/error/info 同构；`--el-font-family`、`--el-font-size-
 7. **无障碍**：正文文本与背景对比度 ≥ 4.5:1，大字号 ≥ 3:1；焦点环统一使用
    `--anesop-shadow-focus` / `:focus-visible`，不得移除 outline。
 
-## 5. 变更记录
+## 5. 如何运行
+
+本包不单独运行，作为工作区依赖被 `apps/web` 引入：
+
+```ts
+// apps/web/src/main.ts
+import 'element-plus/dist/index.css'
+import '@anesop/ui/tokens.css'   // 必须在 Element Plus 之后
+```
+
+`package.json` 的 `exports` 同时暴露 `tokens.css` 与 `tokens.ts`；`apps/web` 通过
+`workspace:*` 依赖，执行 `pnpm install --frozen-lockfile` 后即可使用。
+
+## 6. 如何测试
+
+- 本包当前无独立单测；令牌正确性由 `apps/web` 的 Vitest/构建与 E2E 间接覆盖：
+  ```bash
+  pnpm -C apps/web exec vue-tsc --noEmit
+  pnpm test:unit
+  pnpm -C apps/web build
+  ```
+- 修改令牌后必须人工检查登录页/首页/表单/表格的对比度与 Element Plus 覆盖是否生效
+  （加载顺序：Element Plus CSS 在前，`tokens.css` 在后）。
+- 新增/改令牌需同步 `tokens.css`、`tokens.ts`、本文件与 `docs/ui/README.md`。
+
+## 7. 关键契约
+
+- **令牌是跨模块契约**：页面只消费 `var(--anesop-*)`，禁止硬编码颜色/字号/间距；
+  Element Plus 的 `--el-*` 覆盖只允许写在 `tokens.css`。
+- **只增不删**：删除或改语义按破坏性变更处理（评审 + 同步文档）；页面已使用的令牌改名
+  必须先加新名、再迁移、最后删旧名。
+- 语义别名优先：业务页面用 `--anesop-color-primary` 等，品牌展示区才用 `brand-*`。
+- 图表主题（M8 ECharts）从 `tokens.ts` 取色，不在页面另建色板。
+
+## 8. 负责人（占位）
+
+- Owner：`@anesop/web-core`（CODEOWNERS 占位团队；远端组织未建，审批暂不生效）
+- 备份：`@anesop/maintainers`
+- 状态：S0-08 建立令牌；共享展示组件随 M1 起按需新增（先确认 Element Plus 是否已满足）。
+
+## 9. 变更记录
 
 | 日期 | 变更 |
 |---|---|

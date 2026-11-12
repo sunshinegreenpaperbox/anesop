@@ -1,24 +1,54 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：M1（S0）工程骨架
-- 当前 Round：4（2026-11-12）
-- 最近提交：S0-06 数据库迁移基线（评审修复）
-- 已完成任务：11 / 12（S0-01、S0-02、S0-03、S0-04、S0-05、S0-06、S0-07、S0-08、S0-09、S0-10、S0-11）
-- 进行中：S0-12 开发文档与一键起
-- 阻塞：—（Docker 不可用登记 EXT-08，不阻塞；远端 GitHub 组织未建，CODEOWNERS/分支保护为占位）
-- 下一步：S0-12 → M1 收口（tag m1、交接单、FINAL-REPORT 草稿、ratchet 计划复核）
-- 环境：JDK 21 就绪（.toolchain/jdk21）、Maven 3.10（本地仓库 .m2repo，脚本封装）、Node 26/pnpm 11（仓库内 store）、网络可达 npm/Maven Central；Docker 不可用（EXT-08）
-- 门禁：`./scripts/check.sh` → OK（约 6 分钟；根 reactor 121 后端测试 + JaCoCo 门禁、前端 Vitest 覆盖率、Playwright 3 条冒烟、契约 lint/breaking/drift）
+- 当前里程碑：**M1 工程骨架就绪（2026-11-12 达成）**
+- 当前 Round：8（2026-11-12）
+- 最近提交：S0-12 开发文档与一键起
+- 已完成任务：**12 / 12（S0 全部）**
+- 进行中：M2 MVP 准备（排程 + 术前）
+- 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
+- 下一步：M2 任务展开（E-M1 申请接收、E-M2 排程工作台与冲突检测、E-M4 术前访视评估）
+- 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
+  Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
+
+## M1 退出准则评估（S0 六条）
+
+| # | 准则 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | Compose 起全栈后登录→首页→受保护接口 | 环境受限（EXT-08） | compose-check PASS 32/0；本地嵌入式 PG + API + Vite 实测链路（S0-08/S0-12） |
+| 2 | CI 10 检查全绿、覆盖率达标 | 部分通过（无远端 + ratchet） | ci.yml 10 job；ci-local --fast 9m13s 绿；覆盖率见 docs/testing（m0/网关 ratchet 到期 2026-12-18） |
+| 3 | 契约 lint + 生成 + 兼容 | 通过 | spectral 0/0；oasdiff 4 域无破坏；drift PASS；TS/Java 同源 |
+| 4 | 空库/升级库迁移 | 通过 | V1–V4+V100；空库/幂等/升级/append-only；生产无 demo 账号 |
+| 5 | 采集 POC 断网补传 | 通过 | 39 测试；10min 660 帧不丢、断网恢复不重复、重启恢复 |
+| 6 | README 30 分钟可运行 | 通过 | 实测约 7 分钟；dev-check PASS；链接 129/0 失效 |
+
+## 门禁基线（2026-11-12）
+
+- `./scripts/check.sh` → OK（约 7 分钟）：根 reactor 121 后端测试、JaCoCo 门禁、
+  前端 32 用例覆盖率 88.3/80.21、Playwright 3/3、契约 lint/breaking/drift、规则检查。
+- `scripts/ci-local.sh --fast` → PASS（9m13s）。
+- 已知 ratchet：m0-impl 单模块 0.13/0.09、gateway 分支 0.60（到期 2026-12-18，ADR-0008）。
 
 ## 近期提交
 
 | 提交 | 任务 | 说明 |
 |---|---|---|
-| 9740afd | S0-01 | git init、.gitignore、README、CODEOWNERS、Issue/PR 模板、分支保护说明 |
-| e505418 | S0-02 | 根/聚合 POM、29 模块 reactor、api-bootstrap、前端壳、占位目录、ADR-0001 |
-| 18e8e16 | S0-03 | ESLint/Prettier/Checkstyle/SpotBugs/commitlint/EditorConfig、check.sh 七步门禁、allowlist、ADR-0002 |
-| 2121fd7 | S0-10 | Compose 9 服务 + 健康检查 + 资源限制、api/web Dockerfile、nginx TLS、监控 profile、compose-check、ADR-0004 |
-| d545f9a | S0-05 | 4 域 OpenAPI 3.1（22 path/26 op）、spectral + oasdiff 基线、TS 生成、数据字典初稿、ADR-0003 |
-| ff0512b | S0-05 修 | 400/422、三方核查接口、脱敏、生成物漂移校验（0.2.0，23 path/28 op） |
-| d183563 | S0-06 | 8 表/21 约束/16 索引、审计 append-only、SYNTHETIC 种子、演示账号隔离、嵌入式 PG16 测试 25 个、ADR-0005 |
-| （本提交） | S0-09 | 采集网关（TCP→解析→标准化→缓冲→PG）、断网补传幂等、39 测试、V4 采集表、ADR-0006 |
+| 9740afd | S0-01 | 仓库初始化、CODEOWNERS、Issue/PR 模板、分支保护说明 |
+| e505418 | S0-02 | monorepo 骨架（29 模块 reactor + 前端壳） |
+| 18e8e16 | S0-03 | ESLint/Prettier/Checkstyle/SpotBugs/commitlint、check.sh |
+| 2121fd7 | S0-10 | Compose 9 服务、Dockerfile、nginx、监控、compose-check |
+| d545f9a/ff0512b | S0-05 | OpenAPI 3.1 四域契约 + spectral/oasdiff/TS 生成（评审修复） |
+| d183563 | S0-06 | V1/V2 迁移、审计 append-only、演示种子隔离（评审修复） |
+| 890bf18 | S0-09 | 采集网关 POC（39 测试） |
+| b21a55a | S0-07 | 认证权限审计 + Java codegen（安全评审 3 blocking 修复） |
+| 6e9dce4 | S0-11 | JaCoCo/Vitest/Playwright/Testcontainers 基座 |
+| 7f72bf0 | S0-08 | 前端登录/布局/权限菜单/401 刷新 |
+| bad4204 | S0-04 | 10 项 CI 流水线 + ci-local 本地等价 |
+| （本提交） | S0-12 | README/guides/seed-demo/dev-check/链接校验 |
+
+## 下一里程碑 M2（2027-01-29）任务候选
+
+1. E-M1 手术申请接收与校验：patient/scheduling 契约实现 + HIS 适配器（模拟）+ 列表/详情页。
+2. E-M2 排程工作台与冲突检测：术间/台次/优先级/资质规则、冲突算法 + 单测、甘特/看板。
+3. E-M4 术前访视与评估：访视单、ASA/气道、RCRI/Apfel/STOP-BANG、麻醉计划。
+4. M1 前必须清理：覆盖率 ratchet、devDeps 漏洞例外、data_scope 绑定表、phone 写路径、
+   E2E-01/04 登录与越权用例、springdoc 全量 drift。

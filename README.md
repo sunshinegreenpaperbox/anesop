@@ -1,138 +1,270 @@
-# ANESOP 手术麻醉信息系统（围术期）
+# ANESOP — 手术麻醉信息系统（围术期）
 
-> 状态：**M1 工程骨架就绪进行中**，当前处于 Sprint 0（S0 工程基建）。完整任务状态见 [`PROJECT_STATE.md`](PROJECT_STATE.md)。
+> 一家三甲医院（30 间手术间、年手术量约 3.5 万例）的围术期临床记录与管理平台：
+> 覆盖手术申请与排程、术前访视、术中麻醉记录与设备采集、复苏、术后随访、麻精药品、
+> 耗材、绩效与质控。**临床记录以本系统为源**，患者主索引/药品/耗材分别以 HIS、药房、SPD 为权威源。
 
-## 项目简介
-
-ANESOP 为一家三甲医院（30 间手术间、年手术量约 3.5 万例）建设围术期手术麻醉信息系统，覆盖手术申请与排程、术前访视评估、术中麻醉记录与设备采集、复苏、术后随访、麻精药品、耗材、绩效与质控管理全流程。系统定位为“临床记录系统 + 围术期管理平台”，采用模块化单体 + 独立设备采集网关，单院私有化部署，一期交付 M0 公共支撑与 M1–M8 业务模块。临床记录以本系统为源，患者主索引、药品目录、耗材目录分别以 HIS、药房、SPD 为权威来源。
-
-## 技术栈摘要
-
-| 层 | 选型 |
+| 项 | 现状（2026-11-12） |
 |---|---|
-| 后端 | Java 21 LTS、Spring Boot 3.4、MyBatis-Plus 3.5.x、Flyway 10.x、springdoc-openapi 2.x |
-| 数据与中间件 | PostgreSQL 16、Redis 7.2、RabbitMQ 3.13、MinIO |
-| 集成 | Apache Camel 4 + HAPI HL7v2 2.x，独立 `services/device-gateway` 采集网关 |
-| 前端 | Vue 3.5、TypeScript 5.6、Element Plus 2.9.x、Pinia 3、Vue Router 4、Vite 6、ECharts 5.5.x |
-| 运行与观测 | Docker 24 + Compose（单院）、Nginx 1.27、Prometheus + Grafana + Loki |
+| 阶段 | **S0 工程基建完成（S0-01…S0-12）**；M1 工程骨架就绪，业务功能待 M1 起实现 |
+| 里程碑 | M1 工程骨架：2026-12-18 ｜ M2 MVP：2027-01-29 ｜ 验收：2027-07-02 |
+| 技术栈 | Java 21 + Spring Boot 3.4 + MyBatis-Plus + Flyway + PostgreSQL 16；Vue 3.5 + TS + Element Plus；独立采集网关 |
+| 形态 | 模块化单体（`apps/api/modules/m0…m8`）+ 独立设备采集网关 + Nginx；单院私有化部署 |
+| 门禁 | `./scripts/check.sh` 本地全绿（7 步，实测 416s）；CI 10 个 job 定义就绪（远端仓库未建，未在 runner 实跑） |
+| 环境限制 | **Docker 不可用（EXT-08）**：Compose 未实跑，镜像 digest 待补；本机无 PostgreSQL，运行时需自备 |
 
-版本锁定：根 `pom.xml` 的 `dependencyManagement` 统一管理，`package.json` 使用精确版本（禁用 `^`/`~`）并提交 `pnpm-lock.yaml`。新增或升级依赖先写 ADR 并更新 `docs/deps/allowlist.md`。
+跨会话状态、任务勾选与阻塞以 [`PROJECT_STATE.md`](PROJECT_STATE.md) 为唯一准；本 README 不重复维护进度。
+
+## 快速开始（5 分钟上手 / 全量门禁约 7 分钟，含实测耗时）
+
+### 前置条件
+
+| 依赖 | 要求 | 检查 |
+|---|---|---|
+| JDK 21 | 解压到 `.toolchain/jdk21`（新 clone 不含，已被 gitignore） | `bash scripts/dev-check.sh` |
+| Maven | 3.9+；**一律经 `./scripts/mvn.sh`**（系统默认 JDK 可能不是 21） | 同上 |
+| Node / pnpm | Node ≥20（CI 用 22）、pnpm ≥10（CI 用 11） | 同上 |
+| 网络 | 首次安装依赖/下载 Maven 构件；之后可离线 | — |
+| PostgreSQL 16 | **跑 API 与演示数据时才需要**；`check.sh` 用嵌入式 PG，不需要 | `bash scripts/dev-check.sh` 看 5432 |
+| Docker | 可选；本机不可用（EXT-08） | — |
+
+> home 只读：所有缓存必须落在仓库内（`.m2repo`、`.npm-cache`、`.pnpm-store`、`.playwright`）。
+> 不要写 `~/.m2`、`~/.npm`，也不要裸调系统 `mvn`/`java`。
+
+### 三步跑通（不依赖数据库）
+
+```bash
+# 1) 加载工具链（每个新终端都要）
+source scripts/env.sh
+# 预期：ANESOP env: JAVA_HOME=<repo>/.toolchain/jdk21 ... / openjdk version "21.0.2"
+
+# 2) 安装前端依赖（lockfile 必须一致）
+pnpm install --frozen-lockfile
+# 预期：Done / Already up to date；实测缓存就绪时 1s（冷缓存需下载依赖，未单独计时）
+
+# 3) 本地全量门禁：后端 verify + 前端 lint/类型/单测 + 契约 + 规则
+./scripts/check.sh
+# 预期末行：check.sh: OK / 耗时：416s（6m56s）
+```
+
+`check.sh` 的 7 步：后端 `mvn verify`（含 Checkstyle/SpotBugs/JaCoCo）→ `pnpm install --frozen-lockfile`
+→ ESLint+Prettier → `vue-tsc` → Vitest 覆盖率 → spectral/oasdiff/生成物漂移 → 规则检查。
+任一步失败即非 0 退出并打印失败环节。
+
+**2026-11-12 实测**：
+
+| 步骤 | 命令 | 耗时 | 结果 |
+|---|---|---|---|
+| 工具链 | `source scripts/env.sh` | <1s | JDK 21.0.2，缓存指向仓库内 |
+| 前端依赖 | `pnpm install --frozen-lockfile` | 1s（缓存就绪） | lockfile 一致 |
+| 全量门禁 | `./scripts/check.sh` | **416s（6m56s）** | OK：121 个后端用例 + 32 个前端用例 + 契约 0 error/0 warning |
+| 合计 | 快速开始三步 | **约 7 分钟** | 全部通过 |
+
+若只想先确认环境（约 10 秒）：`bash scripts/dev-check.sh`，末行 `dev-check: PASS`。
+
+### 只跑前端
+
+```bash
+source scripts/env.sh
+pnpm install --frozen-lockfile
+pnpm -C apps/web dev                 # http://localhost:5173，/api 代理到 localhost:8080
+pnpm lint                            # ESLint + Prettier
+pnpm -C apps/web exec vue-tsc --noEmit
+pnpm test:unit                       # Vitest + v8 覆盖率门禁
+pnpm e2e                             # Playwright 3 条壳冒烟（不依赖后端/Docker）
+```
+
+前端可独立启动；没有后端时登录会失败，壳页面（登录页/404/重定向）可正常渲染。
+
+### 只跑后端
+
+```bash
+source scripts/env.sh
+
+# 编译 + 单测 + 覆盖率 + Checkstyle/SpotBugs（不需要 PG：测试用嵌入式 PG16）
+./scripts/mvn.sh -B verify
+# 只跑 API 模块及其依赖
+./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am test
+
+# 启动 API（需要 PostgreSQL 16；dev profile 允许演示账号与进程内 JWT 密钥）
+./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am -DskipTests package
+export ANESOP_DB_URL=jdbc:postgresql://127.0.0.1:5432/anesop
+export ANESOP_DB_USER=anesop ANESOP_DB_PASSWORD=anesop
+java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.active=dev
+curl -s http://localhost:8080/actuator/health     # 预期 {"status":"UP",...}
+```
+
+没有 PostgreSQL 时，后端**测试仍可全绿**，但 API 启动会在 Flyway/数据源阶段失败；先按
+[`docs/guides/demo.md`](docs/guides/demo.md) 第 1 步初始化，或见
+[`docs/guides/troubleshooting.md`](docs/guides/troubleshooting.md)。
+
+### 需要登录/演示时
+
+1. 准备一个 PostgreSQL 16（本机安装或远程 dev 库），把连接参数写入环境变量：
+   `cp .env.example .env` 后按需修改，再 `set -a; source .env; set +a`
+   （脚本与应用不会自动读取 `.env`）；
+2. `bash scripts/seed-demo.sh --url jdbc:postgresql://127.0.0.1:5432/anesop --user anesop --password anesop`
+   （幂等；打印演示账号 `demo_admin` 与“必须改密”提示）；
+3. 按 [`docs/guides/demo.md`](docs/guides/demo.md) 启动 API/前端并走登录 → 改密 → 首页 → 审计。
+
+`.env.example` 是本地 dev 模板；生产 Compose 用 [`deploy/compose/.env.example`](deploy/compose/.env.example)，
+两者的差异与红线写在前者头部注释中。
 
 ## 目录结构
 
-S0-02 完成后为以下布局（当前部分目录尚未创建）：
-
 ```text
 anesop/
-├── AGENTS.md                  # L0 工程规则（唯一主文件）
-├── AUTONOMY.md                # 全自动施工规则
+├── AGENTS.md                  # L0 工程规则（唯一主文件；CLAUDE.md 等只是适配层）
+├── AUTONOMY.md                # 全自动施工规则（不提问/默认决策/阻塞挂号）
 ├── PROJECT_STATE.md           # 跨会话状态：阶段/任务/阻塞/下一步
 ├── README.md                  # 本文件
+├── .env.example               # 本地 dev 环境变量模板（.env 不入库）
 ├── apps/
-│   ├── api/                   # Spring Boot 3.4 多模块：bootstrap + modules/m0..m8（各含 api/impl）
-│   └── web/                   # Vue 3.5 + Vite + TS，按 modules/m0..m8 分包
+│   ├── api/                   # Spring Boot 3.4 多模块
+│   │   ├── api-bootstrap/     # 唯一可执行装配点（8080）
+│   │   ├── api-contracts/     # 契约生成的 Java DTO（生成物不入库）
+│   │   └── modules/m0…m8/     # 每模块 api（对外接口）+ impl（实现/数据访问）
+│   └── web/                   # Vue 3.5 + Vite + TS；src/{api,layout,router,stores,views,modules}
 ├── packages/
-│   ├── contracts/             # OpenAPI 3.1 契约、生成类型、spectral/oasdiff 规则
-│   └── ui/                    # 共享组件与设计令牌
-├── services/device-gateway/   # 设备采集网关（独立进程，断网缓存 + 幂等补传）
-├── db/migration/              # Flyway V<版本>__<描述>.sql
-├── deploy/                    # Compose、Nginx、监控配置
-├── docs/
-│   ├── plan/                  # 方案书 V0.9 与基线（BASELINE.md）
-│   ├── decisions.md           # D-01–D-22 决策台账
-│   ├── adr/                   # 架构决策记录
-│   ├── acceptance/            # 验收标准与追溯矩阵
-│   └── ai/                    # AI 语料、任务卡、交接单、会话日志
-├── scripts/                   # env.sh / mvn.sh / check.sh / build_corpus.py
-└── .github/                   # CODEOWNERS、Issue/PR 模板（CI 由 S0-04 落地）
+│   ├── contracts/             # OpenAPI 3.1、spectral 规则、TS/Java 生成
+│   └── ui/                    # @anesop/ui：设计令牌（tokens.css / tokens.ts）
+├── services/device-gateway/   # 独立采集网关（TCP→解析→标准化→本地缓冲→幂等入库）
+├── db/
+│   ├── migration/             # Flyway V1…V4（生产 locations 只含本目录）
+│   └── seed/demo/             # V100 demo_admin（仅 dev/test 的独立 location）
+├── deploy/                    # Compose 9 服务、Nginx、Prometheus/Grafana/Loki
+├── docs/                      # guides / ai / acceptance / adr / api / ci / db / deploy /
+│                              # gateway / modules / plan / testing / ui / data-dictionary
+├── scripts/                   # env.sh、mvn.sh、check.sh、dev-check.sh、seed-demo.sh、
+│                              # ci-local.sh、contract-check.sh、gen-contracts.sh 等
+├── config/                    # Checkstyle / SpotBugs 规则
+├── .github/                   # CODEOWNERS、Issue/PR 模板、ci.yml（10 job）
+├── .toolchain/                # 本地 JDK 21（不入库）
+└── .m2repo/ .npm-cache/ …     # 仓库内缓存（不入库）
 ```
-
-## 快速开始
-
-> **S0 进行中：以下命令随 S0 各任务完成逐步可用**，未就绪的命令会因缺少 `pom.xml`、`package.json` 等而失败，属预期。
-
-| 步骤 | 命令 | 可用时点 |
-|---|---|---|
-| 1. 加载工具链 | `source scripts/env.sh` | ✅ 现在 |
-| 2. 后端编译与测试 | `./scripts/mvn.sh -B verify` | S0-02 起 |
-| 3. 前端依赖 | `pnpm install --frozen-lockfile` | S0-02 起 |
-| 4. 前端校验 | `pnpm lint` | S0-03 起 |
-| 5. 本地全量门禁 | `./scripts/check.sh` | S0-03 起 |
-| 6. 本地全栈 | `docker compose -f deploy/compose/docker-compose.yml up -d` | S0-10 起 |
-
-环境约束：
-
-- 必须先 `source scripts/env.sh`。它把 JDK 21（`.toolchain/jdk21`）、Maven 本地仓库（`.m2repo`）、npm/pnpm 缓存固定到仓库内；home 只读，**禁止写 `~/.m2`、`~/.npm`**。
-- Maven 一律用 `./scripts/mvn.sh`（系统默认 JDK 非 21，不要裸调 `mvn`）。
-- **Docker 当前不可用**（EXT-08）：Compose 启动与 Testcontainers 相关命令暂不可执行，只做静态校验，不阻塞主线；集成测试用 H2/嵌入式 PG 或 mock 替代。
 
 ## 常用命令
 
 ```bash
-source scripts/env.sh                          # 必须先执行
+source scripts/env.sh                    # 每个新终端先执行
 
-# 后端（仓库根）
-./scripts/mvn.sh -B verify                     # 编译、单测、覆盖率门禁
-./scripts/check.sh                             # 本地全量门禁（后端 + 前端 + 契约）
+bash scripts/dev-check.sh                # 环境自检（版本/缓存/文件/端口），末行 PASS/FAIL
+./scripts/check.sh                       # 本地全量门禁（提交前必跑）
+./scripts/mvn.sh -B verify               # 后端编译/单测/覆盖率/Checkstyle/SpotBugs
+./scripts/mvn.sh -B -f services/device-gateway/pom.xml verify   # 采集网关 39 用例
 
-# 前端（仓库根）
-pnpm install --frozen-lockfile
-pnpm lint                                      # ESLint + Prettier
-pnpm -C apps/web exec vue-tsc --noEmit         # 类型检查
-pnpm test:unit --coverage
-pnpm e2e                                       # Playwright
+pnpm install --frozen-lockfile           # 前端依赖（禁止改 lockfile 绕过）
+pnpm lint                                # ESLint + Prettier
+pnpm -C apps/web exec vue-tsc --noEmit   # 类型检查
+pnpm test:unit                           # Vitest + 覆盖率
+pnpm e2e                                 # Playwright 冒烟
+pnpm -C apps/web build                   # 生产构建 → apps/web/dist
 
-# 契约、规则与提交前检查
-npx spectral lint packages/contracts/openapi/*.yaml
-./scripts/check-rules.sh                       # 适配层漂移、临时条款过期
-git diff --check
-
-# 本地全栈（Docker 当前不可用，S0-10 后）
-docker compose -f deploy/compose/docker-compose.yml up -d
+bash scripts/contract-check.sh           # spectral + oasdiff + 生成物漂移
+bash scripts/gen-contracts.sh [--java]   # 契约生成（禁止手改生成物）
+bash scripts/check-rules.sh              # 适配层漂移/临时条款过期
+bash scripts/ci-local.sh --fast          # 本地 CI 等价（无远端时）
+bash scripts/seed-demo.sh --url …        # 演示数据（需 PG；幂等；生产禁用）
+bash scripts/compose-check.sh            # Compose 静态校验（EXT-08，不启动容器）
+bash scripts/install-hooks.sh            # 启用 commitlint（commit-msg 钩子）
 ```
 
-## 工程规则摘要
+## 演示入口
 
-规则主文件为 [`AGENTS.md`](AGENTS.md)（适配层 `CLAUDE.md`、`.cursor/rules/` 等不得新增规则）；全自动施工规则见 [`AUTONOMY.md`](AUTONOMY.md)；方案基线见 [`docs/plan/BASELINE.md`](docs/plan/BASELINE.md)；验收口径见 [`docs/acceptance/`](docs/acceptance/)。
-
-- **模块边界**：`apps/api/modules/m0..m8` 各分 `api`/`impl`，跨模块只依赖对方 `api`；禁访问对方表或 Mapper、禁循环依赖，由 ArchUnit + 依赖分析在 CI 检查。
-- **契约优先**：领域模型 → Flyway 迁移 → OpenAPI 3.1 契约，三者评审后编码；字段只增不删，破坏性变更升 major 并双人评审；`apps/web/src/api/generated/` 禁止手改。
-- **提交与 PR**：`main` 唯一长期分支，`feat/` ≤3 天、`fix/`/`chore/` ≤2 天；只 squash merge，禁 force push；Conventional Commits 1.0.0；PR 必填八字段（关联 Issue、变更类型、变更说明、影响面、测试证据、回滚方案、检查清单、AI 参与声明），单 PR 有效改动 ≤400 行。
-- **评审**：普通 PR 1 人批准；`modules/m2/`、`modules/m0/` 权限与审计、`db/migration/`、安全、契约破坏性变更 2 人批准且至少 1 名 CODEOWNERS。AI 不产生 `APPROVE`、不进入 CODEOWNERS。
-- **测试**：覆盖率整体行 ≥70%/分支 ≥55%，核心域与新增代码 ≥80%/70%，契约端点 100%；E2E-01–05 与临床记录专项（时间轴、断网采集、并发修改、签名锁定）为发布准入项。
-- **数据红线**：患者数据不出院；日志、截图、测试夹具不得含真实患者标识；测试只用标记 `SYNTHETIC` 的合成数据。
-- **AI 红线**：不直推 main、不跳过测试、不臆造接口与字段、不引入未审批依赖、不替代临床决策；七类高风险代码须人工逐行。
-
-## 当前里程碑状态
-
-| 项 | 状态 |
+| 入口 | 说明 |
 |---|---|
-| 里程碑 | M1 工程骨架就绪：**2026-12-18**；后续 M2 2027-01-29 … 验收 2027-07-02 |
-| 阶段 | **Sprint 0 进行中**（M1/S0）；S0-01 仓库初始化与协作资产本任务 |
-| 方案 | V1.0 基线已冻结（2026-11-12），见 `docs/plan/BASELINE.md` |
-| 已知约束 | Docker 不可用（EXT-08）；远端 GitHub 组织未建，CODEOWNERS 与分支保护暂用占位团队名 |
+| [`docs/guides/demo.md`](docs/guides/demo.md) | ACCEPTANCE C 演示脚本：初始化→登录/改密→（M1 后）排程→术前→术中→复苏→随访→统计→质控→驾驶舱；**明确标注 S0 已可用与待 M1/M2 的步骤** |
+| [`scripts/seed-demo.sh`](scripts/seed-demo.sh) | 合成数据初始化（Flyway `db/migration` + `db/seed/demo`）；幂等；支持 `--url` 与 `--compose`；无 PG 时清晰报错 |
+| [`docs/db/seed.md`](docs/db/seed.md) | 演示账号 `demo_admin`、角色/权限/字典基线、生产隔离红线 |
+| [`docs/guides/quickstart.md`](docs/guides/quickstart.md) | 新人 30 分钟路径（环境→门禁→前后端→演示→排错） |
 
-当前任务、阻塞与下一步以 [`PROJECT_STATE.md`](PROJECT_STATE.md) 为准，本 README 不重复维护进度。
+S0 阶段可演示：登录/强制改密/当前用户/会话/登出、审计留痕与 append-only、采集网关
+（模拟设备→断网缓冲→幂等补传）。排程、麻醉记录、统计、质控、驾驶舱为 M1/M2/M6/M7/M8 范围。
+
+## 测试与覆盖率
+
+| 层 | 技术 | 现状（2026-11-12） |
+|---|---|---|
+| 后端单元/集成 | JUnit 5 + AssertJ + Spring Boot Test + Zonky 嵌入式 PG16 | **121** 用例全绿（m0 权限/审计、迁移、采集网关、bootstrap） |
+| 前端单元 | Vitest + Vue Test Utils + v8 coverage | **32** 用例 / 10 文件；行 88.3%、分支 80.21% |
+| 契约 | spectral（0 error/0 warning）+ oasdiff + 生成物漂移 | 4 域 23 path/28 operation 全过 |
+| E2E | Playwright Chromium | 3 条壳冒烟（首页/重定向/404）；E2E-01–05 待 M1/M2 |
+| 覆盖率门禁 | JaCoCo + Vitest v8 | 整体行 ≥70%/分支 ≥55%；核心域 ≥80%/70%；m0/网关有到期 ratchet（2026-12-18） |
+
+```bash
+# 覆盖率报告
+open apps/api/api-bootstrap/target/site/jacoco-aggregate/index.html   # m0 聚合
+open services/device-gateway/target/site/jacoco/index.html            # 网关
+open apps/web/coverage/index.html                                    # 前端
+```
+
+细则与 ratchet 记录见 [`docs/testing/README.md`](docs/testing/README.md)。
+
+## CI
+
+工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 定义 **10 个必需检查**：
+`ci/lint`、`ci/typecheck`、`ci/unit-test`、`ci/contract`、`ci/build`、`ci/sast`、
+`ci/deps-license`、`ci/secret-scan`、`ci/image-scan`、`ci/e2e-smoke`；权限只读、并发取消、
+缓存落在仓库内路径。远端 GitHub 组织尚未建立，**尚未在真实 runner 跑过**；本地等价用
+`bash scripts/ci-local.sh`（无 Docker/Semgrep/gitleaks 时对应 job 明确 SKIP，不掩盖失败）。
+细节与例外（EXT-08 镜像构建、3 条 dev-only 审计例外）见 [`docs/ci/README.md`](docs/ci/README.md)。
 
 ## 文档索引
 
-| 路径 | 内容 |
+| 文档 | 内容 |
 |---|---|
-| [`AGENTS.md`](AGENTS.md) | L0 工程规则：技术栈锁定、模块边界、契约、测试、PR、AI 与患者数据红线 |
-| [`AUTONOMY.md`](AUTONOMY.md) | 全自动施工规则：不提问、默认决策、阻塞挂号、最终统一验收 |
-| [`PROJECT_STATE.md`](PROJECT_STATE.md) | 跨会话状态：阶段、完成项、进行中、阻塞、下一步 |
-| [`docs/plan/`](docs/plan/) | 方案书 V0.9（docx/PDF）、事实卡、[`BASELINE.md`](docs/plan/BASELINE.md) 基线 |
-| [`docs/decisions.md`](docs/decisions.md) | D-01–D-22 决策状态与 Q-01–Q-15 客户确认状态（唯一决策台账） |
-| [`docs/adr/`](docs/adr/) | 架构决策记录，模板见 `docs/adr/TEMPLATE.md` |
-| [`docs/ai/tasks/`](docs/ai/tasks/) | 任务卡与 S0 待办（写域、验收、非目标） |
-| [`docs/ai/corpus/`](docs/ai/corpus/) | AI 常驻语料、结构化 YAML、章节分片与检索块（生成物勿手改） |
-| [`docs/acceptance/`](docs/acceptance/) | 验收标准、追溯矩阵、外部依赖与最终报告 |
-| [`docs/branch-protection.md`](docs/branch-protection.md) | `main` 分支保护规则与远端建立后的落地步骤 |
-| [`.github/`](.github/) | CODEOWNERS、Issue Forms、PR 模板 |
+| [`AGENTS.md`](AGENTS.md) | L0 规则：技术栈锁定、模块边界、契约优先、测试、PR、AI 与患者数据红线 |
+| [`AUTONOMY.md`](AUTONOMY.md) | 全自动施工规则与决策/合并/上线/数据四道闸门 |
+| [`PROJECT_STATE.md`](PROJECT_STATE.md) | 阶段、S0 任务勾选、阻塞、下一步 |
+| [`docs/guides/quickstart.md`](docs/guides/quickstart.md) | 新人 30 分钟上手（含预期输出与时间盒） |
+| [`docs/guides/dev-workflow.md`](docs/guides/dev-workflow.md) | 分支/提交/门禁/契约/迁移/交接单/链接校验 |
+| [`docs/guides/demo.md`](docs/guides/demo.md) | ACCEPTANCE C 演示脚本与步骤可用性 |
+| [`docs/guides/troubleshooting.md`](docs/guides/troubleshooting.md) | JDK、pnpm、嵌入式 PG、Playwright、Docker、端口、权限等 |
+| [`docs/acceptance/ACCEPTANCE.md`](docs/acceptance/ACCEPTANCE.md) | A–E 验收清单与判定规则 |
+| [`docs/acceptance/STATUS.md`](docs/acceptance/STATUS.md) | 施工状态看板（每 Round 更新） |
+| [`docs/acceptance/EXTERNAL-DEPS.md`](docs/acceptance/EXTERNAL-DEPS.md) | EXT-01…EXT-11 外部依赖与解除条件 |
+| [`docs/plan/BASELINE.md`](docs/plan/BASELINE.md) | 方案 V1.0 基线（冻结） |
+| [`docs/decisions.md`](docs/decisions.md) | D-01–D-22 决策与 Q 待确认（唯一决策台账） |
+| [`docs/adr/`](docs/adr/) | ADR-0001…0010（模块布局、静态检查、契约、部署、迁移、网关、认证、测试、前端、CI） |
+| [`docs/api/README.md`](docs/api/README.md) | OpenAPI 契约、认证/错误/分页约定、版本流程 |
+| [`docs/db/README.md`](docs/db/README.md) | 迁移规范、schema 归属、expand-contract、回滚 |
+| [`docs/db/seed.md`](docs/db/seed.md) | 演示账号与种子隔离 |
+| [`docs/testing/README.md`](docs/testing/README.md) | 测试分层、覆盖率门禁、ratchet、E2E 计划 |
+| [`docs/ci/README.md`](docs/ci/README.md) | 10 job 矩阵、缓存、依赖许可证与漏洞策略 |
+| [`docs/deploy/README.md`](docs/deploy/README.md) | 单院 Compose 部署、备份恢复、上线闸门 |
+| [`docs/ui/README.md`](docs/ui/README.md) | 前端壳、设计令牌、会话存储与 401 刷新 |
+| [`docs/gateway/README.md`](docs/gateway/README.md) | 采集网关协议、缓冲/幂等、指标、容量与演进 |
+| [`docs/modules/m0/README.md`](docs/modules/m0/README.md) | M0 认证/RBAC/审计接口与权限码 |
+| [`docs/ai/README.md`](docs/ai/README.md) | 任务卡/交接单/会话日志/语料使用与刷新 |
+| [`docs/ai/SESSION_STARTER.md`](docs/ai/SESSION_STARTER.md) | 新会话启动词（总控/模块/站会/收尾） |
+| [`docs/ai/tasks/S0-backlog.md`](docs/ai/tasks/S0-backlog.md) | S0 任务卡与 M1 退出准则 |
+| [`docs/ai/corpus/README.md`](docs/ai/corpus/README.md) | 方案书语料包（生成物，勿手改） |
+| [`docs/branch-protection.md`](docs/branch-protection.md) | main 分支保护与 CODEOWNERS 落地步骤 |
+| [`apps/api/README.md`](apps/api/README.md) | 后端模块边界、数据归属、运行与测试 |
+| [`apps/web/README.md`](apps/web/README.md) | 前端工程、页面分包、运行与测试 |
+| [`packages/contracts/README.md`](packages/contracts/README.md) | 契约目录、规则、生成与兼容检查 |
+| [`packages/ui/README.md`](packages/ui/README.md) | 设计令牌使用与约束 |
+| [`services/device-gateway/README.md`](services/device-gateway/README.md) | 采集网关运行、模拟设备与边界 |
 
-## AI 协作会话
+## 已知限制（2026-11-12）
 
-- **总控会话**：负责目标、拆任务、仲裁与验收，不写业务代码。
-- **模块会话**：负责一个模块（M0–M8）或一个工作流（契约、采集、CI），按写域领取任务卡。
-- **换会话前**：先写交接单并更新 `PROJECT_STATE.md`；新会话从交接单接续。启动词见 [`docs/ai/SESSION_STARTER.md`](docs/ai/SESSION_STARTER.md)。
-- 仓库是唯一共享记忆：口头结论无效，所有结论必须落文件。
+- **Docker 不可用（EXT-08）**：`docker compose up` 未实跑，`deploy/compose` 仅静态校验；
+  镜像 digest 待首次可运行环境补齐；Testcontainers 路径暂不可用，测试用 Zonky 嵌入式 PG16。
+- **本机无 PostgreSQL**：`check.sh`/单测可全绿；API 启动与 `seed-demo.sh` 需自备 PG16，
+  否则以清晰错误退出（见 [`docs/guides/troubleshooting.md`](docs/guides/troubleshooting.md)）。
+- **远端 GitHub 未建**：CI 未在真实 runner 运行；CODEOWNERS 团队名为占位符，审批未生效。
+- **业务功能未实现**：M1–M8 模块仅有骨架/契约；排程、麻醉记录、复苏随访、麻精、统计、
+  质控、驾驶舱待对应里程碑。E2E-01–05 未落地。
+- **覆盖率 ratchet**：m0-impl 单模块与网关分支阈值为临时值，到期 2026-12-18，需在此前补齐。
+- **语料刷新依赖缺失**：`scripts/build_corpus.py` 需要 `python-docx`/`pyyaml`/`tiktoken`，
+  当前环境未安装（S0-12 未重跑语料）；刷新方法见 [`docs/ai/README.md`](docs/ai/README.md)。
+- 外部系统（HIS/EMR/LIS/PACS/CA/SPD/上报）均为 SIMULATED，解除条件见
+  [`docs/acceptance/EXTERNAL-DEPS.md`](docs/acceptance/EXTERNAL-DEPS.md)。
+
+## 协作与红线（摘要）
+
+- 规则主文件 [`AGENTS.md`](AGENTS.md)；变更走 Issue → 任务卡（写域）→ PR（八字段 + AI 声明）
+  → 门禁 → 评审。AI 不产生 `APPROVE`、不直推 main、不跳过测试、不臆造接口字段。
+- **患者数据不出院**：日志、截图、测试夹具不得含真实标识；测试只用 `SYNTHETIC` 数据；
+  生产网段禁止访问外部模型 API。
+- 生产发布与真实数据迁移必须人工签字；自动化施工不执行生产部署。
