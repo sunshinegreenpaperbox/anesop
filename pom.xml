@@ -328,13 +328,8 @@
       核心域覆盖率阈值（AGENTS.md：核心域行 ≥80%、分支 ≥70%）。
       这些 profile 以“模块 basedir 下是否存在该文件”激活，因此只会对目标模块生效，
       不需要修改各核心模块的 pom（S0-11 写域限制）。新增模块时按同样方式登记。
-
-      TEST: expires=2026-12-18 ratchet；TODO(TEMP): expires=2026-12-18
-      例外：m0-impl 的 AuthServiceImpl/AuditAspect/JdbcAuditWriter 主要由
-      api-bootstrap 的集成测试覆盖，而 JaCoCo check 按模块统计本模块单测执行数据，
-      当前骨架达不到 80/70。先用 0.13/0.09 的临时 ratchet 防止覆盖率回退；
-      M1 补 m0-impl 单测或改为聚合门禁后恢复 0.80/0.70。到期由
-      scripts/check-rules.sh 报警（见 docs/testing/README.md「Ratchet 记录」）。
+      M2-M0-03（2026-11-13）已补齐 m0-impl 单测，实测 96.34%/87.52%，
+      临时 ratchet 与 expires 标记全部删除，恢复 AGENTS 门槛。
     -->
     <profile>
       <id>coverage-core-m0</id>
@@ -344,13 +339,9 @@
         </file>
       </activation>
       <properties>
-        <!-- 实测（2026-11-12，仅本模块单测）：LINE 13.93%、BRANCH 9.71%。
-             AuthServiceImpl/AuditAspect/JdbcAuditWriter 由 api-bootstrap 集成测试覆盖，
-             聚合报告（api-bootstrap/target/site/jacoco-aggregate）为 87.25%/63.95%。
-             TEST: expires=2026-12-18 ratchet；TODO(TEMP): expires=2026-12-18，暂以 0.13/0.09 防回退；
-             M2 前补 m0-impl 单测并恢复 0.80/0.70。 -->
-        <jacoco.line.min>0.13</jacoco.line.min>
-        <jacoco.branch.min>0.09</jacoco.branch.min>
+        <!-- 实测（2026-11-13，仅本模块单测）：LINE 96.34%、BRANCH 87.52%。 -->
+        <jacoco.line.min>0.80</jacoco.line.min>
+        <jacoco.branch.min>0.70</jacoco.branch.min>
       </properties>
     </profile>
 
@@ -375,10 +366,10 @@
         </file>
       </activation>
       <properties>
-        <!-- 行覆盖已达 83.6%；分支 62.1% 未达 70%（LocalBuffer/TcpDeviceServer 错误分支）。
-             TEST: expires=2026-12-18 ratchet；TODO(TEMP): expires=2026-12-18，到 0.60 防回退；M2 补网关异常路径用例后恢复 0.70。 -->
+        <!-- 实测（2026-11-13）：LINE 91.68%、BRANCH 77.39%（LocalBuffer/TcpDeviceServer
+             异常分支与模拟设备用例已补齐）。 -->
         <jacoco.line.min>0.80</jacoco.line.min>
-        <jacoco.branch.min>0.60</jacoco.branch.min>
+        <jacoco.branch.min>0.70</jacoco.branch.min>
       </properties>
     </profile>
 

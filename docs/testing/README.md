@@ -9,10 +9,10 @@
 
 | 层 | 技术 | 目标占比 | 当前落点 |
 |---|---|---|---|
-| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 121 个用例、前端 4 个用例（骨架期以单测为主） |
+| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 140（m0-impl）+ 61（gateway）个用例、前端 32 个用例 |
 | 集成 | Spring Boot Test + 嵌入式 PostgreSQL 16（Zonky）/ Testcontainers | ≈20% | 迁移、MyBatis、认证越权、审计、网关幂等与断网补传 |
 | 契约 | spectral + oasdiff（Java DTO 反序列化用例） | — | `apps/api/api-contracts/src/test` |
-| E2E | Playwright（Chromium） | 关键路径 | 3 条首页冒烟；E2E-01–05 见 §6 |
+| E2E | Playwright（Chromium） | 关键路径 | 9 条（首页冒烟 3 + 登录/越权 6）；E2E-01–05 见 §6 |
 
 比例是目标而非硬门禁；骨架期没有业务域，集成/E2E 占比会随后续里程碑上升。
 
@@ -25,9 +25,9 @@
 | 范围 | LINE 目标 | BRANCH 目标 | 2026-11-12 实测 | 结论 |
 |---|---|---|---|---|
 | 整体（逐模块默认） | 0.70 | 0.55 | api-bootstrap 85.11% / 60.42% | 达标 |
-| 核心域 m0（权限/审计） | 0.80 | 0.70 | m0-impl 单模块 13.93% / 9.71%；m0 聚合（m0-api + m0-impl）87.25% / 63.95% | **临时 ratchet 0.13/0.09**，见 §3 |
+| 核心域 m0（权限/审计） | 0.80 | 0.70 | m0-impl 单模块 **96.34% / 87.52%**（2026-11-13，140 用例） | 达标；ratchet 已解除 |
 | 核心域 m2 | 0.80 | 0.70 | 暂无业务类（仅 `package-info`，0 class） | 阈值已配置，待 M2 生效 |
-| 核心域 device-gateway | 0.80 | 0.70 | 83.58% / 62.06% | 行达标；分支 **临时 ratchet 0.60** |
+| 核心域 device-gateway | 0.80 | 0.70 | **91.68% / 77.39%**（2026-11-13，61 用例） | 达标；ratchet 已解除 |
 | api-contracts（生成 DTO） | — | — | 排除后 0 class | 不设门禁，生成物禁止手改 |
 | m1–m8 api/impl（空壳） | 0.70 | 0.55 | 0 class / 无执行数据 | JaCoCo 自动跳过 |
 
@@ -38,11 +38,11 @@
   `apps/api/api-bootstrap/target/site/jacoco-aggregate/index.html`
 - 网关：`services/device-gateway/target/site/jacoco/index.html`
 
-**口径说明**：`check` 按模块统计本模块单测执行数据；m0-impl 的业务类主要由 api-bootstrap
-集成测试覆盖，因此单模块数字显著低于聚合数字。`report-aggregate` 默认
+**口径说明**：`check` 按模块统计本模块单测执行数据。M2-M0-03 起 m0-impl 已有完整的
+AuthServiceImpl / UserAdminServiceImpl / AuditAspect / JdbcAuditWriter 单测，单模块
+96.34%/87.52%，不再依赖 api-bootstrap 的聚合覆盖率。`report-aggregate` 默认
 `includeCurrentProject=false`，聚合 m0-api + m0-impl 的类与执行数据（bootstrap 的测试执行数据
-会计入，但 bootstrap 自身类不计入）。聚合报告用于诊断真实覆盖，逐模块 `check` 仍是可复现的
-构建门禁。M2 前应把 m0-impl 的关键单测补齐或引入独立聚合门禁模块。
+会计入，但 bootstrap 自身类不计入），继续作为跨模块诊断口径；逐模块 `check` 才是构建门禁。
 
 ### 排查覆盖率排除项
 
@@ -59,14 +59,16 @@
 
 ## 3. Ratchet 记录
 
-| 模块 | 当前值（LINE/BRANCH） | 临时阈值 | 目标 | 到期 | 解除条件 |
+| 模块 | 当前值（LINE/BRANCH） | 临时阈值 | 目标 | 状态 | 解除记录 |
 |---|---|---|---|---|---|
-| m0-impl | 13.93% / 9.71% | 0.13 / 0.09 | 0.80 / 0.70 | 2026-12-18 | 补 m0-impl 单测（AuthServiceImpl/AuditAspect/JdbcAuditWriter 异常与审计分支）或落地聚合门禁模块 |
-| device-gateway | 83.58% / 62.06% | 0.80 / 0.60（仅分支） | 0.80 / 0.70 | 2026-12-18 | 补 LocalBuffer/TcpDeviceServer 错误分支用例 |
-| m2-impl | 无类 | 0.80 / 0.70 | 0.80 / 0.70 | — | M2 引入业务类后自然生效 |
+| m0-impl | 96.34% / 87.52%（842/874、456/521） | 无 | 0.80 / 0.70 | **已解除** | M2-M0-03 补 AuthServiceImpl/UserAdminServiceImpl/AuditAspect/JdbcAuditWriter 等异常与边界单测（2026-11-13） |
+| device-gateway | 91.68% / 77.39%（793/865、308/398） | 无 | 0.80 / 0.70 | **已解除** | M2-M0-03 补 LocalBuffer/TcpDeviceServer/SimulatedDevice/Metric/VitalSample 分支用例（2026-11-13） |
+| m2-impl | 无类 | 无 | 0.80 / 0.70 | 待 M2 生效 | M2 引入业务类后自然生效 |
 
-- pom 中的标记：`TEST: expires=2026-12-18 ratchet`，并同时带 `TODO(TEMP): expires=2026-12-18`
-  供 `scripts/check-rules.sh` 现有扫描器识别；过期后该脚本会报警。
+- 根 `pom.xml` 已删除 `TEST: expires=2026-12-18 ratchet` 与 `TODO(TEMP): expires=2026-12-18`
+  标记，`grep -n "TEST: expires" pom.xml` 为空；`scripts/check-rules.sh` 无到期告警。
+- 确实不可达的分支（如 JVM 级 `JsonProcessingException`、`new Socket` 连接异常）不降低阈值，
+  由 80/70 的余量吸收，不加入排除项。
 - **禁止**为达标而把 service/领域类加入排除项；确需调整阈值必须更新本表与 ADR-0008。
 
 ## 4. 运行命令
@@ -116,7 +118,22 @@ pnpm e2e
 | E2E-04 | 权限越权 | M0 登录/RBAC、受保护页面 | M1 | 低权限账号直接访问受限路由/接口 → 断言 403 与审计；页面不显示无权菜单 |
 | E2E-05 | 麻精药品双人核对 | M5 麻精五专、双人核对 | M5 | 双人登录 → 核对/签字 → 断言未双人不可发药、留痕完整 |
 
-当前已落地：`apps/web/e2e/home.spec.ts` 3 条冒烟（首页标题/文案、`/`→`/home`、未知路径兜底）。
+当前已落地：
+
+- `apps/web/e2e/home.spec.ts` 3 条冒烟（首页标题/文案、`/`→`/home`、未知路径兜底）。
+- `apps/web/e2e/auth.spec.ts` 6 条（M2-M0-03）：
+  1. 空表单触发前端校验且不发出 `/v1/auth/login` 请求；
+  2. 登录成功 → `/home`，展示角色标签与权限概览；
+  3. 登录失败 → 停留 `/login`，展示契约 `code` / `message` / `traceId`；
+  4. **E2E-04 UI 级**：低权限用户访问 `/m0/sessions` → `/403`，且侧边菜单不显示「会话管理」；
+  5. `/me` 首次 401 → 单次 `/v1/auth/refresh` → 用新 Bearer 重放并成功（route 计数 + Authorization 断言）；
+  6. 登出 → 回 `/login`，`sessionStorage` 中令牌与用户快照清空。
+- `pnpm e2e` 3 次重跑稳定（9/9，无 flaky）。
+
+> **E2E-04 口径说明**：当前为 **UI 级越权（路由守卫 + 菜单权限过滤）+ `/api/v1/auth/*` 合成响应拦截**，
+> 没有真实后端参与，因此**不得宣称已覆盖真实越权 API**。真实后端全栈越权
+> （403 + 审计留痕 + 数据范围）由 M2-M1-01/M2-M2-01 的 `scripts/e2e-full.sh` 承接
+> （登录真实账号 → 直连受限 API → 断言 403 与 `sys_audit_log`），脚本落地前本表保持此声明。
 E2E-01–05 每条落地时必须在 PR 附带失败截图/trace，并接入 CI 的 e2e job。
 
 ## 7. Testcontainers 基座（Docker 不可用 EXT-08）
@@ -170,6 +187,9 @@ CI 建议把后端、前端、E2E 拆 job 并行（本地 `check.sh` 仍串行�
 
 ## 10. 变更记录
 
+- 2026-11-13（M2-M0-03）：m0-impl 覆盖率 96.34%/87.52%，device-gateway 91.68%/77.39%，
+  删除两处 ratchet 及全部到期临时标记；新增登录 + E2E-04 UI 级 E2E 6 条；
+  Vitest 升级 4.1.12、新增 glob 14.0.6 / minimatch 11.0.8 override，devDeps 漏洞清零。
 - 2026-11-12：S0-11 初版；JaCoCo 0.8.12、Vitest 3.2.7、Playwright 1.65.0、
   Testcontainers 1.20.4；m0-impl 与 gateway 分支为临时 ratchet。
   `./scripts/mvn.sh -B verify` 实测 5:22（BUILD SUCCESS），`./scripts/check.sh`

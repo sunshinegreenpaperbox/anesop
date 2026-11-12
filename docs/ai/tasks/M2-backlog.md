@@ -23,7 +23,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 |---|---|---|---|---|
 | M2-M0-01 | 数据范围绑定表与解析 | `db/migration/V5*`、`apps/api/modules/m0/**`、契约 auth.yaml | M1 | Done（独立 review PASS，0 blocking；122 测试） |
 | M2-M0-02 | 手机号加密与 hash 写路径 | `db/migration/V6*`、`apps/api/modules/m0/**`、契约 | M1 | Review（V6 + 契约 0.5.0 + 用户管理；待独立 review） |
-| M2-M0-03 | E2E-04 越权 + 登录 E2E + 覆盖率 ratchet 清理 | `apps/web/e2e/**`、各 `src/test/**`、根 pom | M1 | Ready |
+| M2-M0-03 | E2E-04 越权 + 登录 E2E + 覆盖率 ratchet 清理 | `apps/web/e2e/**`、各 `src/test/**`、根 pom | M1 | Done（m0 96/87、gateway 91/77；ratchet 清零；9 E2E） |
 | M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Ready |
 | M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Blocked |
 | M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Blocked |
