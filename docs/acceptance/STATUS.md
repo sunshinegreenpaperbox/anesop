@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M1 工程骨架就绪（2026-11-12 达成）**
-- 当前 Round：8（2026-11-12）
-- 最近提交：S0-12 开发文档与一键起
+- 当前里程碑：**M1 工程骨架就绪（2026-11-12 达成）**；施工**已暂停**（用户断电，2026-11-12）
+- 当前 Round：9（2026-11-12，暂停点）
+- 最近提交：`ee15c8b` chore(m0) 暂停前快照（WIP，M2-M0-01 未完成）
 - 已完成任务：**12 / 12（S0 全部）**
-- 进行中：M2 MVP 准备（排程 + 术前）
+- 进行中：M2-M0-01 数据范围绑定（WIP 快照，未验证/未 review）；M2 其余未开始
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M2 任务展开（任务卡：`docs/ai/tasks/M2-backlog.md`；先 M2-M0-01/02/03 清理，再 M2-M1-01 → M2-M2-01 → M2-M4-01）
+- 下一步（恢复点）：按 `docs/ai/handoffs/2026-11-12-暂停.md` 验证并完成 M2-M0-01，再按 M2-backlog 推进
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
