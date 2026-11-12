@@ -1,0 +1,64 @@
+server:
+  port: ${ANESOP_GATEWAY_HTTP_PORT:8081}
+  shutdown: graceful
+
+spring:
+  application:
+    name: anesop-device-gateway
+  main:
+    banner-mode: off
+  # Flyway 由 PersistenceConfig 显式装配（迁移失败不阻断启动），关闭 Boot 自动配置避免重复执行
+  flyway:
+    enabled: false
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: anesop-device-gateway
+
+anesop:
+  gateway:
+    gateway-id: ${ANESOP_GATEWAY_ID:GW-POC-01}
+    source: AUTO
+    synthetic: ${ANESOP_GATEWAY_SYNTHETIC:true}
+    flyway-enabled: ${ANESOP_GATEWAY_FLYWAY_ENABLED:true}
+    flyway-locations: filesystem:${anesop.root:..}/db/migration
+    max-clock-skew-seconds: 5
+    backfill-threshold-seconds: 120
+    tcp:
+      enabled: ${ANESOP_GATEWAY_TCP_ENABLED:true}
+      bind-address: ${ANESOP_GATEWAY_TCP_BIND:127.0.0.1}
+      port: ${ANESOP_GATEWAY_TCP_PORT:19090}
+      max-frame-bytes: 4096
+    buffer:
+      directory: ${ANESOP_GATEWAY_BUFFER_DIR:./data/buffer}
+      segment-bytes: 8388608
+      segment-interval-ms: 600000
+      max-bytes-per-device: 67108864
+    upload:
+      enabled: ${ANESOP_GATEWAY_UPLOAD_ENABLED:true}
+      interval-ms: 1000
+      batch-size: 200
+      retry-base-ms: 500
+      retry-max-ms: 30000
+      max-batches-per-cycle: 64
+    database:
+      url: ${ANESOP_GATEWAY_DB_URL:jdbc:postgresql://localhost:5432/anesop}
+      username: ${ANESOP_GATEWAY_DB_USER:anesop}
+      password: ${ANESOP_GATEWAY_DB_PASSWORD:}
+      login-timeout-seconds: 5
+
+logging:
+  level:
+    com.anesop.gateway: INFO

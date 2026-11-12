@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    ANESOP 设备采集网关（S0-09 POC）。
+    独立 Maven 工程：暂不进入根 pom 的 <modules>，由主会话在集成时追加一行
+    <module>services/device-gateway</module>（见 docs/gateway/README.md §9）。
+    版本一律由根 pom（spring-boot-starter-parent + dependencyManagement）锁定，
+    本文件不写第三方版本号（AGENTS.md「技术栈锁定」）。
+  -->
+  <parent>
+    <groupId>com.anesop</groupId>
+    <artifactId>anesop-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>device-gateway</artifactId>
+  <packaging>jar</packaging>
+
+  <name>ANESOP :: 设备采集网关</name>
+  <description>独立部署单元：模拟设备 TCP 接入 → 解析 → 标准化 → 本地文件缓冲 → 幂等入库（只采集不控制）</description>
+
+  <dependencies>
+    <!-- Web 容器：同时承载 actuator 管理端点（POC 与业务应用同进程模型分离，端口独立） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- 健康检查与 micrometer 指标；未引入 Prometheus registry（白名单未登记，见 README §6） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- PostgreSQL JDBC：驱动版本由 Spring Boot BOM 管理；网关直接用 JDBC（无 ORM） -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+    </dependency>
+
+    <!-- 迁移：POC 由网关自带 Flyway 自举 m2_anes；生产应由平台迁移作业独占（README §5） -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+
+    <!-- 测试：JUnit 5 + AssertJ + MockMvc/TestRestTemplate -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- 嵌入式 PostgreSQL 16：Docker 不可用（EXT-08）时的真实数据库基座 -->
+    <dependency>
+      <groupId>io.zonky.test</groupId>
+      <artifactId>embedded-postgres</artifactId>
+      <scope>test</scope>
+      <exclusions>
+        <!-- 只保留 Linux amd64（显式依赖），排除其他平台二进制以缩小测试依赖面 -->
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-windows-amd64</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-darwin-amd64</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.zonky.test.postgres</groupId>
+          <artifactId>embedded-postgres-binaries-linux-amd64-alpine</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.zonky.test.postgres</groupId>
+      <artifactId>embedded-postgres-binaries-linux-amd64</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 可执行 JAR：java -jar device-gateway-1.0.0-SNAPSHOT.jar（部署见 README §7） -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+
+      <!--
+        只覆盖 SpotBugs 的排除文件路径（不覆盖 effort/threshold/execution，均继承根 pom）。
+        原因：根 pom 指向 ${anesop.root}/config/spotbugs/exclude.xml，不在本任务写域；
+        本模块仅排除 EI_EXPOSE_REP2（构造器注入的误报），逐条说明见
+        services/device-gateway/config/spotbugs-exclude.xml 文件头。
+      -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${spotbugs-maven-plugin.version}</version>
+        <configuration>
+          <excludeFilterFile>${project.basedir}/config/spotbugs-exclude.xml</excludeFilterFile>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

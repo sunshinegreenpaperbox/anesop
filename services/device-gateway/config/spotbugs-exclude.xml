@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  设备采集网关模块级 SpotBugs 过滤（S0-09）。
+
+  为什么本模块单独一个过滤文件：
+    根 pom 的 excludeFilterFile 指向 ${anesop.root}/config/spotbugs/exclude.xml，
+    该路径不在本任务写域内；本模块若需要精确豁免，只能用"子模块覆盖插件配置 +
+    自带过滤文件"的方式，并在本文件与 README 中逐条说明。
+
+  保留全局口径：effort=Max、threshold=Medium、includeTests=false 均继承根 pom；
+  本文件只做两件事：
+    1. 复刻全局的 package-info 占位排除（覆盖 excludeFilterFile 后全局文件不再生效）；
+    2. 只对本模块排除 EI_EXPOSE_REP2 —— Spring 构造器注入持有 DataSource /
+       MeterRegistry / 仓储 / 缓冲引用是依赖注入的本来语义，字段全部 private final、
+       不对外暴露，属结构性误报；其他缺陷模式仍全量检查，不作任何豁免。
+
+  复核条件：升级 SpotBugs、改为非构造器注入、或根 pom 将 EI_EXPOSE_REP2 纳入全局
+  豁免后，删除本条并回归。责任人：网关负责人；复核版本：S0-09 之后首个 M2 迭代。
+-->
+<FindBugsFilter>
+  <Match>
+    <Class name="~.*\.package-info$"/>
+  </Match>
+  <Match>
+    <Package name="~com\.anesop\.gateway.*"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+</FindBugsFilter>
