@@ -1,0 +1,43 @@
+# I-01–I-14 外部系统集成（第 2 章表 2-5）
+- id: I-01
+  system: HIS
+  content: 患者主索引、住院门诊信息、手术申请、医嘱、收费；WebService/REST + HL7 v2，双向
+- id: I-02
+  system: EMR
+  content: 病历文书、知情同意、电子签名、病程记录；REST/视图/文档，双向
+- id: I-03
+  system: LIS
+  content: 血常规、凝血、血气、生化检验结果；HL7 v2/REST，入
+- id: I-04
+  system: PACS
+  content: 胸片、CT、超声影像与报告；DICOM/URL 集成，入
+- id: I-05
+  system: 麻醉机、监护仪、输注泵、BIS、肌松
+  content: 生命体征、波形、报警、参数；厂商协议/串口/网口/采集盒，入
+- id: I-06
+  system: 护理系统
+  content: 护理记录、转运交接；REST，双向
+- id: I-07
+  system: 药房/合理用药
+  content: 药品目录、处方、配伍禁忌、麻精药品；REST/HL7，双向
+- id: I-08
+  system: SPD/HRP/物资
+  content: 耗材主数据、出入库、结算；REST/中间表，双向
+- id: I-09
+  system: 医保/DRG/DIP
+  content: 手术编码、费用、病案首页；文件/接口，出
+- id: I-10
+  system: 国家/省级麻醉质控平台
+  content: 质控指标上报；文件/接口，出
+- id: I-11
+  system: CA/电子签名
+  content: 身份认证、签名验签、时间戳；厂商 SDK，双向
+- id: I-12
+  system: 统一身份认证
+  content: 单点登录、组织人员同步；LDAP/CAS/OAuth2，入
+- id: I-13
+  system: 消息通道
+  content: 短信、企业微信、院内消息；REST，出
+- id: I-14
+  system: NTP 时钟源
+  content: 全系统时间同步；NTP，入

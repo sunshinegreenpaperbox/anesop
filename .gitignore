@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# ANESOP .gitignore
+# 只提交源码、配置、契约、文档与 lockfile；工具链、缓存、构建产物、真实数据一律不入库。
+# 本文件不得用来忽略源码或契约；如需例外，用 ! 精确放行并写注释说明。
+# ---------------------------------------------------------------------------
+
+# Java / Maven
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+*.hprof
+hs_err_pid*
+replay_pid*
+*.war
+
+# Node / 前端 / pnpm
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+.pnpm-home/
+.pnpm-cache/
+.npm-cache/
+pnpm-debug.log*
+.npm/
+.eslintcache
+.vite/
+.turbo/
+
+# 环境与密钥（严禁入库；示例文件除外）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# 构建产物、日志与本地数据
+build/
+logs/
+tmp/
+*.log
+docker-data/
+
+# 测试与报告
+playwright-report/
+test-results/
+allure-results/
+
+# 本地工具链与包缓存（体积大，不入库）
+.toolchain/
+.m2repo/
+.playwright/
+.cache/

@@ -1,0 +1,37 @@
+# M0–M8 模块清单（第 2 章表 2-2）
+- module: M0 公共支撑
+  users: 全部角色、R9
+  capabilities: 统一认证与 SSO、RBAC 与数据权限、组织与字典、工作流与消息、审计日志、报表引擎与打印模板、CA 签名、接口平台与监控、文件存储、时间同步
+  outputs: 可登录、可授权、可审计、可集成的基础能力
+- module: M1 手术排程管理
+  users: R4、R1、R10、R2
+  capabilities: 申请接收与校验、规则引擎排程、拖拽工作台与冲突检测、急诊加台与停改台、术前准备联动、通知与回执、排程分析
+  outputs: 日/周排程表、冲突清单、变更记录、准点开台率
+- module: M2 麻醉信息管理
+  users: R2、R3、R5
+  capabilities: 术前访视与风险评分、麻醉计划与知情同意、三方核查、术中记录与设备采集、用药输液、预警、抢救与不良事件、复苏与随访、总结与质控提取
+  outputs: 麻醉记录单、访视单、复苏记录、随访记录
+- module: M3 人员管理
+  users: R1、R2、R3、R9
+  capabilities: 人员档案、分级授权、排班、培训与学分、绩效基础数据、账号生命周期
+  outputs: 资质台账、排班表、授权清单
+- module: M4 耗材仓库管理
+  users: R6、R3、R4
+  capabilities: 主数据与 UDI、出入库与效期、术间领用与消耗、高值一物一码、库存预警与盘点、供应商证照、SPD 对账
+  outputs: 消耗明细、UDI 追溯链、盘点差异表
+- module: M5 药品统计
+  users: R7、R3、R2
+  capabilities: 药品目录与麻精分类、五专管理、基数与请领、日结班结、消耗统计、配伍与异常提醒、上报报表
+  outputs: 麻精使用登记、空安瓿台账、药品消耗报表
+- module: M6 工作量统计
+  users: R1、R11、R8
+  capabilities: 指标口径、多维度统计、绩效口径配置、报表导出与数据锁定、DRG/DIP 联动（可选）、数据质量校验
+  outputs: 工作量报表、绩效基础数据包
+- module: M7 质量控制
+  users: R8、R1
+  capabilities: 指标体系、自动计算与钻取、不良事件与 RCA/PDCA、质控看板与报告、病历质量抽查、规则版本管理
+  outputs: 质控月报与季报、指标明细、整改台账
+- module: M8 驾驶舱
+  users: R11、R1、R4
+  capabilities: 实时手术态势、临床风险、资源态势、运营 KPI、质量与安全、大屏与移动摘要
+  outputs: 大屏看板、日报、预警提示

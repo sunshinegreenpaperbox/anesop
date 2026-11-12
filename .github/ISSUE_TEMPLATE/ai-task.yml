@@ -1,0 +1,161 @@
+name: AI 施工任务
+description: 由 AI 代理执行的施工任务，须预先声明任务号、写域、禁止事项与人工复核人
+title: "[AI-Task] "
+labels:
+  - "type/ai-task"
+  - "status/triage"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## AI 任务前置约定
+        - AI 只改写域内路径；越界改契约、改测试断言使其通过，均属违规，产出作废。
+        - AI 不产生 `APPROVE`、不写审批记录、不进入 CODEOWNERS；同一代理不得既写又审。
+        - 七类高风险代码（事务与并发、权限与数据范围、审计与留痕、计费与对账、临床规则、数据迁移、外部接口映射）须人工逐行复核并在 PR 注明"已逐行"。
+        - 全程只用 `SYNTHETIC` 合成数据；患者数据不出院。
+
+  - type: input
+    id: task-id
+    attributes:
+      label: 任务号
+      description: 任务卡编号或 Issue 编号，须与提交 trailer `AI-Task` 一致。
+      placeholder: "S0-01 / TASK-123 / #123"
+    validations:
+      required: true
+
+  - type: input
+    id: related-issue
+    attributes:
+      label: 关联任务卡 / Issue
+      description: 任务卡路径或上游 Issue。
+      placeholder: "docs/ai/tasks/S0-backlog.md#s0-01 或 #<issue>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: 任务目标
+      description: 一句话目标 + 交付物清单；不要写"尽量完善"这类不可验收表述。
+      placeholder: "目标 / 交付物 1..n / 完成定义"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: write-scope
+    attributes:
+      label: 写域（允许修改的路径）
+      description: 逐条列出允许写入的目录或文件；未列出即禁止。禁止删除现有文件（除非明确授权）。
+      placeholder: |
+        允许：根目录文件、.github/、docs/branch-protection.md
+        禁止：docs/acceptance/、PROJECT_STATE.md、AGENTS.md、AUTONOMY.md、scripts/
+    validations:
+      required: true
+
+  - type: textarea
+    id: forbidden
+    attributes:
+      label: 禁止事项
+      description: 逐条列出本次明确禁止的动作；默认包含六条硬红线。
+      value: |
+        - 不 commit、不 push、不建远端（如任务另有要求，在此覆盖说明）
+        - 不写患者数据；日志/截图/夹具不得含真实标识
+        - 不臆造接口、字段、表结构
+        - 不引入未审批依赖、不安装软件
+        - 不跳过或弱化测试，不改测试断言使实现通过
+        - 不改写域外文件
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 逐条可执行、可观察；附验证命令与预期输出，执行结果须贴回 Issue/PR。
+      placeholder: |
+        - [ ] 命令 X 输出 Y
+        - [ ] 文件 Z 存在且满足 A/B/C
+        - [ ] git status 干净，无缓存目录入库
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed-context
+    attributes:
+      label: 允许读取的资料
+      description: 按任务前阅读顺序列出（最多 6 项），避免加载无关全文。
+      placeholder: |
+        1. docs/ai/tasks/TASK-<issue>.md
+        2. AGENTS.md
+        3. docs/modules/<域>/AGENTS.md
+        4. 相关契约 / ADR
+    validations:
+      required: true
+
+  - type: textarea
+    id: test-requirements
+    attributes:
+      label: 测试要求
+      description: 必须新增/更新的测试与覆盖率要求；无可执行测试时说明替代静态校验。
+      placeholder: "单测 / 集成 / 契约 / 静态校验 / 覆盖率门槛"
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: high-risk
+    attributes:
+      label: 高风险类别（多选）
+      description: 命中任一类别须人工逐行复核，并在 PR 检查清单勾选"已逐行"。
+      multiple: true
+      options:
+        - 不涉及
+        - 事务与并发
+        - 权限与数据范围
+        - 审计与留痕
+        - 计费与对账
+        - 临床规则
+        - 数据迁移
+        - 外部接口映射
+    validations:
+      required: true
+
+  - type: input
+    id: reviewer
+    attributes:
+      label: 人工复核人
+      description: 必须为自然人（不得填 AI 代理或"待定"）；高风险类别须注明逐行复核人。
+      placeholder: "姓名 / GitHub 账号"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: AI 施工检查清单
+      options:
+        - label: 已写明任务号、写域与禁止事项
+          required: true
+        - label: 已指定自然人复核人，且复核人不是本次执行的 AI 代理
+          required: true
+        - label: 验收标准可逐条验证，验证结果将贴回 Issue/PR
+          required: true
+        - label: 高风险类别已声明，人工逐行复核安排已确认
+          required: true
+        - label: 仅使用合成数据，无患者标识外泄
+          required: true
+
+  - type: textarea
+    id: ai-disclosure
+    attributes:
+      label: AI 参与声明
+      description: 工具与版本、任务号、生成范围、复核人；此项缺失 PR 不得合并。
+      placeholder: |
+        工具与版本：
+        任务号：
+        范围（文件/模块）：
+        复核人：
+      render: text
+    validations:
+      required: true

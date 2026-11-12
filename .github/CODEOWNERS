@@ -1,0 +1,59 @@
+# CODEOWNERS — ANESOP
+#
+# 说明：
+# 1. 远端 GitHub 组织尚未建立，下列团队名（@anesop/...）全部为占位符。
+#    组织建立后，须按 docs/branch-protection.md 第 5 节替换为真实团队/个人；
+#    在替换完成前，CODEOWNERS 不产生实际审批效力，合并仍依赖本地等价检查（见同文档第 6 节）。
+# 2. 规则顺序：越靠后的规则优先级越高。默认规则在最前，核心域规则在后。
+# 3. AI 代理不得出现在本文件中，也不得作为审批人（AGENTS.md「AI 使用与署名」）。
+# 4. 核心域（m2、m0 权限与审计、契约、迁移、安全）路径同时挂两个团队，以满足双人评审。
+
+# 默认归属
+*                                   @anesop/maintainers
+
+# 后端模块：apps/api/modules/m0..m8（每模块 api 与 impl 分开声明）
+apps/api/modules/m0/api/            @anesop/m0-platform-security @anesop/security-review
+apps/api/modules/m0/impl/           @anesop/m0-platform-security @anesop/security-review
+apps/api/modules/m1/api/            @anesop/m1-scheduling
+apps/api/modules/m1/impl/           @anesop/m1-scheduling
+apps/api/modules/m2/api/            @anesop/m2-anesthesia @anesop/clinical-safety
+apps/api/modules/m2/impl/           @anesop/m2-anesthesia @anesop/clinical-safety
+apps/api/modules/m3/api/            @anesop/m3-staffing
+apps/api/modules/m3/impl/           @anesop/m3-staffing
+apps/api/modules/m4/api/            @anesop/m4-supply
+apps/api/modules/m4/impl/           @anesop/m4-supply
+apps/api/modules/m5/api/            @anesop/m5-pharmacy
+apps/api/modules/m5/impl/           @anesop/m5-pharmacy
+apps/api/modules/m6/api/            @anesop/m6-workload
+apps/api/modules/m6/impl/           @anesop/m6-workload
+apps/api/modules/m7/api/            @anesop/m7-quality
+apps/api/modules/m7/impl/           @anesop/m7-quality
+apps/api/modules/m8/api/            @anesop/m8-dashboard
+apps/api/modules/m8/impl/           @anesop/m8-dashboard
+apps/api/api-bootstrap/             @anesop/architects
+
+# 前端模块
+apps/web/src/modules/m0/            @anesop/m0-platform-security @anesop/web-core
+apps/web/src/modules/m1/            @anesop/m1-scheduling @anesop/web-core
+apps/web/src/modules/m2/            @anesop/m2-anesthesia @anesop/clinical-safety
+apps/web/src/modules/m3/            @anesop/m3-staffing @anesop/web-core
+apps/web/src/modules/m4/            @anesop/m4-supply @anesop/web-core
+apps/web/src/modules/m5/            @anesop/m5-pharmacy @anesop/web-core
+apps/web/src/modules/m6/            @anesop/m6-workload @anesop/web-core
+apps/web/src/modules/m7/            @anesop/m7-quality @anesop/web-core
+apps/web/src/modules/m8/            @anesop/m8-dashboard @anesop/web-core
+packages/ui/                        @anesop/web-core
+
+# 契约、数据库迁移、采集网关
+packages/contracts/                 @anesop/contracts @anesop/architects
+db/migration/                       @anesop/dba @anesop/architects
+services/device-gateway/            @anesop/device-gateway
+
+# 部署、脚本与协作资产
+deploy/                             @anesop/platform
+scripts/                            @anesop/platform
+.github/                            @anesop/maintainers
+
+# 验收与架构决策
+docs/acceptance/                    @anesop/qa
+docs/adr/                           @anesop/architects

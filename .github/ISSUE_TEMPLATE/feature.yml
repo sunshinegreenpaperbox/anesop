@@ -1,0 +1,116 @@
+name: 功能需求
+description: 提交新增功能、业务能力增强或契约/数据模型变更提案
+title: "[Feature] "
+labels:
+  - "type/feature"
+  - "status/triage"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 提交前请确认
+        - 先读 `AGENTS.md`，确认改动落在任务卡写域内；跨模块改动须拆任务或先改契约任务。
+        - 契约、数据库迁移、领域模型变更须"先评审后编码"。
+        - 禁止粘贴真实患者数据（姓名、身份证、住院号、手机号、临床自由文本）；示例一律用 `SYNTHETIC` 合成数据。
+
+  - type: input
+    id: related-task
+    attributes:
+      label: 关联任务 / Issue
+      description: "任务卡路径或 Issue 编号；PR 合并时必须能回指到本 Issue。"
+      placeholder: "docs/ai/tasks/TASK-<issue>.md 或 #<issue>"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: change-type
+    attributes:
+      label: 变更类型
+      multiple: true
+      options:
+        - 新增业务功能
+        - 现有功能增强
+        - 契约变更（OpenAPI）
+        - 数据模型 / 迁移变更
+        - 权限或审计变更
+        - 重构（无行为变化）
+        - 仅文档
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 变更说明
+      description: 做什么、为什么做、关键设计取舍；避免只写"优化体验"这类无法验收的描述。
+      placeholder: "背景 / 目标 / 方案要点 / 明确不做什么"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响面
+      description: 列出受影响的模块、契约、数据库迁移、权限与审计、外部系统、前端页面与性能。
+      placeholder: |
+        模块：m1 / m2
+        契约：packages/contracts/openapi/scheduling.yaml（新增字段 xxx，向后兼容）
+        迁移：db/migration/V12__xxx.sql（expand 阶段，可回滚）
+        权限/审计：新增操作需记审计
+        外部系统：HIS 手术申请接口（适配层）
+    validations:
+      required: true
+
+  - type: textarea
+    id: test-evidence
+    attributes:
+      label: 测试证据
+      description: 计划或已完成的验证方式与结果（单测/集成/契约/E2E 用例编号、覆盖率变化、命令输出摘要）。
+      placeholder: "用例编号 + 命令 + 结果；无测试须说明原因并经架构师批准"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: 回滚方案
+      description: 应用回滚步骤、数据库是否可逆、开关或双写策略、回滚演练结论。
+      placeholder: "回滚命令 / 数据处置 / 不可逆项说明"
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 检查清单
+      options:
+        - label: 已关联任务卡或 Issue，且改动在写域内
+          required: true
+        - label: 契约变更已评审并附兼容性说明（破坏性变更须 2 人批准）
+          required: false
+        - label: 新增行为有测试，断言验证可观察行为，覆盖率未下降
+          required: true
+        - label: 日志、截图、测试夹具无患者标识
+          required: true
+        - label: 无白名单外依赖；lockfile 变更已说明
+          required: true
+        - label: 回滚方案已写，不可逆迁移附演练记录
+          required: true
+
+  - type: textarea
+    id: ai-disclosure
+    attributes:
+      label: AI 参与声明
+      description: 使用了哪些 AI 工具（名称与版本）、任务号、生成范围、人工复核人；未使用请填"无"。
+      placeholder: |
+        工具与版本：
+        任务号：
+        范围（文件/模块）：
+        复核人：
+        未使用 AI：是/否
+      render: text
+    validations:
+      required: true

@@ -1,0 +1,133 @@
+# D-01–D-22 待决策（第 7 章表 7-2）
+- id: D-01
+  topic: 试点医院与建设边界
+  priority: P0
+  suggestion: 锁定 1 家三甲、30 间手术间，一期不含日间手术与分院区
+  owner: 客户项目负责人
+  deadline: '2026-11-20'
+- id: D-02
+  topic: 后端技术栈
+  priority: P0
+  suggestion: Java 21 + Spring Boot 3.4 模块化单体
+  owner: 架构师 + 技术负责人
+  deadline: '2026-11-20'
+- id: D-03
+  topic: 架构形态与拆分时机
+  priority: P0
+  suggestion: 模块化单体起步，M5 后按域评估拆分
+  owner: 架构师
+  deadline: '2026-11-27'
+- id: D-04
+  topic: 数据库与信创要求
+  priority: P0
+  suggestion: PostgreSQL 16 主库，国产库适配列入二期
+  owner: 客户信息科 + 架构师
+  deadline: '2026-11-20'
+- id: D-05
+  topic: 电子签名与无纸化范围
+  priority: P0
+  suggestion: 一期记录单 CA 签名 + 纸质并行 2 周
+  owner: 医务处 + 麻醉科
+  deadline: '2026-11-27'
+- id: D-06
+  topic: 设备采集范围与责任
+  priority: P0
+  suggestion: 先覆盖 6 类核心设备，采集盒由项目采购
+  owner: 麻醉科 + 设备科
+  deadline: '2026-11-27'
+- id: D-07
+  topic: 前端框架与组件库
+  priority: P1
+  suggestion: Vue 3.5 + TS + Element Plus
+  owner: 前端负责人
+  deadline: '2026-12-04'
+- id: D-08
+  topic: HIS/EMR 集成方式与边界
+  priority: P1
+  suggestion: 院方牵头、第三方提供标准接口，HL7 v2 + REST 并用
+  owner: 信息科 + 第三方厂商
+  deadline: '2026-12-11'
+- id: D-09
+  topic: 等保与电子病历评级目标
+  priority: P1
+  suggestion: 等保三级、电子病历 5 级，测评排在试点后
+  owner: 信息科 + 医务处
+  deadline: '2026-12-11'
+- id: D-10
+  topic: 排程规则与算法
+  priority: P1
+  suggestion: 规则可配置，一期不做自动优化算法
+  owner: 麻醉科主任
+  deadline: '2026-12-04'
+- id: D-11
+  topic: 麻精药品管理边界
+  priority: P1
+  suggestion: 一期做术间使用与五专台账，处方主流程留在药房系统
+  owner: 药剂科 + 麻醉科
+  deadline: '2026-12-18'
+- id: D-12
+  topic: 耗材 UDI/SPD 对接与硬件
+  priority: P1
+  suggestion: 高值耗材一物一码，扫码枪+PDA，SPD 走接口
+  owner: 设备科/库房
+  deadline: '2026-12-18'
+- id: D-13
+  topic: 质控指标口径与上报
+  priority: P1
+  suggestion: 以国家麻醉质控指标为基线，院级指标可配置
+  owner: 质控负责人
+  deadline: '2026-12-18'
+- id: D-14
+  topic: 驾驶舱指标与数据时效
+  priority: P1
+  suggestion: 运营指标 T+1、术中态势准实时（≤30s）
+  owner: 医务处 + 院办
+  deadline: '2027-01-15'
+- id: D-15
+  topic: AI 工具与数据合规
+  priority: P0
+  suggestion: 仅用企业版/私有化模型，患者数据不出院
+  owner: 信息科 + 法务
+  deadline: '2026-11-27'
+- id: D-16
+  topic: 团队编制与驻场
+  priority: P1
+  suggestion: 交付 9.5 FTE（编制 11 人），试点期驻场 4 周
+  owner: 项目经理 + 客户
+  deadline: '2026-12-04'
+- id: D-17
+  topic: 上线策略与数据迁移
+  priority: P1
+  suggestion: 单科室试点 4 周后分批推广，不迁历史波形
+  owner: 医务处 + 麻醉科
+  deadline: '2027-01-15'
+- id: D-18
+  topic: 验收标准与付款节点
+  priority: P1
+  suggestion: 功能+性能+安全+试运行四段验收
+  owner: 客户项目负责人
+  deadline: '2027-02-26'
+- id: D-19
+  topic: 知识产权与开源合规
+  priority: P2
+  suggestion: 定制部分归客户使用，通用产品归承建方，开源白名单管理
+  owner: 法务 + 项目经理
+  deadline: '2027-02-26'
+- id: D-20
+  topic: 预算与采购清单
+  priority: P2
+  suggestion: 软硬件分列，采集盒/CA/大屏单列预算
+  owner: 客户 + 商务
+  deadline: '2026-12-31'
+- id: D-21
+  topic: 报表口径与绩效方案
+  priority: P2
+  suggestion: 系统出数、绩效分配规则由院方另定
+  owner: 麻醉科 + 绩效办
+  deadline: '2027-02-26'
+- id: D-22
+  topic: 二期范围与产品化
+  priority: P2
+  suggestion: 二期做科研、AI 预警、多院区集团化
+  owner: 双方管理层
+  deadline: '2027-03-31'

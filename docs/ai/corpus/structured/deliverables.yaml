@@ -1,0 +1,106 @@
+# DL-01–DL-21 交付物（第 8 章表 8-1）
+- id: DL-01
+  category: 软件
+  deliverable: 源码仓库（含提交历史、分支保护、CI 配置）
+  milestone: M1
+  acceptance: 仓库移交 + 只读访问确认
+- id: DL-02
+  category: 软件
+  deliverable: 前端包、后端 JAR、网关发行包
+  milestone: 每 Sprint；M6
+  acceptance: 部署成功 + 冒烟通过
+- id: DL-03
+  category: 软件
+  deliverable: 4 个容器镜像及摘要清单
+  milestone: 每发布
+  acceptance: 按摘要拉取验证
+- id: DL-04
+  category: 软件
+  deliverable: SBOM 与依赖许可证清单
+  milestone: M5、每发布
+  acceptance: 清单完整性核对
+- id: DL-05
+  category: 软件
+  deliverable: Flyway 迁移脚本包（含回滚说明）
+  milestone: M1 起
+  acceptance: 空库与升级库双路径验证
+- id: DL-06
+  category: 文档
+  deliverable: 施工前方案书（本文件）
+  milestone: M0
+  acceptance: 评审通过并签字
+- id: DL-07
+  category: 文档
+  deliverable: 架构说明、ADR 集（≥20 篇）、OpenAPI 契约
+  milestone: M1–M5
+  acceptance: 文档评审 + 契约可导入
+- id: DL-08
+  category: 文档
+  deliverable: 数据字典（字段级、码表、映射）
+  milestone: M4
+  acceptance: 抽查 20% 字段与库一致
+- id: DL-09
+  category: 文档
+  deliverable: 部署手册、运维手册、应急预案、回滚演练记录
+  milestone: M5
+  acceptance: 客户方按手册独立复演
+- id: DL-10
+  category: 文档
+  deliverable: 用户手册（按 R1–R12 分册）与培训课件
+  milestone: M6
+  acceptance: 培训现场使用 + 抽查
+- id: DL-11
+  category: 文档
+  deliverable: 测试报告（单元/契约/性能/安全/回归）、UAT 报告
+  milestone: M5、M6
+  acceptance: 报告评审 + 数据可复现
+- id: DL-12
+  category: 文档
+  deliverable: 等保测评、渗透测试报告与整改记录
+  milestone: M5–M7
+  acceptance: 原件 + 高危清零证明
+- id: DL-13
+  category: 文档
+  deliverable: 验收报告、移交清单、变更日志
+  milestone: M7
+  acceptance: 双方签字
+- id: DL-14
+  category: 环境
+  deliverable: dev/staging/uat/prod 四套环境与配置基线
+  milestone: M1 起；prod M6
+  acceptance: 环境核查表逐项确认
+- id: DL-15
+  category: 环境
+  deliverable: 部署与回滚脚本、监控告警配置、备份策略
+  milestone: M1、M5
+  acceptance: 演练执行记录
+- id: DL-16
+  category: 数据
+  deliverable: 基础数据与字典初始化包（术式、药品、耗材、术间、人员等）
+  milestone: M6 前
+  acceptance: 抽样 + 总数核对
+- id: DL-17
+  category: 数据
+  deliverable: 迁移方案、字段映射表、迁移对账报告
+  milestone: M5 方案、M6 执行
+  acceptance: 对账差异率 ≤0.5%
+- id: DL-18
+  category: 数据
+  deliverable: 造数与脱敏样本集
+  milestone: M1
+  acceptance: 抽样确认无真实患者信息
+- id: DL-19
+  category: 培训
+  deliverable: 培训计划、签到与考核记录、录像
+  milestone: M6
+  acceptance: 考核通过率 ≥90%
+- id: DL-20
+  category: 运维
+  deliverable: 运维 SLA 建议书、值班表、问题库
+  milestone: M6–M7
+  acceptance: 运维交接会确认
+- id: DL-21
+  category: 运维
+  deliverable: 质保期服务方案
+  milestone: M7
+  acceptance: 合同附件确认

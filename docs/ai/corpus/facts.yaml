@@ -1,0 +1,180 @@
+# ANESOP · 施工前方案书结构化事实（常驻上下文层，唯一事实来源为 docs/00_事实卡与写作规范.md）
+# 模块 M0–M8、技术栈、里程碑、迭代、决策 D-01–D-22、角色、非功能指标、交付物等表格
+# 由脚本从 docx 抽取，分别见 docs/ai/corpus/structured/ 下的 modules.yaml、stack.yaml、
+# milestones.yaml、sprints.yaml、decisions.yaml、roles.yaml、nfr.yaml、
+# deliverables.yaml、integrations.yaml、questions.yaml、figures.yaml；本文件不重复上述清单，
+# 只保留代理每轮都需要的事实。
+
+project:
+  name: 手术麻醉信息系统（ANESOP）
+  code: ANESOP
+  doc_version: V0.9（讨论稿，供团队评审）
+  date: "2026-11-11"
+  delivery_model: 产品化自研 + 单院私有化交付，后续可复制推广至医联体/集团医院（A-02）
+
+scope:
+  pilot: 1 家三级甲等医院，30 间手术间（含 2 间杂交/介入手术间），年手术量约 3.5 万例
+  first_phase: M0 公共支撑 + M1–M8 八大业务模块全量；先临床闭环（M1→M2），再管理域（M3–M7），最后驾驶舱（M8）；30 间手术间全部接入采集，1 个 PACU 接入复苏记录，试点科室先上线、全院随后推开
+  out_of_scope:
+    - AI 辅助诊断与麻醉深度预测模型（二期评估）
+    - 手术直播与远程会诊（留扩展点，院方另行建设）
+    - 科研数据库与专病随访平台（二期候选）
+    - 互联网医院与患者在线问诊（患者端仅术前告知与进度查询）
+    - 日间手术中心全流程（二期候选）
+    - 多院区/集团化统一平台（数据模型保留院区维度）
+    - 设备反向控制（只采集、不控制）
+    - 替代 HIS/EMR/护理/SPD 的核心功能（只做接口集成）
+
+assumptions:
+  - id: A-01
+    text: 首期试点为 1 家三级甲等医院，手术间 30 间（含 2 间杂交/介入），年手术量约 3.5 万例；采集并发与容量据此设计
+    risk: high
+  - id: A-02
+    text: 建设方式为产品化自研 + 单院私有化交付，后续可复制推广至医联体/集团医院；单院部署，数据模型保留院区维度
+    risk: mid
+  - id: A-03
+    text: 医院现有 HIS、EMR、LIS、PACS 由第三方厂商提供，本项目通过标准接口集成，不改造其内部
+    risk: mid
+  - id: A-04
+    text: 麻醉机、监护仪等设备具备数据输出能力（网络/串口/厂商协议），部分老旧设备需加装采集盒；网关须支持多协议与边缘缓存
+    risk: high
+  - id: A-05
+    text: 项目周期 31 周（2026-11-30 至 2027-07-02），含 Sprint 0 与试运行验收；迭代节奏与批次交付不可压缩
+    risk: mid
+  - id: A-06
+    text: 团队编制 11 人（含兼职临床顾问 3 人，合计 1.5 FTE、AI 工程支持 0.5 人），折算交付人力 9.5 FTE；并行度受限，AI 提效为产能假设
+    risk: mid
+  - id: A-07
+    text: 系统需满足网络安全等级保护三级要求，电子病历系统应用水平分级评价目标 5 级；安全设计与测评排期须前置
+    risk: high
+  - id: A-08
+    text: 采用模块化单体 + 契约优先架构起步，保留按域拆分微服务的演进路径，不以分布式架构起步
+    risk: low
+  - id: A-09
+    text: AI 编码工具仅用于研发过程，患者数据不得进入任何外部大模型；生产环境不调用外部模型
+    risk: high
+  - id: A-10
+    text: 文书使用简体中文，术语遵循国家麻醉质控与电子病历相关标准表述；文书模板与术语表统一
+    risk: low
+
+# 成员 FTE 逐行照抄事实卡 §9：编制合计 11.0（含临床顾问 1.5）；交付口径 9.5 FTE（A-06 / D-16 待确认）。
+team:
+  total_headcount: 11.0
+  total_fte: 9.5
+  fte_basis: 交付口径，扣除临床顾问 1.5 FTE（评审与验收投入，不计入迭代产能）
+  members:
+    - role: 项目经理 / 交付负责人
+      fte: 0.5
+      duty: 计划、范围、风险、客户沟通、验收
+    - role: 产品经理（临床需求）
+      fte: 1
+      duty: 需求、原型、验收标准、临床流程对齐
+    - role: 临床顾问（麻醉医师 2、麻醉护士 1，兼职）
+      fte: 1.5
+      duty: 业务规则、术语、可用性评审、验收
+    - role: 架构师 / 后端负责人
+      fte: 1
+      duty: 架构、契约、技术决策、代码评审
+    - role: 后端工程师
+      fte: 2
+      duty: 领域服务、接口、集成、采集网关
+    - role: 前端工程师
+      fte: 2
+      duty: Web 工作台、记录单、驾驶舱、移动端
+    - role: 测试 / 质量工程师
+      fte: 1
+      duty: 测试设计、自动化、性能与安全测试
+    - role: 实施 / 集成工程师
+      fte: 1
+      duty: 环境、接口联调、数据迁移、培训上线
+    - role: UI/UX 设计
+      fte: 0.5
+      duty: 设计系统、记录单布局、大屏视觉
+    - role: AI 工程支持
+      fte: 0.5
+      duty: 规则文件、提示词库、AI 产出质量复盘
+
+timeline:
+  start: "2026-11-30"
+  end: "2027-07-02"
+  weeks: 31
+  freeze_date: "2026-11-27"
+
+constraints:
+  - 时间约束：31 周不可变——2026-11-27 方案冻结、2026-11-30 开发启动、2027-07-02 验收；S4 因春节按 60% 产能排
+  - 资源约束：单院交付、交付人力 9.5 FTE（编制 11 人），现场支持人力有限，关键岗位不并行两处联调
+  - 合规约束：患者数据不出院内网络（A-09）；等保测评与电子病历分级评价的时间窗口由院方安排
+  - 技术约束：不改造第三方系统内部（A-03）；设备只采集不控制；国产化软硬件适配范围待定【待确认】
+  - 组织约束：临床顾问为兼职，需求评审需预约；试点科室上线期间不得停诊
+  - 外部依赖约束：HIS/EMR/LIS/PACS/护理/药房/SPD 的接口文档、测试环境与联调窗口，以及设备协议与老旧设备清单均待院方与厂商提供【待确认】
+
+red_lines:
+  - 患者数据不出院内网络：不进外部大模型、SaaS、公网问答，研发与测试只用脱敏或合成数据
+  - 生产环境不调用外部模型；AI 仅用于研发过程，不得写入病历或替代人工复核
+  - 临床记录不可变：锁单后禁止原地修改，只能生成修订版本，保留原值、修改人、时间、原因且可比对
+  - 不得臆造接口、字段与临床口径：只引用已评审契约与顾问确认稿，契约缺失或有歧义时停止并输出【待确认】
+  - 不得替代临床决策或代签：临床规则、评分、阈值、核查项由临床顾问定口径，人工逐行复核并署名
+  - 不得跳过测试、删除测试或降低覆盖率门禁；含 M2 记录的发布，四类临床记录专项用例任一不通过不得发布
+  - 关键操作全量审计留痕 ≥6 个月且不可删除；麻精药品流向与高值耗材 UDI 必须可追溯到原始记录
+
+glossary:
+  - term: ASA 分级
+    en: American Society of Anesthesiologists physical status
+    meaning: 美国麻醉医师协会分级，术前身体状况 I–VI 级
+  - term: PACU
+    en: Post-Anesthesia Care Unit
+    meaning: 麻醉后监护治疗室，术后复苏单元，本系统记录复苏过程
+  - term: OR
+    en: Operating Room
+    meaning: 手术室；文中统一称"手术间"，仅接口与编码使用
+  - term: PONV
+    en: Postoperative Nausea and Vomiting
+    meaning: 术后恶心呕吐，用 Apfel 评分评估风险
+  - term: RCRI
+    en: Revised Cardiac Risk Index
+    meaning: 修订版心脏风险指数，非心脏手术心脏风险评分
+  - term: STOP-BANG
+    en: STOP-BANG questionnaire
+    meaning: 阻塞性睡眠呼吸暂停（OSA）筛查量表
+  - term: Mallampati
+    en: Mallampati classification
+    meaning: 气道分级，术前气道评估
+  - term: Aldrete 评分
+    en: Aldrete score
+    meaning: PACU 出室评估，含活动、呼吸、循环、意识、氧合
+  - term: BIS
+    en: Bispectral Index
+    meaning: 脑电双频指数，麻醉深度监测，经设备采集
+  - term: TOF
+    en: Train-of-Four
+    meaning: 四个成串刺激，肌松监测指标
+  - term: UDI
+    en: Unique Device Identification
+    meaning: 医疗器械唯一标识，高值耗材一物一码追溯
+  - term: HL7 v2
+    en: Health Level Seven Version 2
+    meaning: 医疗卫生信息交换标准第 2 版，患者、检验、医嘱消息交换
+  - term: FHIR
+    en: Fast Healthcare Interoperability Resources
+    meaning: 快速医疗互操作资源，REST 风格医疗数据标准
+  - term: DICOM
+    en: Digital Imaging and Communications in Medicine
+    meaning: 医学数字成像与通信标准，影像与检查报告集成
+  - term: CA
+    en: Certificate Authority
+    meaning: 数字证书认证，电子签名、验签与时间戳
+  - term: DRG/DIP
+    en: Diagnosis Related Groups / Diagnosis-Intervention Packet
+    meaning: 疾病诊断相关分组 / 病种分值付费，医保支付方式
+  - term: SSO
+    en: Single Sign-On
+    meaning: 单点登录，对接院方统一身份认证
+  - term: RBAC
+    en: Role-Based Access Control
+    meaning: 基于角色的访问控制，含数据权限维度
+  - term: SPD
+    en: Supply, Processing and Distribution
+    meaning: 医用耗材供应链管理，耗材主数据与结算来源
+  - term: RCA
+    en: Root Cause Analysis
+    meaning: 根因分析，不良事件分析方法

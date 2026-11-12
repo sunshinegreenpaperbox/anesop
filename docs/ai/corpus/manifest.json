@@ -1,0 +1,34 @@
+{
+  "generated_at": "2026-11-12T10:38:40",
+  "source": "手术麻醉信息系统_施工前方案书_V0.9.docx",
+  "source_sha256_16": "593f037d97ddfda4",
+  "chapters": 9,
+  "chunks": 158,
+  "chars": 118598,
+  "tokens_cl100k": 101282,
+  "structured_files": {
+    "roles": "structured/roles.yaml",
+    "modules": "structured/modules.yaml",
+    "integrations": "structured/integrations.yaml",
+    "nfr": "structured/nfr.yaml",
+    "stack": "structured/stack.yaml",
+    "milestones": "structured/milestones.yaml",
+    "sprints": "structured/sprints.yaml",
+    "decisions": "structured/decisions.yaml",
+    "questions": "structured/questions.yaml",
+    "deliverables": "structured/deliverables.yaml",
+    "figures": "structured/figures.yaml"
+  },
+  "chapter_files": [
+    "chapters/01_项目概述.md",
+    "chapters/02_业务蓝图与功能规划.md",
+    "chapters/03_总体技术方案.md",
+    "chapters/04_工程管理与协作机制.md",
+    "chapters/05_AIAgents施工约定.md",
+    "chapters/06_施工计划与资源安排.md",
+    "chapters/07_待讨论与待决策清单.md",
+    "chapters/08_交付物清单与验收标准.md",
+    "chapters/09_附录.md"
+  ],
+  "full_md_tokens": 97138
+}

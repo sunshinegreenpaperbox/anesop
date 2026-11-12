@@ -1,0 +1,46 @@
+# Q-01–Q-15 待客户确认（第 7 章表 7-6）
+- id: Q-01
+  question: 试点院区、手术间数量、日间手术是否纳入一期
+  impact: 范围与工期
+- id: Q-02
+  question: HIS/EMR/LIS/PACS 厂商、接口能力、是否支持 HL7
+  impact: 集成方案
+- id: Q-03
+  question: 麻醉机/监护仪品牌型号清单、是否开放协议、有无采集盒预算
+  impact: 采集方案
+- id: Q-04
+  question: 现有麻醉记录单模板、知情同意书模板、麻醉总结模板
+  impact: 记录单设计
+- id: Q-05
+  question: 麻精药品现行流程、基数、双人核对要求、空安瓿处置
+  impact: 药品模块
+- id: Q-06
+  question: 耗材是否已上 SPD/UDI、库房层级、高值耗材追溯要求
+  impact: 耗材模块
+- id: Q-07
+  question: 质控指标现行口径、上报平台与频次、责任人
+  impact: 质控模块
+- id: Q-08
+  question: 绩效与工作量统计现行办法、争议点
+  impact: 工作量模块
+- id: Q-09
+  question: CA 厂商、无纸化进度、电子病历评级计划
+  impact: 签名与合规
+- id: Q-10
+  question: 等保备案与测评计划、机房与网络分区、是否信创
+  impact: 部署与安全
+- id: Q-11
+  question: 医院统一身份认证方式（AD/LDAP/CAS）
+  impact: 登录集成
+- id: Q-12
+  question: 试点科室与关键用户名单、临床顾问投入方式
+  impact: 需求与验收
+- id: Q-13
+  question: 历史数据迁移范围与期望
+  impact: 工作量
+- id: Q-14
+  question: 上线窗口、并行运行要求、回退容忍度
+  impact: 上线计划
+- id: Q-15
+  question: 合同边界、验收与付款节点、知识产权约定
+  impact: 商务

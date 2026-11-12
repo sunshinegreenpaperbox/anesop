@@ -1,0 +1,127 @@
+name: 缺陷报告
+description: 报告可复现的功能、数据、安全或临床记录缺陷
+title: "[Bug] "
+labels:
+  - "type/bug"
+  - "status/triage"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 提交前请确认
+        - 先检索是否已有同类 Issue，避免重复。
+        - **P0 缺陷（记录丢失、签名失效、越权、数据泄露）不走本模板等待分流**：立即停线并按 `AGENTS.md` 缺陷分级 2 小时内上报，再补本 Issue。
+        - 日志、截图、数据库片段必须脱敏：删除姓名、身份证、住院号、手机号、真实 SQL 实参；仅用 `SYNTHETIC` 合成数据复现。
+
+  - type: input
+    id: related-task
+    attributes:
+      label: 关联任务 / Issue
+      description: "任务卡路径、需求 Issue 或相关 PR 编号。"
+      placeholder: "docs/ai/tasks/TASK-<issue>.md 或 #<issue>"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 缺陷级别
+      description: "P0：记录丢失/签名失效/越权/泄露，2h 响应、24h 修复并停线；P1：4h 响应、3 个工作日内修复；P2：常规排期。"
+      options:
+        - P0 — 记录丢失、签名失效、越权、数据泄露
+        - P1 — 主流程受阻、数据错误但有规避手段
+        - P2 — 体验/文案/非阻断性问题
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 环境与版本
+      description: 便于定位的构建信息，不要包含内网地址以外的敏感信息。
+      placeholder: "dev/staging；commit 短哈希；浏览器与版本；设备型号；数据库版本"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从登录态开始的可重复步骤，标注前置数据（必须为合成数据）。
+      placeholder: |
+        1. 以「麻醉医生」账号登录 ...
+        2. 打开 ...
+        3. 点击 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+      placeholder: "按契约/验收标准应发生什么"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 包含错误码与脱敏后的关键日志；不要粘贴整段生产日志。
+      placeholder: "实际现象 / 错误码 / 脱敏日志摘要"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响面
+      description: 受影响的模块、用户角色、记录范围、是否涉及权限/审计/临床数据完整性、是否需回滚。
+      placeholder: |
+        模块：m2
+        角色：麻醉医生 / PACU 护士
+        数据：术中记录 xxx 条
+        权限/审计：是否越权、是否留痕
+        临时规避：
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据（已脱敏）
+      description: 截图、请求响应、traceId、监控面板链接；确认不含患者标识。
+      placeholder: "附件说明 / traceId / 监控链接"
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 检查清单
+      options:
+        - label: 已确认可复现，或已说明偶发条件与出现频率
+          required: true
+        - label: 已确认所有截图、日志、数据片段不含患者标识
+          required: true
+        - label: 已检索重复 Issue，并关联相关任务/PR
+          required: true
+        - label: 涉及权限、审计、临床记录完整性时已通知模块负责人
+          required: false
+
+  - type: textarea
+    id: ai-disclosure
+    attributes:
+      label: AI 参与声明
+      description: 若使用 AI 辅助定位或生成复现脚本，填写工具与版本、任务号、范围、复核人；未使用请填"无"。
+      placeholder: |
+        工具与版本：
+        任务号：
+        范围：
+        复核人：
+        未使用 AI：是/否
+      render: text
+    validations:
+      required: true

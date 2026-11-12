@@ -1,0 +1,81 @@
+# 技术栈基线（第 3 章表 3-3）
+- layer: 前端框架
+  choice: Vue 3 + TypeScript
+  version: Vue 3.5 / TS 5.6
+  purpose: 工作台、记录单、驾驶舱
+- layer: 构建
+  choice: Vite
+  version: 6.x
+  purpose: 开发与打包
+- layer: UI 组件
+  choice: Element Plus
+  version: 2.9.x
+  purpose: 表单密集页面
+- layer: 状态/路由
+  choice: Pinia + Vue Router
+  version: Pinia 3 / Router 4
+  purpose: 状态与路由
+- layer: 图表
+  choice: ECharts
+  version: 5.5.x
+  purpose: 趋势图、大屏
+- layer: 后端
+  choice: Java + Spring Boot
+  version: Java 21 LTS / Boot 3.4
+  purpose: 模块化单体
+- layer: 安全框架
+  choice: Spring Security + JWT
+  version: 6.x
+  purpose: RBAC 与数据权限
+- layer: 持久层
+  choice: MyBatis-Plus + Flyway
+  version: 3.5.x / 10.x
+  purpose: ORM 与迁移
+- layer: 接口文档
+  choice: springdoc-openapi
+  version: 2.x
+  purpose: OpenAPI 3.1 契约
+- layer: 主数据库
+  choice: PostgreSQL
+  version: '16'
+  purpose: 业务主数据
+- layer: 缓存
+  choice: Redis
+  version: '7.2'
+  purpose: 会话、字典、分布式锁
+- layer: 消息
+  choice: RabbitMQ
+  version: '3.13'
+  purpose: 设备数据、异步任务
+- layer: 对象存储
+  choice: MinIO
+  version: 最新稳定版
+  purpose: PDF、波形、附件
+- layer: 时序/波形
+  choice: TimescaleDB 或分区表 + 对象存储
+  version: 2.x
+  purpose: 波形存储（见 D-04）
+- layer: 集成
+  choice: Apache Camel + HAPI HL7v2
+  version: Camel 4 / HAPI 2.x
+  purpose: 协议适配与路由
+- layer: 设备采集
+  choice: 独立采集网关（Java/Netty 或 Python）
+  version: —
+  purpose: 串口/TCP/SDK，边缘缓存（见 D-06）
+- layer: 部署
+  choice: Docker + Compose / Kubernetes
+  version: Docker 24 / K8s 1.30
+  purpose: 单院 / 集团
+- layer: 网关
+  choice: Nginx
+  version: '1.27'
+  purpose: TLS 卸载、静态资源
+- layer: 可观测
+  choice: Prometheus + Grafana + Loki
+  version: 最新稳定版
+  purpose: 指标、日志、告警
+- layer: 测试
+  choice: JUnit 5 + Testcontainers；Vitest + Playwright；k6
+  version: —
+  purpose: 单测/契约/E2E/压测

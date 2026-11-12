@@ -1,0 +1,37 @@
+# 附图清单：文件路径、图题与一句话图注（视觉模型或引用场景使用）
+- fig: 图 2-1
+  file: assets/figs/fig_2_1.png
+  title: 系统功能架构
+  caption: M0 公共支撑与 M1–M8 八大模块分层支撑围术期全流程。
+- fig: 图 2-2
+  file: assets/figs/fig_2_2.png
+  title: 围术期核心业务泳道流程
+  caption: 九个环节跨五类角色流转，四个异常分支均须留痕可追溯。
+- fig: 图 3-1
+  file: assets/figs/fig_3_1.png
+  title: 总体技术架构
+  caption: 六层总体架构采用模块化单体、契约优先与独立采集网关。
+- fig: 图 3-2
+  file: assets/figs/fig_3_2.png
+  title: 集成与数据流拓扑
+  caption: 以标准接口与院内系统双向集成，患者数据不出院。
+- fig: 图 3-3
+  file: assets/figs/fig_3_3.png
+  title: 部署架构（高可用）
+  caption: 四类网络分区隔离，应用双节点与数据库主备保障高可用。
+- fig: 图 4-1
+  file: assets/figs/fig_4_1.png
+  title: GitHub 工程协作闭环
+  caption: 从 Issue 到发布的八步闭环，CI 红灯即回退修复。
+- fig: 图 4-2
+  file: assets/figs/fig_4_2.png
+  title: 分支模型与发布节奏
+  caption: 主干持续集成、短分支当日合回，release 仅修缺陷。
+- fig: 图 5-1
+  file: assets/figs/fig_5_1.png
+  title: 多智能体协作与上下文分层
+  caption: 任务卡驱动六个智能体，人工复核闸门守住医疗安全。
+- fig: 图 6-1
+  file: assets/figs/fig_6_1.png
+  title: 项目里程碑甘特图
+  caption: 七阶段 31 周推进，八个里程碑逐段验收。
