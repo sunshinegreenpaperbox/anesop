@@ -102,3 +102,10 @@
 - CI（S0-04）将执行：Maven Enforcer（禁用未管理版本/依赖收敛）、`pnpm audit --audit-level=high`、许可证扫描（对照本表 + SPDX 白名单）、SBOM 生成。
 - 环境受限豁免：Docker 不可用（EXT-08）期间镜像扫描与 Testcontainers 实跑豁免，恢复后补扫；H2/HAHPS 等"仅属性未引入"项不构成依赖。
 - 任何不在本表的直接依赖即为**未审批依赖**（AGENTS H-05），CI 应阻断。
+
+## 五、本地注解/规避说明
+
+- `edu.umd.cs.findbugs.annotations.SuppressFBWarnings`：仓库内**自带最小同 FQN 注解**
+  （CLASS retention、无运行时依赖、不随产品分发第三方代码），用于抑制 SpotBugs
+  `EI_EXPOSE_REP2` 字段/构造器注入误报；不使用官方 `spotbugs-annotations`（LGPL-2.1，
+  需法务结论）。M1 重新评估；如改用官方依赖须先登记本表并由法务确认。

@@ -12,6 +12,10 @@ anesop:
     jwt:
       # 未配置 ANESOP_JWT_SECRET 时生成进程内随机密钥（重启后旧令牌失效）。
       allow-dev-generated: true
+    crypto:
+      # 未配置 ANESOP_FIELD_KEY / ANESOP_PHONE_PEPPER 时生成进程内随机密钥并 WARN；
+      # 重启后已入库的手机号密文将无法解密（仅本地演示可接受）。
+      allow-dev-generated: true
 
 springdoc:
   api-docs:

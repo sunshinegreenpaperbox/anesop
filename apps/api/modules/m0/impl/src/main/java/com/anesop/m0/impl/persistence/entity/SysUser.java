@@ -37,8 +37,14 @@ public class SysUser {
     /** 手机号密文（应用层 AES-256-GCM），永不解密后落盘/入日志；写路径 M1。 */
     private String phoneEnc;
 
-    /** 手机号 HMAC-SHA-256 哈希（精确检索/去重）；V3 新增列，写路径 M1。 */
+    /** 手机号 HMAC-SHA-256 哈希（精确检索/去重）；V3 新增列，写路径 M2-M0-02。 */
     private String phoneHash;
+
+    /** 手机号密文所用字段密钥版本标识（V6）；与 phone_enc/phone_hash 同时非空。 */
+    private String phoneKeyId;
+
+    /** 手机号密文/哈希最后写入时间（V6）；轮换与审计追溯用。 */
+    private Instant phoneUpdatedAt;
 
     private Integer status;
 
@@ -120,6 +126,22 @@ public class SysUser {
 
     public void setPhoneHash(String phoneHash) {
         this.phoneHash = phoneHash;
+    }
+
+    public String getPhoneKeyId() {
+        return phoneKeyId;
+    }
+
+    public void setPhoneKeyId(String phoneKeyId) {
+        this.phoneKeyId = phoneKeyId;
+    }
+
+    public Instant getPhoneUpdatedAt() {
+        return phoneUpdatedAt;
+    }
+
+    public void setPhoneUpdatedAt(Instant phoneUpdatedAt) {
+        this.phoneUpdatedAt = phoneUpdatedAt;
     }
 
     public Integer getStatus() {

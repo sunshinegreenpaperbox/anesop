@@ -30,6 +30,10 @@ anesop:
     demo-accounts-allowed: false
     jwt:
       allow-dev-generated: false
+    # 字段加密密钥必须由院方密钥托管注入（ANESOP_FIELD_KEY / ANESOP_PHONE_PEPPER）；
+    # 生产禁止进程内随机生成：缺失即拒绝启动，避免“重启后手机号永久不可解密”。
+    crypto:
+      allow-dev-generated: false
 
 logging:
   level:

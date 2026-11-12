@@ -11,6 +11,9 @@ anesop:
     demo-accounts-allowed: true
     jwt:
       allow-dev-generated: true
+    crypto:
+      # 自动化测试不注入真实密钥：进程内随机生成（每个测试上下文独立）。
+      allow-dev-generated: true
 
 springdoc:
   api-docs:

@@ -40,6 +40,10 @@ class SecureDefaultsIntegrationTest {
         registry.add("spring.datasource.username", () -> "postgres");
         registry.add("spring.datasource.password", () -> "");
         registry.add("anesop.security.jwt.secret", () -> "c3ludGhldGljLXRlc3Qtb25seS1zaWduaW5nLWtleS0wMTIzNDU2Nzg5");
+        // M2-M0-02：prod 拒绝生成进程内随机密钥，必须显式提供字段密钥与 pepper（合成值）。
+        registry.add("anesop.security.field-key", () -> "CD1yp9wWS4C16iRZjsP4Mmec0QtAdarfGU6DuO0nXJE=");
+        registry.add("anesop.security.phone-pepper",
+                () -> "DlGU1x9ipegwc7b5QYTHD1KV2CBjpukxdLf6QoXIEFOW2SFkp+oydbj7Q4bJEVSX");
     }
 
     @AfterAll

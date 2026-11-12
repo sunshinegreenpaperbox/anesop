@@ -4,6 +4,7 @@ import com.anesop.api.config.SecurityProperties;
 import com.anesop.m0.impl.persistence.entity.SysUser;
 import com.anesop.m0.impl.persistence.mapper.SysUserMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -32,6 +33,8 @@ public class ProductionDemoAccountGuard implements ApplicationRunner {
     private final SysUserMapper sysUserMapper;
     private final boolean demoAccountsAllowed;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+            justification = "Spring 单例注入的 MyBatis Mapper 代理，生命周期由容器管理，服务不对外暴露该引用（评审 Q-1）")
     public ProductionDemoAccountGuard(SysUserMapper sysUserMapper, SecurityProperties securityProperties) {
         this.sysUserMapper = sysUserMapper;
         // 只保留不可变配置值（SpotBugs EI_EXPOSE_REP2）。

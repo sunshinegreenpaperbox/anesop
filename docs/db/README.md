@@ -1,6 +1,7 @@
 # 数据库迁移与 schema 规范（db）
 
-> 状态：S0-06 基线 + V3（认证令牌）+ V4（M2 采集骨架）+ V5（数据范围绑定，M2-M0-01）；
+> 状态：S0-06 基线 + V3（认证令牌）+ V4（M2 采集骨架）+ V5（数据范围绑定，M2-M0-01）
+> + V6（手机号加解密与用户管理，M2-M0-02）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -15,6 +16,7 @@ db/
 │   ├── V3__m0_auth_token.sql               # 刷新令牌表 + m0:auth:* 权限点 + sys_user.phone_hash（S0-07）
 │   ├── V4__m2_anes_acquisition_init.sql    # M2 采集骨架（S0-09）
 │   ├── V5__m0_data_scope.sql               # 数据范围绑定表 sys_org/sys_user_org/sys_user_room + m0:org:*（M2-M0-01）
+│   ├── V6__m0_user_phone_crypto.sql        # sys_user.phone_key_id/phone_updated_at + 一致性约束 + m0:user:*（M2-M0-02）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -74,6 +76,25 @@ db/
 - 禁止在生产对 `m0_platform.sys_audit_log` 执行 `DELETE`/`UPDATE`/`TRUNCATE`；
   归档删除只能走受控维护流程并先写归档台账（§3.4.4）。
 
+### 4.1 V6（手机号加解密）回滚说明
+
+V6 属 expand 段：只新增可空列 `phone_key_id`/`phone_updated_at`、四列一致性约束
+`ck_sys_user_phone_crypto`、部分索引 `idx_sys_user_phone_hash` 与两个权限点。
+
+- **应用回滚**：旧版本应用不识别新列，列可空、约束对“四列全空”放行，因此旧应用可直接运行；
+  但旧应用不会写 `phone_key_id`，与本版混跑期间**禁止**用它写手机号（会触发约束失败，属预期保护）。
+- **库层回滚**（前向修复脚本，需 DBA 审批 + 备份）：
+  `DROP CONSTRAINT ck_sys_user_phone_crypto` → `DROP INDEX idx_sys_user_phone_hash` →
+  `ALTER TABLE ... DROP COLUMN phone_key_id, DROP COLUMN phone_updated_at` →
+  `DELETE FROM sys_role_permission WHERE permission_id IN ('...22','...23')` →
+  `DELETE FROM sys_permission WHERE code IN ('m0:user:read','m0:user:write')`。
+  顺序不可颠倒（先拆约束/索引再删列），否则删列会被约束依赖阻塞。
+- **数据不可回退为明文**：已加密手机号按单向设计处理，回滚后如需保留数据，只能由受控的
+  离线工具按 `phone_key_id` 选择历史密钥解密到受控介质（应用内只持单把当前密钥，没有
+  `key_id → key` 映射）；不得把明文写回 `sys_user`，也不得导出到无审批的下游。
+- **密钥丢失**：`ANESOP_FIELD_KEY` 丢失等于密文永久不可解密（无后门、无兜底明文）；
+  轮换需 M1 离线双密钥重加密工具，备份/轮换说明见 `docs/modules/m0/README.md` 第 5 节。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）
@@ -89,7 +110,7 @@ source scripts/env.sh
 
 测试断言分两条路径：
 
-- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 5 条（V1–V5）、
+- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 6 条（V1–V6）、
   二次 `migrate()` 执行 0 条、V1→V2 升级成功、约束/索引/注释存在、平台预置种子正确、
   `sys_user=0` 且无 `demo_admin`、审计表 UPDATE/DELETE/TRUNCATE 被数据库拒绝；
 - **演示路径**（追加 `db/seed/demo`）：V100 后 `demo_admin`（ALL）、`demo_dept`（DEPT，绑定麻醉科）、

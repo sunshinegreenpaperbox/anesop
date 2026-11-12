@@ -34,6 +34,18 @@ public final class AuthPermissions {
      */
     public static final String M0_ORG_READ = "m0:org:read";
 
+    /**
+     * M0 用户管理只读权限点（V6 新增，用户管理端点 {@code GET /v1/auth/users}、
+     * {@code GET /v1/auth/users/{userId}} 使用），仅授予 SYS_ADMIN。
+     *
+     * <p>用户数据含手机号密文与账号状态，属核心域权限：数据范围不替代功能权限，
+     * 缺失该权限点一律 403 并写 ACCESS_DENIED 审计。
+     */
+    public static final String M0_USER_READ = "m0:user:read";
+
+    /** M0 用户管理维护权限点（V6 新增，创建/更新/重置口令），仅授予 SYS_ADMIN。 */
+    public static final String M0_USER_WRITE = "m0:user:write";
+
     /** 平台系统管理员角色码；数据范围为 ALL，是唯一预置的高权限角色。 */
     public static final String ROLE_SYS_ADMIN = "SYS_ADMIN";
 
@@ -42,6 +54,12 @@ public final class AuthPermissions {
 
     /** Spring Security 授权表达式中的 M0 组织只读权限。 */
     public static final String AUTHORITY_M0_ORG_READ = PERMISSION_PREFIX + M0_ORG_READ;
+
+    /** Spring Security 授权表达式中的 M0 用户管理只读权限：{@code PERM_m0:user:read}。 */
+    public static final String AUTHORITY_M0_USER_READ = PERMISSION_PREFIX + M0_USER_READ;
+
+    /** Spring Security 授权表达式中的 M0 用户管理维护权限：{@code PERM_m0:user:write}。 */
+    public static final String AUTHORITY_M0_USER_WRITE = PERMISSION_PREFIX + M0_USER_WRITE;
 
     private AuthPermissions() {
     }

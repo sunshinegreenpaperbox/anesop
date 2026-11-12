@@ -5,7 +5,7 @@
 > 种子分两层：
 >
 > 1. **平台预置基线**：`V2`（6 角色、17 权限、42 条授权、6 类 22 项字典）随生产迁移执行，
->    `V3`/`V5` 再追加 4 个 M0 权限点与 5 条授权（当前 21 权限 / 47 条授权），
+>    `V3`/`V5`/`V6` 再追加 6 个 M0 权限点与 7 条授权（当前 23 权限 / 49 条授权），
 >    **不创建任何用户账号**；
 > 2. **演示账号**：`db/seed/demo/V100__demo_admin_synthetic.sql`，位于**独立 Flyway
 >    location，仅 dev/test 显式启用**，生产 locations 不得包含该目录。
@@ -16,8 +16,8 @@
 
 | 环境 | `spring.flyway.locations` | 内容 |
 |---|---|---|
-| 生产 / staging / uat | `filesystem:/opt/anesop/db/migration` | 仅 V1–V5；`sys_user` 为空 |
-| 本地 / 演示 / 集成测试 | `filesystem:db/migration,filesystem:db/seed/demo` | V1–V5 + V100（demo_admin/demo_dept/demo_self） |
+| 生产 / staging / uat | `filesystem:/opt/anesop/db/migration` | 仅 V1–V6；`sys_user` 为空 |
+| 本地 / 演示 / 集成测试 | `filesystem:db/migration,filesystem:db/seed/demo` | V1–V6 + V100（demo_admin/demo_dept/demo_self） |
 
 - **禁止**把 `db/seed/demo` 加入生产、staging、uat 的 locations；生产挂载目录只读，
   不含 `db/seed/`（见 `docs/db/README.md` §5.3）。
@@ -45,7 +45,10 @@
   ```
 - 哈希只用于本地/演示登录，禁止在工单、日志、截图中粘贴口令或哈希。
 - 首次登录后必须修改口令；演示环境也不得长期保留默认口令。
-- `phone_enc` 为空：演示账号不写入手机号，避免伪造密文被误认为真实数据。
+- `phone_enc`/`phone_hash`/`phone_key_id`/`phone_updated_at` 均为空：演示账号不写入手机号，
+  避免伪造密文被误认为真实数据。M2-M0-02 的手机号用例只在**运行时**由集成测试创建
+  （如 `13800005678` 之类明显合成的号码），并且写入前经 `PhoneCrypto`/`PhoneHasher` 处理，
+  库内只有密文与哈希；任何文档、脚本、种子都不得出现真实手机号。
 
 ## 3. 平台预置角色（6 个，V2）
 
@@ -60,7 +63,7 @@
 
 数据范围取值见 `sys_role.data_scope`：`ALL`/`SITE`/`DEPT`/`ROOM`/`SELF`（§3.9.2）。
 
-## 4. 权限点（21 个：V2 17 + V3 2 + V5 2）
+## 4. 权限点（23 个：V2 17 + V3 2 + V5 2 + V6 2）
 
 - 基础：`auth:login`、`user:read`、`user:write`、`role:read`、`role:write`、
   `audit:read`、`dict:read`、`dict:write`
@@ -68,9 +71,11 @@
 - M0 认证（V3）：`m0:auth:read`、`m0:auth:write`（仅 `SYS_ADMIN`）
 - M0 组织（V5）：`m0:org:read`、`m0:org:write`；`m0:org:read` 授予 `SYS_ADMIN` 与
   `SYS_OR_MANAGER`（数据范围示例接口需要该功能权限），`m0:org:write` 仅 `SYS_ADMIN`
+- M0 用户管理（V6，M2-M0-02）：`m0:user:read`（列表/详情）、`m0:user:write`（创建/更新/重置口令），
+  仅授予 `SYS_ADMIN`；V2 历史 `user:read`/`user:write` **保留不动**（兼容期，M1 权限码收敛后再删）
 
-授权关系 47 条：`SYS_ADMIN` 拥有全部权限；其余角色按岗位最小权限授予登录 +
-职责模块访问。详细映射见 V2/V3/V5 脚本授权段。
+授权关系 49 条：`SYS_ADMIN` 拥有全部权限；其余角色按岗位最小权限授予登录 +
+职责模块访问。详细映射见 V2/V3/V5/V6 脚本授权段。
 
 ## 5. 字典（6 类 / 22 项，V2）
 

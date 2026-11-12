@@ -25,17 +25,23 @@ class ProductionStartupFailureTest {
 
     private static final String SECRET = "c3ludGhldGljLXRlc3Qtb25seS1zaWduaW5nLWtleS0wMTIzNDU2Nzg5";
 
+    /** 合成字段密钥（Base64、解码后 32 字节）与 pepper（48 字节），仅测试类路径，不是生产密钥。 */
+    private static final String FIELD_KEY = "CD1yp9wWS4C16iRZjsP4Mmec0QtAdarfGU6DuO0nXJE=";
+    private static final String PEPPER = "DlGU1x9ipegwc7b5QYTHD1KV2CBjpukxdLf6QoXIEFOW2SFkp+oydbj7Q4bJEVSX";
+
     @AfterAll
     static void dropDatabases() {
         EmbeddedPostgresSupport.dropDatabase("anesop_prod_nokey");
         EmbeddedPostgresSupport.dropDatabase("anesop_prod_demo");
+        EmbeddedPostgresSupport.dropDatabase("anesop_prod_nofieldkey");
+        EmbeddedPostgresSupport.dropDatabase("anesop_prod_nopepper");
     }
 
     @Test
     void missingJwtSecretFailsStartupWithoutEchoingSecret() {
         String url = EmbeddedPostgresSupport.jdbcUrl("anesop_prod_nokey");
 
-        assertThatThrownBy(() -> start(url, null))
+        assertThatThrownBy(() -> start(url, null, FIELD_KEY, PEPPER))
                 .satisfies(throwable -> {
                     Throwable root = rootCause(throwable);
                     assertThat(root).isInstanceOf(IllegalStateException.class);
@@ -52,7 +58,7 @@ class ProductionStartupFailureTest {
         insertUser(jdbc, "demo_admin");
         insertUser(jdbc, "demouser");
 
-        assertThatThrownBy(() -> start(url, SECRET))
+        assertThatThrownBy(() -> start(url, SECRET, FIELD_KEY, PEPPER))
                 .satisfies(throwable -> {
                     Throwable root = rootCause(throwable);
                     assertThat(root).isInstanceOf(IllegalStateException.class);
@@ -60,7 +66,37 @@ class ProductionStartupFailureTest {
                 });
     }
 
-    private static void start(String jdbcUrl, String secret) {
+    /**
+     * M2-M0-02：字段加密密钥与 pepper 在生产同样 fail-closed（未配置即拒绝启动）。
+     *
+     * <p>{@code ANESOP_FIELD_KEY} 缺失 → 无法加密手机号；{@code ANESOP_PHONE_PEPPER} 缺失 →
+     * 无法生成检索哈希。二者都不得降级为明文或空密钥，否则手机号会以可逆/可碰撞形式入库。
+     */
+    @Test
+    void missingFieldKeyFailsProdStartup() {
+        String url = EmbeddedPostgresSupport.jdbcUrl("anesop_prod_nofieldkey");
+
+        assertThatThrownBy(() -> start(url, SECRET, "", PEPPER))
+                .satisfies(throwable -> {
+                    Throwable root = rootCause(throwable);
+                    assertThat(root).isInstanceOf(IllegalStateException.class);
+                    assertThat(root.getMessage()).contains("ANESOP_FIELD_KEY").contains("拒绝启动");
+                });
+    }
+
+    @Test
+    void missingPhonePepperFailsProdStartup() {
+        String url = EmbeddedPostgresSupport.jdbcUrl("anesop_prod_nopepper");
+
+        assertThatThrownBy(() -> start(url, SECRET, FIELD_KEY, ""))
+                .satisfies(throwable -> {
+                    Throwable root = rootCause(throwable);
+                    assertThat(root).isInstanceOf(IllegalStateException.class);
+                    assertThat(root.getMessage()).contains("ANESOP_PHONE_PEPPER").contains("拒绝启动");
+                });
+    }
+
+    private static void start(String jdbcUrl, String secret, String fieldKey, String pepper) {
         SpringApplicationBuilder builder = new SpringApplicationBuilder(ApiApplication.class)
                 .web(WebApplicationType.SERVLET)
                 .profiles("prod");
@@ -70,7 +106,9 @@ class ProductionStartupFailureTest {
                 "--spring.datasource.url=" + jdbcUrl,
                 "--spring.datasource.username=postgres",
                 "--spring.datasource.password=",
-                "--anesop.security.jwt.secret=" + (secret == null ? "" : secret))) {
+                "--anesop.security.jwt.secret=" + (secret == null ? "" : secret),
+                "--anesop.security.field-key=" + (fieldKey == null ? "" : fieldKey),
+                "--anesop.security.phone-pepper=" + (pepper == null ? "" : pepper))) {
             fail("prod 上下文本应启动失败");
         }
     }

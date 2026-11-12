@@ -207,19 +207,20 @@ class FlywayMigrationTest {
 
         List<String> permissionCodes = jdbc.queryForList(
                 "SELECT code FROM m0_platform.sys_permission ORDER BY code", String.class);
-        assertThat(permissionCodes).hasSize(21)
+        assertThat(permissionCodes).hasSize(23)
                 .contains("auth:login", "user:read", "user:write", "role:read", "role:write",
                         "audit:read", "dict:read", "dict:write")
                 .contains("m0:access", "m1:access", "m2:access", "m3:access", "m4:access",
                         "m5:access", "m6:access", "m7:access", "m8:access")
                 .contains("m0:auth:read", "m0:auth:write")
-                .contains("m0:org:read", "m0:org:write");
+                .contains("m0:org:read", "m0:org:write")
+                .contains("m0:user:read", "m0:user:write");
 
         assertThat(jdbc.queryForList("SELECT code FROM m0_platform.sys_dict_type ORDER BY code", String.class))
                 .containsExactly("ASA", "CASE_STATUS", "OR_ROOM_STATUS", "ROLE_TYPE", "SEX",
                         "SURGERY_URGENCY");
         assertThat(countRows("sys_dict_item")).isEqualTo(22);
-        assertThat(countRows("sys_role_permission")).isEqualTo(47);
+        assertThat(countRows("sys_role_permission")).isEqualTo(49);
 
         // B-1 核心断言：生产迁移路径不产生任何账号，也没有演示账号及其角色绑定。
         assertThat(countRows("sys_user")).as("生产路径 sys_user 必须为 0").isZero();
@@ -327,6 +328,56 @@ class FlywayMigrationTest {
         assertThat(countRows("sys_user_room")).isZero();
         System.out.printf("[M2-M0-01][migration] sys_org=%d sys_user_org=%d sys_user_room=%d orgPermissions=%s%n",
                 countRows("sys_org"), countRows("sys_user_org"), countRows("sys_user_room"), orgPermissionRoles);
+    }
+
+    @Test
+    void phoneCryptoColumnsAndPermissionsAreReady() {
+        migrateToLatest();
+
+        // V6（M2-M0-02）：密钥版本与更新时间列就绪，phone_enc/phone_hash 沿用 V1/V3。
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'm0_platform' AND table_name = 'sys_user'
+                  AND column_name = 'phone_key_id' AND data_type = 'character varying'
+                  AND character_maximum_length = 32
+                """, Integer.class)).as("phone_key_id varchar(32)").isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'm0_platform' AND table_name = 'sys_user'
+                  AND column_name = 'phone_updated_at' AND data_type = 'timestamp with time zone'
+                """, Integer.class)).as("phone_updated_at timestamptz").isEqualTo(1);
+
+        // 四列一致性约束：只写密文不写 hash/key_id 必须被库层拒绝（可失败断言）。
+        String partial = "f0000000-0000-4000-8000-0000000000c9";
+        Throwable rejected = catchThrowable(() -> jdbc.update("""
+                INSERT INTO m0_platform.sys_user
+                    (id, username, password_hash, display_name, status, must_change_password,
+                     failed_attempts, version, deleted, phone_enc, phone_key_id)
+                VALUES (?::uuid, 'test.partial.phone', 'synthetic-hash', '合成半写手机号', 1, false,
+                        0, 0, false, 'SYNTHETIC-CIPHERTEXT', 'v1')
+                """, partial));
+        assertThat(rejected)
+                .as("ck_sys_user_phone_crypto 必须拒绝只写密文不写哈希/时间")
+                .isInstanceOf(org.springframework.dao.DataAccessException.class);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'm0_platform' "
+                        + "AND indexname = 'idx_sys_user_phone_hash'", String.class))
+                .contains("phone_hash");
+
+        // 新权限点仅授予 SYS_ADMIN；V2 历史权限点保留（兼容，M1 收敛）。
+        assertThat(jdbc.queryForList("""
+                SELECT r.code FROM m0_platform.sys_permission p
+                JOIN m0_platform.sys_role_permission rp ON rp.permission_id = p.id
+                JOIN m0_platform.sys_role r ON r.id = rp.role_id
+                WHERE p.code LIKE 'm0:user:%' ORDER BY p.code, r.code
+                """, String.class)).containsExactly("SYS_ADMIN", "SYS_ADMIN");
+        assertThat(jdbc.queryForList("""
+                SELECT code FROM m0_platform.sys_permission
+                WHERE code IN ('user:read', 'user:write') ORDER BY code
+                """, String.class)).containsExactly("user:read", "user:write");
+        System.out.printf("[M2-M0-02][migration] phone_key_id/phone_updated_at 就绪，m0:user:* 仅 SYS_ADMIN；"
+                + "历史 user:read/user:write 保留%n");
     }
 
     @Test
