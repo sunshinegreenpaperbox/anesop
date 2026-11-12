@@ -52,9 +52,9 @@ pnpm lint
 step "4/7 前端类型检查（vue-tsc --noEmit）"
 pnpm -C apps/web exec vue-tsc --noEmit
 
-# 5. 单元测试：S0-11 落地 Vitest 后自动生效（当前无测试时 pnpm 返回 0）
-step "5/7 前端单元测试（pnpm test:unit --run）"
-pnpm test:unit --run
+# 5. 单元测试：Vitest（v8 覆盖率阈值在 apps/web/vitest.config.ts 生效）
+step "5/7 前端单元测试（pnpm test:unit = Vitest + 覆盖率门禁）"
+pnpm test:unit
 
 # 6. 契约检查：S0-05 落地 spectral lint + baseline 破坏性变更检测
 step "6/7 契约检查（spectral + oasdiff）"

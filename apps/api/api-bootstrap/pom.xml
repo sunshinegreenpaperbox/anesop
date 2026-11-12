@@ -147,6 +147,22 @@
       <artifactId>embedded-postgres-binaries-linux-amd64</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!--
+      Testcontainers（S0-11）：Docker 不可用（EXT-08）期间只编译、默认不执行；
+      测试类标 @Tag("docker")，surefire 默认 excludedGroups=docker，-Pdocker 反向激活。
+      版本由根 pom 的 testcontainers-bom 1.20.4 锁定。
+    -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -173,6 +189,27 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+
+      <!--
+        S0-11：API 侧聚合覆盖率报告（HTML/XML）。
+        api-bootstrap 依赖全部模块 api 与 m0-impl，report-aggregate 会把各依赖模块的
+        jacoco.exec 与本模块执行数据合并，便于查看“跨模块集成测试”后的真实覆盖率
+        （m0-impl 的业务类主要由本模块集成测试覆盖）。
+        输出：target/site/jacoco-aggregate/。逐模块 check 门禁仍由根 pom 执行。
+      -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>jacoco-report-aggregate</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>report-aggregate</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

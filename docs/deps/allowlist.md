@@ -32,6 +32,9 @@
 | org.flywaydb:flyway-core | 10.20.1 | Apache-2.0 | 数据库迁移 | DBA/后端 |
 | org.flywaydb:flyway-database-postgresql | 10.20.1 | Apache-2.0 | Flyway PG 方言 | DBA/后端 |
 | org.testcontainers:testcontainers-bom | 1.20.4 | Apache-2.0 | 容器化集成测试（仅锁版本；Docker 不可用 EXT-08） | 测试负责人 |
+| org.testcontainers:junit-jupiter | 1.20.4（BOM 管理） | Apache-2.0 | Testcontainers JUnit 5 集成；`@Tag("docker")` 默认不执行（S0-11，EXT-08） | 测试负责人 |
+| org.testcontainers:postgresql | 1.20.4（BOM 管理） | Apache-2.0 | `PostgreSQLContainer` 16 模板（S0-11，EXT-08 期间只编译不实跑） | 测试负责人 |
+| org.jacoco:jacoco-maven-plugin | 0.8.12 | EPL-2.0（构建期工具，不进入交付物） | 覆盖率 prepare-agent/report/check 门禁（S0-11） | 测试负责人 |
 | io.zonky.test:embedded-postgres | 2.2.2 | Apache-2.0 | 无 Docker 的嵌入式 PG（测试） | 测试负责人 |
 | io.zonky.test.postgres:embedded-postgres-binaries-linux-amd64 | 16.15.0 | PostgreSQL License（宽松，见方案表 3-8） | 嵌入式 PG 16 二进制（测试，Linux amd64） | 测试负责人 |
 | com.h2database:h2 | 2.3.232（仅属性，未引入） | MPL-2.0 / EPL-1.0 | AGENTS 允许的兜底测试库；**当前不引入**，MPL 在白名单外，启用前须 ADR/法务结论 | — |
@@ -65,6 +68,11 @@
 | prettier | 3.9.10 | MIT | 格式化（S0-03） | 前端负责人 |
 | @commitlint/cli | 19.8.1 | MIT | 提交信息校验（S0-03） | 平台组 |
 | @commitlint/config-conventional | 19.8.1 | MIT | Conventional Commits 规则 | 平台组 |
+| vitest | 3.2.7 | MIT | 前端单测（S0-11） | 前端负责人 |
+| @vitest/coverage-v8 | 3.2.7 | MIT | v8 覆盖率报告与阈值（S0-11） | 前端负责人 |
+| @vue/test-utils | 2.4.6 | MIT | Vue 组件测试（S0-11） | 前端负责人 |
+| jsdom | 26.1.0 | MIT | Vitest DOM 环境（S0-11） | 前端负责人 |
+| @playwright/test | 1.65.0 | Apache-2.0 | E2E 冒烟（S0-11） | 前端负责人 |
 
 ## 三、待引入（登记后可用）
 
@@ -75,10 +83,6 @@
 | （已采用，见第三节）@oasdiff-js/oasdiff-js | 1.0.0 | Apache-2.0 | 破坏性变更检测（封装 oasdiff 1.15.0） | S0-05 已引入 |
 | element-plus | 2.9.x | MIT | UI 组件 | S0-08 |
 | echarts | 5.5.x | Apache-2.0 | 图表/大屏 | M8 |
-| vitest | 2.x | MIT | 前端单测 | S0-11 |
-| @vue/test-utils | 2.x | MIT | 组件测试 | S0-11 |
-| @playwright/test | 1.x | Apache-2.0 | E2E | S0-11 |
-| jacoco（Maven 插件） | 0.8.x | EPL-2.0（构建期工具） | 覆盖率 | S0-11 |
 | pact-jvm | 4.x | Apache-2.0 | 契约测试 | M5 联调 |
 
 ## 三之二、S0-05 实际引入（契约工具链）

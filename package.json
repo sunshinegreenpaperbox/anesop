@@ -14,8 +14,8 @@
     "format": "prettier --write apps packages",
     "format:check": "prettier --check apps packages",
     "typecheck": "pnpm -C apps/web exec vue-tsc --noEmit",
-    "test:unit": "pnpm -r --if-present test:unit",
-    "e2e": "pnpm -r --if-present e2e",
+    "test:unit": "vitest run --coverage --config apps/web/vitest.config.ts",
+    "e2e": "playwright test -c apps/web/playwright.config.ts",
     "commitlint": "commitlint --edit",
     "check": "bash scripts/check.sh"
   },
@@ -23,14 +23,19 @@
     "@commitlint/cli": "19.8.1",
     "@commitlint/config-conventional": "19.8.1",
     "@eslint/js": "9.39.4",
+    "@playwright/test": "1.65.0",
     "@typescript-eslint/parser": "8.72.2",
+    "@vitest/coverage-v8": "3.2.7",
+    "@vue/test-utils": "2.4.6",
     "eslint": "9.39.4",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-vue": "10.12.1",
     "globals": "17.14.0",
+    "jsdom": "26.1.0",
     "prettier": "3.9.10",
     "typescript": "5.6.3",
     "typescript-eslint": "8.72.2",
+    "vitest": "3.2.7",
     "vue-eslint-parser": "10.4.2"
   }
 }

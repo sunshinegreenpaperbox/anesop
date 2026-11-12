@@ -17,7 +17,7 @@
 | S0-08 | 前端壳与设计令牌 | `apps/web/src/{layout,router,stores,api}/`、`packages/ui/` | S0-05/07 | 3 天 | Ready |
 | S0-09 | 采集网关 POC | `services/device-gateway/`、`db/migration/`（V4） | S0-02/06 | 3 天 | Done |
 | S0-10 | 部署环境（Compose） | `deploy/compose/`、`scripts/` | S0-02 | 1.5 天 | Done |
-| S0-11 | 测试基座 | 各模块 `src/test/`、`e2e/` | S0-02 | 2 天 | Ready |
+| S0-11 | 测试基座 | 各模块 `src/test/`、`e2e/`、根 pom | S0-02 | 2 天 | Done（JaCoCo/Vitest/Playwright/Testcontainers；m0、网关有到期 ratchet） |
 | S0-12 | 开发文档与一键起 | `README.md`、`docs/`、`scripts/` | S0-02/10 | 1 天 | Ready |
 
 **并行建议**：01→02 串行；之后 03/05/06/10 并行；再 04/07/09；最后 08/11/12。总控最多同时开 3 个队友。
