@@ -24,3 +24,5 @@
 | 手机号加密与脱敏 | 3.9.3 | auth.yaml 0.5.0 | m0/crypto + 用户管理 | — | PhoneCrypto/PhoneHasher/UserAdminApiIntegrationTest | 已实现（M2-M0-02，review PASS） |
 | E2E-04 权限越权（UI 级） | 3.9.2 | auth.yaml | m0 权限 | 前端 403/菜单过滤 | apps/web/e2e/auth.spec.ts | 已实现（M2-M0-03；真实 API 越权由集成测试覆盖） |
 | 登录提交 E2E | ACCEPTANCE C | auth.yaml | m0/auth | 登录页 | apps/web/e2e/auth.spec.ts | 已实现（M2-M0-03，API 拦截） |
+| 手术申请接收/导入/取消 | 2.4.2 | scheduling.yaml 0.3.0 | m1/application + HIS 适配器 | m1 列表/详情 | SurgeryApplicationApiIntegrationTest / m1-applications.spec.ts | 已实现（M2-M1-01，review 清障） |
+| 患者摘要与脱敏检索 | 2.4.2/3.9.3 | patient.yaml 0.3.0 | m1/patient | m1 列表 | SurgeryApplicationApiIntegrationTest（masked） | 已实现（M2-M1-01） |
