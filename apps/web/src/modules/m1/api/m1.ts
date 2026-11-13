@@ -1,6 +1,6 @@
 import type { components as schedulingComponents } from '@anesop/contracts/scheduling'
 import type { components as patientComponents } from '@anesop/contracts/patient'
-import { http } from '../../../api/http'
+import { http, request } from '../../../api/http'
 
 /** 手术申请（scheduling.yaml 0.3.0 生成类型，禁止手写重复模型）。 */
 export type SurgeryApplication = schedulingComponents['schemas']['SurgeryApplication']
@@ -34,6 +34,23 @@ export type EmergencyApproval = schedulingComponents['schemas']['EmergencyApprov
 export type ConflictCheckRequest = schedulingComponents['schemas']['ConflictCheckRequest']
 export type ConflictCheckResult = schedulingComponents['schemas']['ConflictCheckResult']
 export type ScheduleConflict = ConflictCheckResult['conflicts'][number]
+
+/** 排程分析（scheduling.yaml 0.6.0）：只读聚合，时区 Asia/Shanghai。 */
+export type UtilizationReport = schedulingComponents['schemas']['UtilizationReport']
+export type UtilizationRoom = schedulingComponents['schemas']['UtilizationRoom']
+export type OnTimeReport = schedulingComponents['schemas']['OnTimeReport']
+export type OnTimeRoom = schedulingComponents['schemas']['OnTimeRoom']
+export type CancellationReport = schedulingComponents['schemas']['CancellationReport']
+export type CancellationRoom = schedulingComponents['schemas']['CancellationRoom']
+export type CancellationReason = schedulingComponents['schemas']['CancellationReason']
+export type AnalyticsMetric = 'utilization' | 'on-time' | 'cancellations'
+
+/** 分析查询：本地日期闭区间（YYYY-MM-DD，Asia/Shanghai）与可选科室。 */
+export interface AnalyticsRange {
+  from: string
+  to: string
+  deptId?: string
+}
 
 /** 患者摘要（patient.yaml 0.3.0）：不含证件号与手机号。 */
 export type PatientSummary = patientComponents['schemas']['PatientSummary']
@@ -147,4 +164,50 @@ export function checkScheduleConflicts(
   payload: ConflictCheckRequest,
 ): Promise<ConflictCheckResult> {
   return http.post<ConflictCheckResult>('/v1/scheduling/schedules/conflicts', payload)
+}
+
+function analyticsQuery(range: AnalyticsRange): string {
+  const query = new URLSearchParams({ from: range.from, to: range.to })
+  if (range.deptId) query.set('deptId', range.deptId)
+  return query.toString()
+}
+
+/** 术间利用率（按术间与汇总）。 */
+export function getSchedulingUtilization(range: AnalyticsRange): Promise<UtilizationReport> {
+  return http.get<UtilizationReport>(
+    `/v1/scheduling/analytics/utilization?${analyticsQuery(range)}`,
+  )
+}
+
+/** 首台准点开台率（按术间与汇总）。 */
+export function getSchedulingOnTime(range: AnalyticsRange): Promise<OnTimeReport> {
+  return http.get<OnTimeReport>(`/v1/scheduling/analytics/on-time?${analyticsQuery(range)}`)
+}
+
+/** 取消率（按原因码与术间分组）。 */
+export function getSchedulingCancellations(range: AnalyticsRange): Promise<CancellationReport> {
+  return http.get<CancellationReport>(
+    `/v1/scheduling/analytics/cancellations?${analyticsQuery(range)}`,
+  )
+}
+
+/**
+ * 导出脱敏 CSV（后端 UTF-8 BOM、仅聚合值）。
+ * 通过统一 http 通道取文本，保留错误码/401 刷新语义；返回 Blob 供页面下载。
+ */
+export async function exportSchedulingAnalytics(
+  metric: AnalyticsMetric,
+  range: AnalyticsRange,
+): Promise<Blob> {
+  const query = new URLSearchParams({
+    metric,
+    from: range.from,
+    to: range.to,
+    format: 'csv',
+  })
+  if (range.deptId) query.set('deptId', range.deptId)
+  const text = await request<string>(`/v1/scheduling/analytics/export?${query.toString()}`, {
+    headers: { Accept: 'text/csv' },
+  })
+  return new Blob([text], { type: 'text/csv;charset=utf-8' })
 }

@@ -6,6 +6,7 @@ import SessionsView from '../modules/m0/views/SessionsView.vue'
 import ApplicationListView from '../modules/m1/views/ApplicationListView.vue'
 import ApplicationDetailView from '../modules/m1/views/ApplicationDetailView.vue'
 import ScheduleBoardView from '../modules/m1/views/ScheduleBoardView.vue'
+import AnalyticsView from '../modules/m1/views/AnalyticsView.vue'
 import PreopEntryView from '../modules/m2/views/PreopEntryView.vue'
 import PreopAssessmentView from '../modules/m2/views/PreopAssessmentView.vue'
 import ConsentEntryView from '../modules/m2/views/ConsentEntryView.vue'
@@ -69,6 +70,12 @@ export const routes: RouteRecordRaw[] = [
         name: 'm1-schedule',
         component: ScheduleBoardView,
         meta: menuMeta('/m1/schedule'),
+      },
+      {
+        path: 'm1/analytics',
+        name: 'm1-analytics',
+        component: AnalyticsView,
+        meta: menuMeta('/m1/analytics'),
       },
       {
         path: 'm2/preop',
