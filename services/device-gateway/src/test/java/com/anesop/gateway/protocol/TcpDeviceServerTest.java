@@ -42,7 +42,8 @@ class TcpDeviceServerTest {
                 new GatewayProperties.Tcp(enabled, "127.0.0.1", 0, maxFrameBytes),
                 new GatewayProperties.Buffer(bufferDir.toString(), 8_388_608L, 600_000L, 67_108_864L),
                 new GatewayProperties.Upload(true, 1000L, 10, 500L, 30_000L, 64),
-                new GatewayProperties.Database("jdbc:postgresql://localhost:5432/unused", "u", "", 5));
+                new GatewayProperties.Database("jdbc:postgresql://localhost:5432/unused", "u", "", 5),
+                new GatewayProperties.Platform("jdbc", "", "", 3000));
     }
 
     private static int peekSize(LocalBuffer buffer, String deviceId) {

@@ -41,6 +41,7 @@ public final class GatewayPropertiesFixtures {
                 new GatewayProperties.Tcp(true, "127.0.0.1", 0, 4096),
                 new GatewayProperties.Buffer(bufferDirectory.toString(), 8_388_608L, 600_000L, 67_108_864L),
                 new GatewayProperties.Upload(true, 100L, 50, retryBaseMs, retryMaxMs, 64),
-                new GatewayProperties.Database(GatewayTestSupport.jdbcUrl(), "postgres", "", 5));
+                new GatewayProperties.Database(GatewayTestSupport.jdbcUrl(), "postgres", "", 5),
+                new GatewayProperties.Platform("jdbc", "", "", 3000));
     }
 }

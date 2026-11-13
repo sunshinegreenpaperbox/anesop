@@ -58,6 +58,15 @@ anesop:
       username: ${ANESOP_GATEWAY_DB_USER:anesop}
       password: ${ANESOP_GATEWAY_DB_PASSWORD:}
       login-timeout-seconds: 5
+    # 平台上报（M3-M8-01）：默认 jdbc=直连 PostgreSQL（POC 简化，行为不变）。
+    # mode=http 时改调平台 POST /v1/devices/{gatewayId}/{deviceId}/ingest（EXT-04 模拟）：
+    # url 指向平台 API 基地址，token 为内部网关令牌（部署注入，禁止入仓/入日志）。
+    # mode=http 且 url/token 为空时启动即失败（fail-closed）。
+    platform:
+      mode: ${ANESOP_GATEWAY_PLATFORM_MODE:jdbc}
+      url: ${ANESOP_GATEWAY_PLATFORM_URL:}
+      token: ${ANESOP_GATEWAY_PLATFORM_TOKEN:}
+      timeout-ms: ${ANESOP_GATEWAY_PLATFORM_TIMEOUT_MS:3000}
 
 logging:
   level:

@@ -20,7 +20,7 @@ import javax.sql.DataSource;
  *
  * <p>时间列用 {@code OffsetDateTime(UTC)} 绑定 timestamptz，避免 JVM 时区影响。
  */
-public final class VitalRepository {
+public final class VitalRepository implements VitalSink {
 
     private static final String INSERT_SQL = """
             INSERT INTO m2_anes.anesthesia_vital
@@ -57,6 +57,7 @@ public final class VitalRepository {
      * @return 实际新插入行数；与入参数量之差即唯一键冲突（重复）行数
      * @throws SQLException 数据库不可用或约束失败（整批回滚）
      */
+    @Override
     public int insertAll(List<VitalSample> samples) throws SQLException {
         if (samples.isEmpty()) {
             return 0;
@@ -90,6 +91,7 @@ public final class VitalRepository {
      *
      * @return true 表示可用
      */
+    @Override
     public boolean ping() {
         try (Connection connection = dataSource.getConnection()) {
             return connection.isValid(2);

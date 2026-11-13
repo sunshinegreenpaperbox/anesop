@@ -21,6 +21,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param buffer                  本地文件缓冲参数
  * @param upload                  上传参数
  * @param database                数据库连接参数
+ * @param platform                平台上报参数（默认 jdbc 直连；http 时走上行适配器，EXT-04）
  */
 @ConfigurationProperties(prefix = "anesop.gateway")
 public record GatewayProperties(
@@ -34,10 +35,14 @@ public record GatewayProperties(
         @DefaultValue Tcp tcp,
         @DefaultValue Buffer buffer,
         @DefaultValue Upload upload,
-        @DefaultValue Database database) {
+        @DefaultValue Database database,
+        @DefaultValue Platform platform) {
 
     /** 数据库 source 列允许的取值（与 V4 的 CHECK 约束一致）。 */
     private static final Set<String> ALLOWED_SOURCES = Set.of("AUTO", "MANUAL", "REPLAY");
+
+    /** 上行模式：jdbc=直连平台库（POC 默认），http=平台采集接入（EXT-04）。 */
+    private static final Set<String> ALLOWED_PLATFORM_MODES = Set.of("jdbc", "http");
 
     /**
      * 配置自检：错配置在启动期失败，避免运行期每帧入库失败、数据积压。
@@ -53,6 +58,7 @@ public record GatewayProperties(
      * @param buffer               缓冲配置
      * @param upload               上传配置
      * @param database             数据库配置
+     * @param platform             平台上报配置
      */
     public GatewayProperties {
         if (gatewayId == null || gatewayId.isBlank() || gatewayId.length() > 64) {
@@ -79,6 +85,19 @@ public record GatewayProperties(
         }
         if (database.url() == null || database.url().isBlank() || database.loginTimeoutSeconds() <= 0) {
             throw new IllegalArgumentException("database.url 不能为空，login-timeout-seconds 必须为正");
+        }
+        if (platform == null || !ALLOWED_PLATFORM_MODES.contains(platform.mode())) {
+            throw new IllegalArgumentException("platform.mode 只能是 jdbc 或 http");
+        }
+        if (platform.http() && (platform.url() == null || platform.url().isBlank())) {
+            throw new IllegalArgumentException("platform.mode=http 时 platform.url 不能为空");
+        }
+        if (platform.http() && (platform.token() == null || platform.token().isBlank())) {
+            // fail-closed：缺令牌时宁可拒绝启动，也不在运行期无认证上报。
+            throw new IllegalArgumentException("platform.mode=http 时 platform.token 不能为空（fail-closed）");
+        }
+        if (platform.timeoutMs() <= 0) {
+            throw new IllegalArgumentException("platform.timeout-ms 必须为正");
         }
     }
 
@@ -144,5 +163,33 @@ public record GatewayProperties(
             @DefaultValue("anesop") String username,
             @DefaultValue("") String password,
             @DefaultValue("5") int loginTimeoutSeconds) {
+    }
+
+    /**
+     * 平台上报参数（M3-M8-01，EXT-04 SIMULATED）。
+     *
+     * <p>默认 {@code mode=jdbc}：网关直连 PostgreSQL，保持 POC 行为不变；切换为 {@code http}
+     * 时网关调用平台 {@code POST /v1/devices/{gatewayId}/{deviceId}/ingest}，不再直连业务库。
+     * {@code mode=http} 时 url 与 token 必填（fail-closed），token 不入日志。
+     *
+     * @param mode      上行模式：jdbc 或 http
+     * @param url       平台 API 基地址（http 模式必填，如 https://anesop.local/api）
+     * @param token     内部网关令牌（http 模式必填，部署注入，禁止入仓/入日志）
+     * @param timeoutMs 单次上报超时（毫秒）
+     */
+    public record Platform(
+            @DefaultValue("jdbc") String mode,
+            @DefaultValue("") String url,
+            @DefaultValue("") String token,
+            @DefaultValue("3000") int timeoutMs) {
+
+        /**
+         * 是否走平台 HTTP 上报。
+         *
+         * @return true 表示 http 模式
+         */
+        public boolean http() {
+            return "http".equals(mode);
+        }
     }
 }

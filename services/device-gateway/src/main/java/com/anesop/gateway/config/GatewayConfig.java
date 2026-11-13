@@ -3,11 +3,15 @@ package com.anesop.gateway.config;
 import com.anesop.gateway.buffer.LocalBuffer;
 import com.anesop.gateway.normalize.VitalNormalizer;
 import com.anesop.gateway.protocol.FrameParser;
+import com.anesop.gateway.upload.PlatformVitalReporter;
 import com.anesop.gateway.upload.VitalRepository;
+import com.anesop.gateway.upload.VitalSink;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.nio.file.Path;
 import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -18,6 +22,8 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 public class GatewayConfig {
+
+    private static final Logger LOG = LoggerFactory.getLogger(GatewayConfig.class);
 
     /**
      * 帧解析器（无状态）。
@@ -57,14 +63,21 @@ public class GatewayConfig {
     }
 
     /**
-     * 体征入库仓储。
+     * 体征上行出口（M3-M8-01）：默认 JDBC 直连；配置 {@code anesop.gateway.platform.mode=http}
+     * 时切换为平台上报适配器（EXT-04，模拟实现）。
      *
-     * @param dataSource 数据源
+     * @param dataSource 数据源（jdbc 模式）
      * @param properties 网关配置
-     * @return 仓储
+     * @return 上行出口
      */
     @Bean
-    public VitalRepository vitalRepository(DataSource dataSource, GatewayProperties properties) {
+    public VitalSink vitalSink(DataSource dataSource, GatewayProperties properties) {
+        GatewayProperties.Platform platform = properties.platform();
+        if (platform.http()) {
+            LOG.info("体征上行模式=http（平台采集接入；EXT-04 模拟）");
+            return new PlatformVitalReporter(platform.url(), properties.gatewayId(), platform.token(),
+                    platform.timeoutMs());
+        }
         return new VitalRepository(dataSource, properties.gatewayId(), properties.synthetic());
     }
 }

@@ -39,7 +39,7 @@ public final class VitalUploader implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(VitalUploader.class);
 
     private final LocalBuffer buffer;
-    private final VitalRepository repository;
+    private final VitalSink repository;
     private final GatewayProperties.Upload config;
     private final MeterRegistry meterRegistry;
     /** 时间源：生产为 {@link System#currentTimeMillis()}，测试可注入可控时钟。 */
@@ -55,12 +55,12 @@ public final class VitalUploader implements AutoCloseable {
      * 构造上传器并注册 gauge（生产构造器，时间源为系统时钟）。
      *
      * @param buffer       本地缓冲
-     * @param repository   入库仓储
+     * @param repository   上行出口（JDBC 或平台 HTTP）
      * @param properties   网关配置
      * @param meterRegistry 指标注册表
      */
     @Autowired
-    public VitalUploader(LocalBuffer buffer, VitalRepository repository, GatewayProperties properties,
+    public VitalUploader(LocalBuffer buffer, VitalSink repository, GatewayProperties properties,
             MeterRegistry meterRegistry) {
         this(buffer, repository, properties, meterRegistry, System::currentTimeMillis);
     }
@@ -73,12 +73,12 @@ public final class VitalUploader implements AutoCloseable {
      * 生产路径仍由上面的公开构造器传入系统时钟，行为不变。
      *
      * @param buffer          本地缓冲
-     * @param repository      入库仓储
+     * @param repository      上行出口（JDBC 或平台 HTTP）
      * @param properties      网关配置
      * @param meterRegistry   指标注册表
      * @param nowEpochMillis  时间源（epoch 毫秒）
      */
-    VitalUploader(LocalBuffer buffer, VitalRepository repository, GatewayProperties properties,
+    VitalUploader(LocalBuffer buffer, VitalSink repository, GatewayProperties properties,
             MeterRegistry meterRegistry, LongSupplier nowEpochMillis) {
         this.buffer = buffer;
         this.repository = repository;
@@ -138,7 +138,7 @@ public final class VitalUploader implements AutoCloseable {
                         }
                         onSuccess();
                         batches++;
-                    } catch (SQLException e) {
+                    } catch (IOException | SQLException e) {
                         onFailure(deviceId, batch.size(), e);
                         return insertedTotal;
                     }
@@ -223,13 +223,15 @@ public final class VitalUploader implements AutoCloseable {
         nextAttemptEpochMillis.set(0L);
     }
 
-    private void onFailure(String deviceId, int batchSize, SQLException error) {
+    private void onFailure(String deviceId, int batchSize, Exception error) {
         int failures = consecutiveFailures.incrementAndGet();
         connected.set(0);
         long delay = RetryBackoff.delayMillis(failures, config.retryBaseMs(), config.retryMaxMs());
         nextAttemptEpochMillis.set(nowEpochMillis.getAsLong() + delay);
         meterRegistry.counter(GatewayMetricNames.FRAMES_FAILED, "device", deviceId).increment(batchSize);
-        LOG.warn("上传失败，数据保留在缓冲 device={} failures={} delayMs={} sqlState={}",
-                deviceId, failures, delay, error.getSQLState());
+        // 只记录异常类别与 SQLSTATE，不记录报文、令牌或连接串；HTTP 实现的消息由本模块生成。
+        String sqlState = error instanceof SQLException sqlFailure ? sqlFailure.getSQLState() : "-";
+        LOG.warn("上传失败，数据保留在缓冲 device={} failures={} delayMs={} error={} sqlState={}",
+                deviceId, failures, delay, error.getClass().getSimpleName(), sqlState);
     }
 }

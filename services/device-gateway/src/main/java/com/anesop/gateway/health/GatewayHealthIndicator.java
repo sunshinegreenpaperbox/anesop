@@ -4,7 +4,7 @@ import com.anesop.gateway.buffer.BufferStats;
 import com.anesop.gateway.buffer.LocalBuffer;
 import com.anesop.gateway.config.GatewayProperties;
 import com.anesop.gateway.protocol.TcpDeviceServer;
-import com.anesop.gateway.upload.VitalRepository;
+import com.anesop.gateway.upload.VitalSink;
 import com.anesop.gateway.upload.VitalUploader;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -34,7 +34,7 @@ public final class GatewayHealthIndicator implements HealthIndicator {
 
     private final LocalBuffer buffer;
     private final VitalUploader uploader;
-    private final VitalRepository repository;
+    private final VitalSink repository;
     private final TcpDeviceServer tcpServer;
     private final GatewayProperties properties;
 
@@ -43,11 +43,11 @@ public final class GatewayHealthIndicator implements HealthIndicator {
      *
      * @param buffer      本地缓冲
      * @param uploader    上传器
-     * @param repository  仓储（数据库探针）
+     * @param repository  上行出口（数据库/平台连通性探针）
      * @param tcpServer   TCP 接入
      * @param properties  网关配置
      */
-    public GatewayHealthIndicator(LocalBuffer buffer, VitalUploader uploader, VitalRepository repository,
+    public GatewayHealthIndicator(LocalBuffer buffer, VitalUploader uploader, VitalSink repository,
             TcpDeviceServer tcpServer, GatewayProperties properties) {
         this.buffer = buffer;
         this.uploader = uploader;
