@@ -195,63 +195,76 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 （RCRI/Apfel/STOP-BANG 三级切点、DASI <4 METs 换算、量表版本），阈值配置表结构【待确认】；
 评分口径与 Q 登记详见 `docs/modules/m2/README.md` §4、§10。
 
-### 3.2 麻醉记录单 `anesthesia_record`
+### 3.2 麻醉记录单 `m2_anes.anesthesia_record`（V13 已实现，M3-M2-01）
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `record_id` | bigint | 是 | 主键 | §3.4.2 |
-| `schedule_id` | bigint | 是 | 排程 | §3.4.2 |
-| `patient_id` | bigint | 是 | 患者 | §3.4.2 |
-| `status` | varchar | 是 | `DRAFT/IN_PROGRESS/LOCKED/REVISED` | §2.4.3；状态机与修订版本表【待确认】 |
-| `anesthesia_type` | varchar | 是 | 麻醉方式 | §2.4.3；字典【待确认】 |
-| `started_at` | timestamptz | 否 | 记录开始 | §2.4.3 |
-| `ended_at` | timestamptz | 否 | 记录结束 | §2.4.3 |
-| `locked_at` | timestamptz | 否 | 锁单时间 | §2.4.3 |
-| `locked_by` | bigint | 否 | 锁单人 | §2.4.3 |
-| `signature_status` | varchar | 否 | CA 签名状态 | §3.9.4；`SIGNED/PENDING/FAILED` |
-| `record_hash` | varchar | 【待确认】 | 记录哈希链校验值 | §3.9.1、§3.9.4；算法与字段【待确认】 |
-| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
-| `deleted_at` | timestamptz | 否 | 软删除 | §3.4.3 |
+| `id` | uuid | 是 | 主键（gen_random_uuid） | §3.4.2；接口 `recordId` |
+| `schedule_id` | uuid | 是 | 排程台次（**唯一**，一个台次一张记录单） | §2.4.3；`uk_anesthesia_record_schedule` |
+| `application_id` | uuid | 是 | 手术申请（由台次解析，不信任客户端） | §3.4.2 |
+| `patient_id` | uuid | 是 | 患者标识（不存姓名/证件号/住院号明文） | §3.9.3 |
+| `status` | varchar(16) | 是 | `DRAFT/ONGOING`（契约映射 `DRAFT/IN_PROGRESS`） | §2.4.3；锁单 `LOCKED/REVISED` 由 M3-M2-03 新迁移扩展 |
+| `anesthesia_type` | varchar(16) | 是 | `GENERAL/REGIONAL/COMBINED/LOCAL/SEDATION` | §2.4.3；未锁定可改 |
+| `started_at` | timestamptz | 否 | 记录开始（首个 `ANESTHESIA_START` 事件时间） | §2.4.3；DRAFT 为 NULL |
+| `ended_at` | timestamptz | 否 | 记录结束（`ANESTHESIA_END` 事件时间） | §2.4.3；不得早于开始 |
+| `version` | bigint | 是 | 乐观锁版本（从 1 起，更新必须回传） | §3.4.3 |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by` | §3.4.3 |
+| `deleted` | boolean | 是 | 逻辑删除（本期不提供删除接口） | §3.4.3；触发器拒绝物理删除 |
 
-说明：锁单后不可直接改，修改生成修订版本并保留原值、修改人、时间、原因（§2.4.3）；三方核查未完成不允许锁单，核查记录见 3.8。
+说明：锁单后不可直接改，修改生成修订版本并保留原值、修改人、时间、原因（§2.4.3），锁单/修订表与 `record_hash` 算法【待确认】（M3-M2-03）；三方核查未完成不允许锁单（集成点见 `docs/modules/m2/README.md` §5.4）。
 
-### 3.3 麻醉事件 `anesthesia_event`
+### 3.3 时间轴事件 `m2_anes.record_event`（V13 已实现，append-only）
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `event_id` | bigint | 是 | 主键 | §3.4.2 |
-| `record_id` | bigint | 是 | 记录单 | §3.4.2 |
-| `event_type` | varchar | 是 | 诱导/插管/切皮/拔管/出室/抢救等 | §2.4.3；枚举以契约 `AnesthesiaEvent.eventType` 为准 |
-| `occurred_at` | timestamptz | 是 | 事件发生时间（服务端校准） | §3.4.5、§2.4.3 |
-| `source` | varchar | 是 | `DEVICE/MANUAL` | §2.4.3；设备采集与手工补录区分 |
-| `note` | text | 否 | 事件备注 | §2.4.3 |
-| `entry_reason` | varchar | 否 | 补录原因（手工补录必填） | §2.4.3 |
-| `recorded_at` | timestamptz | 是 | 录入时间 | §2.4.3 |
-| `recorded_by` | bigint | 是 | 录入人 | §2.4.3 |
+| `id` | uuid | 是 | 主键 | §3.4.2；接口 `eventId` |
+| `record_id` | uuid | 是 | 所属记录单（FK） | §3.4.2 |
+| `seq` | integer | 是 | 记录单内创建序号（从 1 起，`(record_id, seq)` 唯一） | 同一 `occurred_at` 按 seq 升序，保证时间轴稳定 |
+| `event_type` | varchar(32) | 是 | `ANESTHESIA_START/INDUCTION/INTUBATION/INCISION/CUSTOM/EXTUBATION/ANESTHESIA_END` | §2.4.3；CHECK 约束 |
+| `occurred_at` | timestamptz | 是 | 事件发生时间（不得早于记录开始） | §3.4.5、§2.4.3 |
+| `source` | varchar(16) | 是 | `MANUAL/DEVICE` | §2.4.3；设备采集由 M3-M8-01 接入 |
+| `payload` | jsonb | 是 | 结构化明细（`note`/`entryReason` 等），不得含患者直接标识 | §2.4.3；jsonb 对象 CHECK |
+| `created_at` | timestamptz | 是 | 录入时间（与 `occurred_at` 分离） | §2.4.3 |
+| `created_by` | uuid | 否 | 录入人 | §2.4.3 |
 
-说明：事件按记录单分区、时间倒序索引（§3.4.2）；补录必须标注录入时间与原因（§2.4.3）。
+说明：append-only（触发器拒绝 UPDATE/DELETE/TRUNCATE，SQLSTATE 55000）；修正必须新增事件并在 `payload.entryReason` 说明。`entryReason` 为**条件必填**：`occurred_at` 早于该记录单最新事件时间、或早于服务端当前时间 − 容差（默认 600 秒）时必须填写，否则 400；未来时间超过 now + 容差同样 400。契约 `AnesthesiaEvent`（0.4.0 兼容）只映射经典类型，CUSTOM→OTHER；完整时间轴走 `RecordEvent`。事件按 `(record_id, occurred_at, seq)` 建索引，按记录单分区留待采集量评估【待确认】。
 
-### 3.4 用药记录 `medication_record`
+### 3.4 用药记录 `m2_anes.drug_administration`（V13 已实现，append-only）
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `med_id` | bigint | 是 | 主键 | §3.4.2 |
-| `record_id` | bigint | 是 | 记录单 | §3.4.2 |
-| `drug_id` | bigint | 是 | 药品（目录来自药房 I-07） | §3.4.2、§2.4.6 |
-| `dose` | numeric | 是 | 剂量 | §2.4.3；单位【待确认】 |
-| `dose_unit` | varchar | 【待确认】 | 剂量单位 | §2.4.3；字典【待确认】 |
-| `route` | varchar | 【待确认】 | 给药途径 | §2.4.3；字典【待确认】 |
-| `given_at` | timestamptz | 是 | 给药时间 | §2.4.3 |
-| `is_narcotic` | boolean | 是 | 是否麻精药品 | §2.4.6 |
-| `first_check_by` | bigint | 否 | 双人核对第一人 | §3.9.2；字段名【待确认】，麻精必填 |
-| `first_check_at` | timestamptz | 否 | 第一人核对时间 | §3.9.2 |
-| `second_check_by` | bigint | 否 | 双人核对第二人 | §3.9.2；字段名【待确认】，麻精必填 |
-| `second_check_at` | timestamptz | 否 | 第二人核对时间 | §3.9.2 |
-| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
+| `id` | uuid | 是 | 主键 | §3.4.2；接口 `drugId` |
+| `record_id` | uuid | 是 | 记录单（FK） | §3.4.2 |
+| `drug_name` | varchar(200) | 是 | 药品名称（院内字典名，不含患者标识） | §3.9.3；药品目录编码对接药房 I-07【待确认】 |
+| `dose` | numeric(10,3) | 是 | 剂量（必须 > 0） | §2.4.3；单位见 `unit` |
+| `unit` | varchar(16) | 是 | 剂量单位（mg/ug/ml 等） | 单位字典【待确认】 |
+| `route` | varchar(32) | 是 | 给药途径（IV/INHALATION/EPIDURAL 等） | 途径字典【待确认】 |
+| `administered_at` | timestamptz | 是 | 给药时间（与录入时间分离） | §2.4.3 |
+| `narcotic` | boolean | 是 | 是否麻精药品 | §2.4.6 |
+| `second_checker_id` | uuid | 否 | 第二核对人；麻精必填、非麻精必须为空 | §3.9.2；CHECK 约束 |
+| `second_checker_name` | varchar(64) | 否 | 第二核对人姓名（只落库，不入日志/审计） | §3.9.3 |
+| `note` | varchar(500) | 否 | 备注（不得含患者直接标识） | — |
+| `created_at` | timestamptz | 是 | 录入时间 | §3.4.3 |
+| `created_by` | uuid | 否 | 给药人（核对人不得与其相同，CHECK） | §3.9.2 |
 
-说明：麻精药品每次使用必须关联患者、术间与处方并双人核对（§2.4.6）；空安瓿回收与余液处置字段在 M5 台账中细化。
+说明：append-only；麻精药品必须双人核对（`ck_drug_administration_narcotic_checker`）且同人核对被拒绝（`ck_drug_administration_second_checker_distinct`），服务层先返回 400。空安瓿回收、余液处置、处方号与批号/效期在 M5 药事台账细化【待确认】。
 
-### 3.5 生命体征 `vital_sign`
+### 3.4.1 输液/出入量 `m2_anes.fluid_record`（V13 已实现，append-only）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键 | 接口 `fluidId` |
+| `record_id` | uuid | 是 | 记录单（FK） | §3.4.2 |
+| `direction` | varchar(8) | 是 | `INTAKE/OUTPUT`（CHECK） | §2.4.3 |
+| `fluid_type` | varchar(64) | 是 | 液体/出量类型（晶体液/胶体液/尿量等） | §2.4.3；字典【待确认】 |
+| `amount_ml` | integer | 是 | 量（毫升，必须 > 0） | §2.4.3 |
+| `recorded_at` | timestamptz | 是 | 记录时间（缺省取服务端时间） | §2.4.3 |
+| `note` | varchar(200) | 否 | 备注 | — |
+| `created_at` / `created_by` | timestamptz / uuid | 是/否 | 录入时间与录入人 | §3.4.3 |
+
+说明：append-only；**不落冗余合计列**，出入量汇总由服务端按明细聚合（`balanceMl = intakeMl - outputMl`，契约 `IntakeOutputSummary`），避免合计与明细不一致。
+
+### 3.5 生命体征 `m2_anes.anesthesia_vital`（V4 已实现；V14 采集接入）
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
@@ -379,12 +392,16 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 | `Schedule` | `schedule` | 冲突检测与版本 |
 | `PreopAssessment` | `m2_anes.preop_assessment` | 评分输入/结果、麻醉计划、最终化（V10） |
 | `PreopVisit`（0.2.0 骨架） | 未落表 | 保留兼容，计划 1.0.0 收敛 |
-| `AnesthesiaRecord` | `anesthesia_record` | 状态机与锁单 |
+| `AnesthesiaRecord` | `m2_anes.anesthesia_record` | 按台次唯一、状态机（V13）；锁单 M3-M2-03 |
 | `ApplicationThreeWayCheck` | `m2_anes.three_way_check` | 申请维度三方核查（V11，append-only 版本） |
 | `ThreeWayCheck`（记录维度） | 未落表（M3） | 记录单维度核查，契约保持不变，实现留 M3 |
 | `ConsentTemplate` | `m2_anes.consent_template` | 模板与版本，内容不可变（V11） |
 | `ConsentRecord` | `m2_anes.consent_record` | 同意记录与签署状态机、CA 占位签名（V11） |
-| `AnesthesiaEvent` | `anesthesia_event` | 事件时间/录入时间分离 |
+| `AnesthesiaEvent`（0.4.0 兼容） | `m2_anes.record_event` | 兼容视图：只映射经典事件类型（V13） |
+| `RecordEvent`、`CreateRecordEventRequest` | `m2_anes.record_event` | append-only 时间轴、seq、payload jsonb（V13） |
+| `DrugAdministration`、`AdministerDrugRequest` | `m2_anes.drug_administration` | 用药与麻精双人核对（V13） |
+| `FluidRecord`、`RecordFluidRequest`、`IntakeOutputSummary` | `m2_anes.fluid_record` | 出入量明细与汇总（V13，汇总不落库） |
+| `VitalSignSample` | 未落表（M3-M8-01） | 记录单 `vitalSigns` 占位，本期固定空数组 |
 | `FollowUp` | `follow_up` | 24/48 小时随访 |
 | `CurrentUser`、`DataScope` | `sys_user`、`sys_role_data_scope` 等 | 权限投影，不是单表 |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
@@ -398,6 +415,9 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 5. 麻醉记录单修订版本表与 `record_hash` 算法；记录单维度三方核查（M3）的表结构与
    1:1 关系；CA 有效签名（EXT-05）解除后的证书链/时间戳字段。
 6. DASI 评分范围（V10 起按通行 0–58.2 实现）与院方口径、功能容量 <4 METs 切点，待临床确认。
-7. 用药剂量单位/途径字典、麻精双人核对签名字段与空安瓿台账。
+7. 用药剂量单位/途径字典、麻精双人核对签名字段与空安瓿台账（V13 先落 `second_checker_id/name`，
+   电子签名与处方关联在 M5 细化）。
+7a. 记录单锁单表/修订版本表、`record_hash` 算法、事件按记录单分区策略（V13 未落，M3-M2-03
+   与新迁移承接）。
 8. 生命体征指标编码、单位、采样间隔、波形存储（D-04）。
 9. 复苏记录评分项与转出阈值、随访量表口径。

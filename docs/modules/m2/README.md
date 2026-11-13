@@ -1,9 +1,11 @@
 # M2 麻醉信息管理（模块说明）
 
-> 状态：M2-M4-01「术前访视与评估」+ M2-M5-01「知情同意与三方核查」落地版（2026-11-13）。
-> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.4.0；
+> 状态：M2-M4-01「术前访视与评估」+ M2-M5-01「知情同意与三方核查」+ M3-M2-01
+> 「麻醉记录单与时间轴」落地版（2026-11-14）。
+> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.5.0；
 > 迁移：`db/migration/V10__m2_preop_assessment.sql`、
-> `db/migration/V11__m2_consent_threeway.sql`；
+> `db/migration/V11__m2_consent_threeway.sql`、
+> `db/migration/V13__m2_anesthesia_record.sql`；
 > 方案书：§2.4.3（M2 术前访视/知情同意/三方核查/麻醉计划）、§3.4.2（麻醉记录单与访视实体）、
 > §3.4.3（审计字段/乐观锁/逻辑删除）、§3.9.2（RBAC/数据权限）、§3.9.3（脱敏）、
 > §3.9.4（CA 签名；EXT-05 CA 不可用，本期为占位/自签哈希）。
@@ -25,7 +27,12 @@ M2 当前交付「术前访视与评估」与「知情同意与三方核查」�
   最新版本同时含 Time-out 与 Sign-out 视为完成；`ThreeWayCheckService
   .isThreeWayCheckCompleted(applicationId)` 是 M3 锁单前置校验的集成点。
 
-非目标（后续任务）：麻醉记录单/事件/生命体征（M2 记录，M3）、三方核查**记录单(record)
+- 麻醉记录单（M3-M2-01）：按台次唯一记录单；append-only 时间轴事件（麻醉开始/诱导/插管/
+  切皮/自定义关键事件/拔管/麻醉结束，seq 服务端分配）；用药（麻精类双人核对）；输液与
+  出入量明细及服务端汇总（入量/出量/平衡）；体征占位由 M3-M8-01 采集接入后填充。
+
+非目标（后续任务）：生命体征真实接入与质量标记（M3-M8-01，§12）、术中预警与抢救记录
+（M3-M2-02）、锁单/修订/CA 签名（M3-M2-03，§11.2）、三方核查**记录单(record)
 维度**实现（既有 `ThreeWayCheck` 契约保持不动，实现留 M3）、独立评分阈值配置表
 （当前以 `anesop.m2.preop.*` 配置属性实现，院方口径与配置表结构【待确认】）、
 真实 CA 有效签名（EXT-05，见 §11）、患者端电子签名外设。
@@ -71,12 +78,13 @@ apps/web/src/modules/m2/
 └── __tests__/                    Vitest（术前访视 4 + 同意 5 + 核查 7）
 ```
 
-## 3. 接口（anesthesia 0.4.0）
+## 3. 接口（anesthesia 0.5.0）
 
-> 0.4.0 为 additive：新增知情同意 8 个 operation 与手术申请维度三方核查 2 个 operation，
-> 未修改既有 `PreopVisit`/`ThreeWayCheck`/`UpsertThreeWayCheckRequest` 定义；
-> 记录单(record)维度 `/v1/anesthesia/records/{recordId}/three-way-checks` 保持原契约，
-> 实现留 M3。
+> 0.5.0 为 additive：新增记录单创建/按台次查询、时间轴事件读写、用药读写、输液/出入量
+> 读写与出入量汇总共 9 个 operation、新增 13 个 schema，并在 `AnesthesiaRecord` 增加只读
+> `vitalSigns` 占位数组；未删除或改类型既有定义。0.4.0 的知情同意 8 个 operation 与
+> 手术申请维度三方核查 2 个 operation 保持不变；记录单(record)维度
+> `/v1/anesthesia/records/{recordId}/three-way-checks` 保持原契约，实现留 M3。
 
 | 方法 | 路径 | operationId | 权限 | 说明 |
 |---|---|---|---|---|
@@ -95,6 +103,17 @@ apps/web/src/modules/m2/
 | POST | `/v1/anesthesia/consents/{consentId}/revoke` | `revokeConsent` | `m2:consent:write` | 撤销已签署（必须填原因）；非已签署 409 |
 | GET | `/v1/anesthesia/applications/{applicationId}/three-way-checks` | `listApplicationThreeWayChecks` | `m2:threeway:read` | 核查版本（倒序）+ completed；申请不可见 404 |
 | POST | `/v1/anesthesia/applications/{applicationId}/three-way-checks` | `recordApplicationThreeWayCheck` | `m2:threeway:write` | 新增核查版本（201，append-only）；可省略 timeOutAt 继承上一版本；申请不可见 404、状态不允许/Time-out 变更未确认/并发版本冲突 409 |
+| GET | `/v1/anesthesia/records?scheduleId=` | `listAnesthesiaRecords` | `m2:record:read` | 按台次查询记录单（0/1 条）；台次不可见 403（集合语义） |
+| POST | `/v1/anesthesia/records` | `createAnesthesiaRecord` | `m2:record:write` | 按台次创建记录单（201，DRAFT）；重复创建 409、台次不可见 422、已取消/已完成 409 |
+| GET | `/v1/anesthesia/records/{recordId}` | `getAnesthesiaRecord` | `m2:record:read` | 记录单详情（含兼容 events、体征占位、三方核查摘要）；越界 404 |
+| PUT | `/v1/anesthesia/records/{recordId}` | `updateAnesthesiaRecord` | `m2:record:write` | 未锁定可改（乐观锁 version，过期 409）；非空 events 400（append-only） |
+| GET | `/v1/anesthesia/records/{recordId}/events` | `listRecordEvents` | `m2:record:read` | 时间轴（occurredAt 升序，同刻按 seq）；越界 404 |
+| POST | `/v1/anesthesia/records/{recordId}/events` | `appendRecordEvent` | `m2:record:write` | 追加事件（201）；早于记录开始 400、重复开始/结束 409 |
+| GET | `/v1/anesthesia/records/{recordId}/drugs` | `listDrugAdministrations` | `m2:record:read` | 用药记录（给药时间倒序） |
+| POST | `/v1/anesthesia/records/{recordId}/drugs` | `recordDrugAdministration` | `m2:record:write` | 用药记录（201）；麻精缺双人核对/同人核对/非麻精带核对字段 400 |
+| GET | `/v1/anesthesia/records/{recordId}/fluids` | `listFluidRecords` | `m2:record:read` | 输液/出入量明细（记录时间倒序） |
+| POST | `/v1/anesthesia/records/{recordId}/fluids` | `recordFluidRecord` | `m2:record:write` | 入量/出量明细（201）；amountMl ≤ 0 400 |
+| GET | `/v1/anesthesia/records/{recordId}/io-summary` | `getIntakeOutputSummary` | `m2:record:read` | 出入量汇总（服务端计算 balanceMl = 入量 - 出量） |
 
 旧 `GET/PUT /v1/anesthesia/preop-visits/{visitId}`（0.2.0 骨架）保留不动、不删除既有字段
 （ADR-0011 弃用窗口）；新代码使用 preop-assessments。契约 0.3.0 为 additive：新增路径与
@@ -257,6 +276,61 @@ GET                   → items（版本倒序）+ completed（最新版本是�
   applicationId)`（同步调用 m2-api，不直接读 m2 表）；未完成或标识非法返回 `false`
   （fail-safe，宁可阻止锁单）。
 
+### 5.3 麻醉记录单状态机与乐观锁（M3-M2-01）
+
+```text
+(创建，按台次唯一) ─→ DRAFT ──ANESTHESIA_START──→ ONGOING ──ANESTHESIA_END──→ ONGOING(endedAt)
+                          │                            │
+                          └─ PUT（麻醉方式）            └─ PUT / 事件追加（version+1）
+契约状态映射：DRAFT → DRAFT，ONGOING → IN_PROGRESS（0.5.0 未扩展契约枚举）
+锁单：LOCKED/REVISED 由 M3-M2-03 以新迁移扩展（V13 CHECK 仅允许 DRAFT/ONGOING）
+```
+
+- 一个台次（`schedule_id`）只允许一张记录单：服务层先查重（409）+ 唯一索引
+  `uk_anesthesia_record_schedule` 兜底（并发 → `DuplicateKeyException` → 409）。
+- 创建时校验台次可见且状态为 `PLANNED/PUBLISHED/DELAYED/IN_PROGRESS`；已取消/已完成 409；
+  台次不可见 422（标识在请求体，不回显存在性）。申请/患者由台次解析，不信任客户端。
+- 更新（PUT）使用 `WHERE id=? AND version=?` 条件更新，返回 0 行即 409；每次追加事件也递增
+  `version`，保证「事件 → 记录单」的时间轴版本一致；不静默覆盖。
+- V13 触发器 `fn_anesthesia_record_guard`（单向守卫）：`id/schedule_id/application_id/patient_id/created_*`
+  不可变、`status` 不得回退（DRAFT→ONGOING 单向）、`started_at` 写入后不得清空/改写、
+  `version` 只增；已逻辑删除行不可改；`DELETE/TRUNCATE` 一律拒绝（均 55000）。守卫依赖数据库
+  触发器，生产运行账号不得拥有 DDL 权限（否则可 `ALTER TABLE ... DISABLE TRIGGER` 绕过），
+  迁移与运行账号分离见 `docs/db/README.md` §5.3。
+- 锁单前（本期全部状态）无「不可修改」语义，仍属发布准入待办：M3-M2-03 落地前，记录单
+  可改但所有时间轴/用药/出入量明细已 append-only 留痕。
+
+### 5.4 时间轴、append-only 与麻精双人核对（M3-M2-01）
+
+- **时间轴**：事件类型 `ANESTHESIA_START/INDUCTION/INTUBATION/INCISION/CUSTOM/EXTUBATION/
+  ANESTHESIA_END`；`occurredAt` 必填且不得早于记录开始（已开始取 `started_at`，未开始取
+  `created_at`，否则 400），不得晚于服务端当前时间 + 容差（默认 600 秒，
+  `anesop.m2.record.time-tolerance-seconds`，否则 400），不得晚于 `ANESTHESIA_END`（409）；
+  DRAFT 记录只允许 `ANESTHESIA_START`/`CUSTOM`，术中事件必须先记录开始事件（409）；
+  补录（早于最新事件或早于 now − 容差）必须填写 `entryReason`（否则 400，字段
+  `entryReason`）；`seq` 由服务端在 `SELECT ... FOR UPDATE` 锁定的记录单行内取
+  `MAX(seq)+1` 并插入，同一记录单的并发追加被串行化，唯一约束
+  `uk_record_event_record_seq` 仅作最后兜底（命中映射 409，不做重试）；列表按
+  `occurred_at ASC, seq ASC` 稳定排序。
+- **append-only**：`record_event`、`drug_administration`、`fluid_record` 的 UPDATE/DELETE/
+  TRUNCATE 均由触发器拒绝（SQLSTATE 55000）；修正只能新增事件并在 `payload.entryReason`
+  说明。`AnesthesiaRecord.events`（0.4.0 兼容字段）只映射经典类型，CUSTOM→OTHER，
+  `ANESTHESIA_START/END` 只在 `/events` 完整时间轴中出现。
+- **麻精双人核对**：`narcotic=true` 必须同时提供 `secondCheckerId` 与 `secondCheckerName`，
+  缺失 400；核对人不得与给药人（当前登录用户）相同，同人核对 400；非麻精类携带核对字段
+  同样 400（避免被误认为已核对）。V13 CHECK 约束为第二道防线
+  （`ck_drug_administration_narcotic_checker`、`ck_drug_administration_second_checker_distinct`）。
+- **入口与路由**：前端菜单「麻醉记录」→ `/m2/records`（说明页）→ `/m2/records/:scheduleId`
+  （记录单页）。排程/申请页内的跳转按钮需修改 `modules/m1` 视图，属 M1 写域，未在本任务改动；
+  记录单页可直接以台次标识访问。
+- **出入量**：明细 `direction IN (INTAKE, OUTPUT)`、`amount_ml > 0`；汇总 SQL 按方向 FILTER
+  聚合，`balanceMl = intakeMl - outputMl`、`fluidCount` 为明细条数；前端只展示服务端结果，
+  不自行累加覆盖。
+- **待 M3-M2-03 锁单集成**：锁单时须校验（1）三方核查完成
+  （`ThreeWayCheckService.isThreeWayCheckCompleted`）、（2）记录完整性（至少
+  `ANESTHESIA_START` 与 `ANESTHESIA_END`）、（3）版本一致；锁单后事件/用药/出入量追加应
+  统一返回 409（契约已为 POST 事件/用药/出入量声明 409，服务层在本期预留「锁定」检查点）。
+
 ## 6. 数据、审计与脱敏
 
 - 表 `m2_anes.preop_assessment`：患者快照、气道明细、评分输入、评分结果均为 jsonb 结构化保存
@@ -286,6 +360,21 @@ GET                   → items（版本倒序）+ completed（最新版本是�
 - 失败路径（S-4）：sign/decline/revoke 与三方核查录入的 409/422（及三方核查 400）以
   `result=0` 写同动作审计；使用 `REQUIRES_NEW` 独立事务，避免业务回滚带走审计；detail 只有
   动作、标识与错误类别（`STATE_CONFLICT`/`BUSINESS_RULE_VIOLATION`/`PARAM_INVALID`），无 PHI。
+- 麻醉记录表 `m2_anes.anesthesia_record`（按台次唯一、DRAFT/ONGOING、乐观锁、逻辑删除）与
+  `record_event`（append-only、`seq`、`occurred_at`、`payload jsonb`）、
+  `drug_administration`（append-only、麻精双人核对 CHECK）、`fluid_record`（append-only、
+  `amount_ml > 0`）。记录单只存 `patient_id` 标识，不存姓名/证件号/手机号/住院号明文。
+- 审计动作 `RECORD_CREATE`/`RECORD_UPDATE`/`EVENT_RECORD`/`DRUG_ADMIN`/`FLUID_RECORD`
+  （resource_type=`ANESTHESIA_RECORD`）与业务同事务；`RECORD_UPDATE` 的 detail 记录
+  `before`/`after` 摘要（状态、麻醉方式、开始/结束时间、版本）；detail 只含记录/台次/申请标识、
+  状态、版本、事件类型与 seq、是否补录（`backfilled`，不写原因原文）、药品名/剂量/单位/途径、
+  核对人标识、出入量方向与数值；**不含患者姓名/院内患者号/核对人姓名与备注/补录原因原文**
+  （药品名保留用于追溯）。
+- 失败路径（S-3）：麻精双人核对缺失、同人、核对人不存在/停用/无 `m2:record:write` 的 400
+  以 `result=0` 写 `DRUG_ADMIN` 审计（`ClinicalFailureAuditor` 独立事务，业务回滚不影响留痕），
+  detail 只有记录标识、`narcotic=true` 与失败原因码
+  （`CHECKER_REQUIRED`/`CHECKER_SAME_PERSON`/`CHECKER_NOT_FOUND`/`CHECKER_DISABLED`/
+  `CHECKER_NO_PERMISSION`），无核对人姓名。
 - 日志不打印病史/姓名/签名；测试与示例均为 SYNTHETIC。
 
 ## 7. 权限
@@ -298,8 +387,10 @@ GET                   → items（版本倒序）+ completed（最新版本是�
 | `m2:consent:write` | 同上 | 创建/签署/拒绝/撤销 |
 | `m2:threeway:read` | 同上 | 三方核查查询与完成标记 |
 | `m2:threeway:write` | 同上 | 三方核查录入（新增版本） |
+| `m2:record:read` | 同上 | 记录单列表/详情、时间轴/用药/出入量列表、出入量汇总 |
+| `m2:record:write` | 同上 | 创建记录单、保存记录单、追加事件、用药、输液/出入量 |
 
-V10/V11 只新增权限点与授权，不改写 V2 既有角色/权限数据。
+V10/V11/V13 只新增权限点与授权，不改写 V2 既有角色/权限数据。
 
 ## 8. 测试
 
@@ -330,9 +421,26 @@ V10/V11 只新增权限点与授权，不改写 V2 既有角色/权限数据。
   拒绝后不可再签/可重新知情同意、三方核查 append-only 与 completed→M3 集成点、
   跨版本 Time-out 继承/变更确认、权限 403/跨科室 404、V11 结构/权限/注释/触发器断言、
   审计 detail 无 PHI。
+- `AnesthesiaRecordServiceImplTest`（31 用例）：唯一记录单（先查/并发唯一索引 → 409）、
+  台次不可见 422/已取消 409、列表 403/非法标识 400、锁行后 seq 分配（冲突只映射 409、不重试）、
+  未来时间/早于记录开始 400、DRAFT 术中事件先于开始 409、结束之后追加 409、
+  补录缺 `entryReason` 400（早于最新事件/早于 now−容差两条路径）并带原因成功、
+  重复开始/结束 409、版本条件更新 0 行 409、PUT 非空 events 400、
+  麻精缺双人核对/同人核对/核对人不存在/停用/无书写权限 400（失败审计 result=0）、
+  非麻精带核对字段 400、出入量 amountMl 校验、IO 汇总手算（1500/400/1100）、
+  RECORD_UPDATE before/after 摘要、审计 detail 无 PHI 且保留药品名。
+- `AnesthesiaRecordApiIntegrationTest`（4 用例，嵌入式 PG16）：创建/重复 409 → 事件顺序与
+  append-only（UPDATE/DELETE=55000）→ 乐观锁 409 → 未来时间/补录 400 → 补录带原因成功 →
+  麻精双人核对 400（缺核对/同人/无权限/停用/不存在，result=0 审计）→ 出入量 1500/400/1100
+  → 结束之后追加 409 → 记录单身份列不可改、守卫单向（状态回退/清空开始时间/version 不增
+  均 55000）→ 审计动作齐全且无 PHI；双线程并发追加（CyclicBarrier）断言 seq 连续 1–2、
+  两事件均保存、version=3；权限 403 与跨科室 403/422/404；V13 结构/唯一索引/CHECK/触发器/
+  权限/注释断言。
 - 前端 Vitest：术前访视 4 用例 + 知情同意 5 用例（加载/创建/签署/撤销/403）+
-  三方核查 7 用例（空态/Time-out/Sign-out 完成/必选逐项确认/二次确认取消/Time-out 预填/403）；
-  E2E 2 条（签署 + CA 占位、核对逐项确认 + 二次确认 + 核查完成）。
+  三方核查 7 用例（空态/Time-out/Sign-out 完成/必选逐项确认/二次确认取消/Time-out 预填/403）+
+  麻醉记录单 6 用例（空态创建/时间轴与汇总/追加事件/麻精双人核对拦截/出入量/只读态）；
+  E2E：签署 + CA 占位、核对逐项确认 + 二次确认 + 核查完成、记录单创建→事件→出入量汇总、
+  麻精双人核对拦截与提交（E2E-03 锁单修订为 M3-M2-03）。
 - 实测覆盖率见验收报告（`./scripts/mvn.sh -B -f apps/api/pom.xml verify` 的 JaCoCo 汇总），
   m2-impl 保持在核心域 ≥80/70 门禁以上（新增 S-1…S-7 用例后重新实测）；
   根 pom 的 `coverage-core-m2` profile 已按 `src/main/java/com/anesop/m2/impl/package-info.java`
@@ -352,6 +460,12 @@ V10/V11 只新增权限点与授权，不改写 V2 既有角色/权限数据。
 6. CA 真实签名不可用（EXT-05）：签署为占位/自签哈希（SIMULATED），不能作为法律意义上的
    电子签名；生产若要求合规 CA，须接入院内 CA 并改造签名与验签流程（§11）。
 7. 知情同意模板为 SYNTHETIC 演示文本，真实院方文本尚未经医务处/法务审核，不得直接用于临床。
+8. 记录单未实现锁单（M3-M2-03）：当前只保证时间轴/用药/出入量 append-only 与乐观锁，
+   锁单后的「不可改 + 修订版本 + CA 签名」仍待实现；`status` 枚举扩展需新迁移（V13 不改）。
+9. 生命体征为占位：`AnesthesiaRecord.vitalSigns` 本期固定空数组，真实采集/质量标记由
+   M3-M8-01 接入（§12）；设备数据未接入前不得在记录单展示伪造体征。
+10. 用药只记录药品字典名/剂量/途径与麻精核对，不含配伍、输注泵速率、批号/效期与库存联动；
+   真实麻精药品「五专」管理与处方/空安瓿回收由药事系统（M4/M5）承接，【待确认】。
 
 ## 10. Q 登记（待临床 / M3 确认，只登记不改实现）
 
@@ -364,6 +478,9 @@ V10/V11 只新增权限点与授权，不改写 V2 既有角色/权限数据。
 | Q-5 | 签署人与关系校验 | `signerRelation` 枚举 SELF/SPOUSE/PARENT/CHILD/LEGAL_GUARDIAN/OTHER；`signerName` 仅落库 | 无民事行为能力患者必须法定代理人签署的强制校验、代理关系证明留存方式待**医务处**确认 |
 | Q-6 | 撤销后重新知情同意 | 撤销释放唯一索引，允许为同一申请 + 模板版本新建记录；原记录保留 | 是否需要“再次知情同意”独立模板/二次告知留痕，待**医务处**确认 |
 | Q-7 | 三方核查完成与问题项 | 最新版本同时有 Time-out/Sign-out 即完成；`issues` 非空不阻断完成 | 问题项未闭环是否阻断锁单、Sign-out 是否必须与 Time-out 同一执行人，待**麻醉科/医务处**确认（M3 锁单前定稿） |
+| Q-8 | 麻精药品判定口径 | `narcotic` **当前由客户端声明**（`AdministerDrugRequest.narcotic`）；服务端只校验核对人资格，无法识别"舒芬太尼填 false"绕过双人核对 | 药品字典 **I-07** 落地后由 M5 按药品编码服务端判定麻精属性，客户端声明仅作兼容输入；过渡期在界面/审计提示风险（麻醉科/药学部/M5） |
+| Q-9 | 临床角色如何获取本台体征 | 记录单 `vitalSigns` 本期固定空数组；设备域体征查询需 `m2:device:read`（仅 SYS_ADMIN/SYS_OR_MANAGER），麻醉医师/护士当前无权按术间读取本台设备体征 | M3-QA/M4 权限细化：临床角色按"本台次/本术间"读取本台设备体征的映射口径（记录单 `vitalSigns` ← `anesthesia_vital`，按记录单台次绑定术间与设备时间窗）待临床与架构确认 |
+| Q-10 | 事件时间容差 | 未来/补录容差默认 600 秒（`anesop.m2.record.time-tolerance-seconds`）；超出容差的补录必须填原因 | 院方对"补录时限/原因必填范围"的临床要求（如术后 24h 内补记是否需上级确认）待**麻醉科/医务处**确认；E2E-02 断网补传与并发追加专项由 **M3-QA-01** 承接 |
 
 ### 10.1 知情同意与三方核查复审 Q 登记（M2-M5-01，编号 Q-1…Q-4）
 
@@ -409,3 +526,106 @@ V10/V11 只新增权限点与授权，不改写 V2 既有角色/权限数据。
   `threeWayCheckCompleted=false`；M3 需补一条集成用例覆盖“核查未完成禁止锁单”。
 - 记录单(record)维度的 `ThreeWayCheck` 契约/表实现留 M3；本任务只交付申请维度核查，
   两者通过 `applicationId` 关联，M3 落地时须保证完成判定口径一致（§5.2）。
+
+## 12. 设备采集接入（M3-M8-01）
+
+契约 `packages/contracts/openapi/device.yaml 0.1.0`（新增 device 域，additive）；表结构
+`db/migration/V14__m2_device_registry.sql`；代码在 `apps/api/modules/m2/{api,impl}` 的
+`acquisition` 子包与 `apps/api/api-bootstrap` 的 `DeviceController`。
+
+### 12.1 接口与权限
+
+| 端点 | operationId | 权限 | 说明 |
+|---|---|---|---|
+| `GET /v1/devices` | `listDevices` | `m2:device:read` | 台账 + 推导状态 + 质量统计（可按网关/术间/状态过滤） |
+| `POST /v1/devices` | `registerDevice` | `m2:device:write` | 登记/换台绑定；首次 201，幂等或换台 200，并发 409 |
+| `GET /v1/devices/{gatewayId}/{deviceId}/vitals` | `listDeviceVitals` | `m2:device:read` | 窗口查询（≤24h）+ 质量过滤 + 按采样帧分页 |
+| `GET /v1/devices/health` | `getDeviceHealth` | `m2:device:read` | 网关/设备在线与近 24h 上报摘要（运维） |
+| `POST /v1/devices/{gatewayId}/{deviceId}/ingest` | `ingestDeviceVitals` | `X-Gateway-Token`（无 JWT） | 网关批量上报，批次/行级双层幂等 |
+
+- V14 权限授予 SYS_ADMIN（运维排障/登记）与 SYS_OR_MANAGER（设备台账与术间绑定）；
+  临床角色默认无设备权限，越权返回 403。
+- ingest 路径在安全配置中 permitAll，由服务层校验内部令牌：未配置密钥/缺失/不匹配一律 401
+  （fail-closed），令牌不落日志与审计。
+- 设备登记唯一键 `(gateway_id, device_id)`；`room_id` 为逻辑外键（→ `m1_sched.operating_room`），
+  跨模块不建物理外键，未绑定为 null。
+- **数据范围（B-1）**：服务层注入 m0 `DataScopeResolver`，非 ALL 范围经 m1-api
+  `SchedulingService.listRooms` 取可见术间集合。台账只返回可见术间设备；`roomId` 过滤越权
+  403；单设备体征查询越界/不存在统一 404；登记/换台目标术间必须可见，未绑定术间仅 ALL
+  可操作（非 ALL 403）。无数据范围或无可见术间一律 403（fail-closed）。
+- **共享令牌绑定风险（S-5）**：`X-Gateway-Token` 为部署级共享密钥，**未与 `gatewayId` 绑定**，
+  任一持有令牌的网关可伪造其他 `gatewayId/deviceId` 上报；生产前须实现 token→gateway 映射或
+  "单网关一密钥 + 轮换"，并叠加 mTLS/网段 allowlist（本期登记，不实现）。
+
+### 12.2 幂等与质量
+
+- 批次层：`device_ingest_log` 唯一键 `(gateway_id, batch_key)`；重复批次 `acceptedRows=0`、
+  `duplicateBatch=true`、`duplicateRows=frames.length`，不重复写库、不重复累加统计。
+- 行层：`anesthesia_vital` 唯一键 `(device_id, seq, measured_at)`；新批次携带旧帧只计
+  `duplicateRows`。两层在同一事务：日志计数回填失败即整批回滚，不会出现"日志已记、体征未写"。
+- 质量：`quality`（0/1/2/3）与 `quality_flags` 原样入库；可疑/缺失帧不丢弃。
+  仅格式非法帧被拒绝并计数，原因码为 `SEQ_INVALID`/`MEASURED_AT_MISSING`/
+  `QUALITY_OUT_OF_RANGE`/`VALUE_OUT_OF_RANGE`/`SOURCE_INVALID`/`FLAGS_TOO_LONG`，
+  响应与日志都不回显报文原文。
+- 质量统计写 `device_registry.quality_stats`（jsonb，原子累加 batches/accepted/duplicate/
+  rejected/suspect/missing + 最近批次）；比例在查询期计算，不存储派生值。
+- 单位以网关规范单位为准（bpm / % / mmHg / ℃）；平台不二次换算，避免双重换算误差。
+
+### 12.3 离线判定与健康摘要
+
+- `GET /v1/devices` 的 `status` 是**查询期推导**：`MAINTENANCE` 显式状态优先；
+  其余按 `last_seen_at + anesop.m2.acquisition.offline-timeout-seconds`（默认 120s）判定
+  ONLINE/OFFLINE。推导不写回数据库，读操作不产生写放大。`last_seen_at` **仅在本批
+  `acceptedRows>0` 时推进**（全部重复/全部拒绝的批次不刷新在线时间）。
+- 登记缺省 `status` 不覆盖已有状态：首次登记默认 `ONLINE`，重复登记/换台未带 `status` 时保留
+  当前状态（`MAINTENANCE` 不会被改回 `ONLINE`）；请求 `status` 是运维显式设置，响应 `status`
+  是查询期推导，二者语义不同（契约已分列说明）。
+- `GET /v1/devices/health`：按网关聚合设备在线/离线/维护数、近 N 小时批次与接受/重复/拒绝帧数、
+  质量异常比例；N 默认 24h、可配置 1–168（`anesop.m2.acquisition.health-window-hours`）。
+  质量比例分子/分母使用同一窗口 `measured_at ∈ [now−N, now]`（上界排除设备时钟异常的未来帧）；
+  整体状态 `HEALTHY` / `DEGRADED`（存在 STALE/NO_INGEST 网关或拒绝帧）/
+  `NO_DATA`（尚无登记设备）。网关本机缓冲指标仍由 `/actuator/metrics` 暴露（EXT-04）。
+
+### 12.4 审计与无 PHI
+
+- 审计动作：`DEVICE_REGISTER`（REGISTER/REBIND）、`DEVICE_INGEST`（含重复批次）、
+  `DEVICE_QUERY`（台账列表与体征窗口查询）；`GET /health` 为运维轮询摘要，不写业务审计。
+- detail 仅含 gatewayId/deviceId/batchKey、批次与质量计数、窗口/分页参数；不含报文原文、
+  令牌、患者标识。设备域本身不接收姓名/住院号/证件号。
+- 日志：令牌与报文原值不落日志；失败日志只记录异常类别与 SQLSTATE/HTTP 状态。
+
+### 12.5 配置
+
+```yaml
+anesop:
+  m2:
+    acquisition:
+      gateway-token: ${ANESOP_M2_ACQUISITION_GATEWAY_TOKEN:}   # 空=ingest 一律 401
+      offline-timeout-seconds: 120
+      max-query-window-hours: 24
+      health-window-hours: 24                                  # 健康摘要窗口，1–168
+      synthetic: true                                          # 真实接入后改 false
+```
+
+### 12.6 测试
+
+- 单测（`AcquisitionServiceImplTest`、`GatewayTokenVerifierTest`）：登记幂等/换台/并发 409、
+  批次与行级幂等、拒绝原因、窗口/质量/分页校验、离线推导、健康聚合、令牌 fail-closed。
+- 集成（`DeviceAcquisitionApiIntegrationTest`，真实嵌入式 PG）：V14 结构/权限、登记唯一、
+  ingest 幂等（重复批次不重复行）、401/403/404、质量标记与拒绝计数、vitals 过滤分页、
+  离线判定、审计 detail 无 PHI；数据范围（DEPT 跨科室 403/404）、健康窗口边界、
+  登记缺省不覆盖 MAINTENANCE、`last_seen` 仅在 accepted>0 时推进。
+- 网关（`PlatformVitalReporterTest`、`PlatformVitalUploadTest`）：适配器开关、令牌头、
+  批次键确定性、5xx 保留缓冲、恢复补传、重放幂等。
+
+### 12.7 局限与后续
+
+- 真实设备协议/采集盒未接入（EXT-04，SIMULATED）；平台 ingest 认证为**共享令牌且未绑定
+  `gatewayId`**（任一网关可伪造其他网关上报），生产前必须实现 token→gateway 映射或单网关
+  独立密钥 + 轮换，并叠加 mTLS/网段 allowlist（本期只登记，见 §12.1 与 `docs/gateway/README.md`
+  §11.2）。
+- 设备健康摘要为运维聚合视图（含全院设备计数），当前仅按 `m2:device:read` 授权、未按数据范围
+  裁剪；临床角色不授予该权限，后续如需按科室展示由 M3-QA/M4 权限细化承接。
+- vitals 分页按**采样帧**计数（一帧可展开多条指标行），前端展示需按需聚合；
+  波形数据不在本域（方案书 §3.6.3），后续单独设计。
+- `room_id` 未做术间存在性校验（逻辑外键）：术间台账变更由 M1 负责，M3 记录单关联时再校验。

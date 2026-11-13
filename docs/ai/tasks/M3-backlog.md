@@ -18,8 +18,8 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 
 | ID | 任务 | 写域 | 依赖 | 状态 |
 |---|---|---|---|---|
-| M3-M2-01 | 麻醉记录单、时间轴、用药/输液/出入量 | `anesthesia.yaml`、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V13*` | M2-M4-01/M2-M5-01 | Ready |
-| M3-M8-01 | 采集接入平台端（网关→平台体征、质量标记、幂等） | `services/device-gateway/**`、`db/migration/V14*`、`apps/api/modules/m2/**`、契约 device.yaml/anesthesia | S0-09 | Ready |
+| M3-M2-01 | 麻醉记录单、时间轴、用药/输液/出入量 | `anesthesia.yaml`、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V13*` | M2-M4-01/M2-M5-01 | Review（2026-11-14，独立评审 blocking B-1/B-2/S-1…S-5 已修复，待复审 + 全量 verify） |
+| M3-M8-01 | 采集接入平台端（网关→平台体征、质量标记、幂等） | `services/device-gateway/**`、`db/migration/V14*`、`apps/api/modules/m2/**`、契约 device.yaml/anesthesia | S0-09 | Review（2026-11-14，独立评审 blocking B-1/S-1…S-6 已修复，待复审 + 全量 verify） |
 | M3-M2-02 | 术中预警规则与抢救记录 | m2 契约/模块、前端 | M3-M2-01 | Blocked |
 | M3-M2-03 | 锁单/修订/CA 签名（签名模拟） | m2 契约/模块、前端 | M3-M2-01 | Blocked |
 | M3-M10-01 | 复苏记录与转出（Aldrete、交接） | m2 契约/模块、前端 | M3-M2-01 | Blocked |
@@ -58,7 +58,8 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 - 24/48h 随访单、镇痛方式（PCA 参数）、并发症/不良事件、患者反馈（脱敏）。
 ### M3-QA-01 临床记录专项测试
 - 时间轴一致性、断网采集补传（E2E-02）、并发修改、签名锁定（E2E-03）为发布准入项；
-  E2E-04 越权已在 M2 覆盖，E2E-05 麻精双人核对随 M4/M5。
+  **E2E-02（断网补传）由 M3-QA-01 承接**（M3-M8-01 只交付平台 ingest 与网关适配器单测/集成，
+  Playwright 端到端补传场景归 QA 任务）；E2E-04 越权已在 M2 覆盖，E2E-05 麻精双人核对随 M4/M5。
 
 ## 执行注意
 
@@ -67,3 +68,13 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 - 临床规则/阈值由临床顾问确认，未确认标【待确认】并在 ADR 记录。
 - 记录不可变：锁单后只能新增修订版本，保留原值/修改人/时间/原因；数据库层 append-only 约束。
 - 测试只用 SYNTHETIC；日志/审计无 PHI；E2E 与专项用例为发布准入。
+
+## M3 期待办清单（跨任务，登记不实现）
+
+| # | 事项 | 归属 / 触发条件 |
+|---|---|---|
+| T-1 | 排程/申请页跳转「麻醉记录」入口 | `apps/web/src/modules/m1` 视图属 M1 写域；需 M1 视图任务或 M3-M2-01 复审后追加写域，当前只支持直接访问 `/m2/records/:scheduleId` |
+| T-2 | 共享令牌 token→gateway 绑定 / 单网关密钥 | 生产前（M3-M8-01 S-5 登记；见 `docs/gateway/README.md` §11.2、`docs/modules/m2/README.md` §12.1） |
+| T-3 | 麻精药品服务端判定（`narcotic` 不再由客户端声明） | 药品字典 I-07 落地后由 M5 承接（Q-8） |
+| T-4 | 临床角色按本台次读取体征（`vitalSigns` 映射口径） | M3-QA/M4 权限细化（Q-9） |
+| T-5 | E2E-02 断网补传端到端用例 | M3-QA-01 |

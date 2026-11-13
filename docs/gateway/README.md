@@ -11,7 +11,7 @@
 |---|---|---|
 | 协议 | 模拟设备 TCP 行帧 v1（本文 §3） | HL7 v2/MLLP、RS-232、厂商 SDK、MQTT 全量适配（EXT-04，待 D-06 设备清单） |
 | 数据 | 6 项数值体征（HR/SpO₂/NIBP×2/EtCO₂/Temp） | 波形采集与回放（方案书 §3.6.3 波形与数值分离） |
-| 上行 | 网关直连 PostgreSQL（JDBC） | RabbitMQ/HTTPS 上行、平台侧采集 API（一期后评估） |
+| 上行 | 默认直连 PostgreSQL（JDBC）；可选平台 ingest（§11，M3-M8-01） | RabbitMQ 上行、真实设备 mTLS |
 | 控制 | 只读采集，不下发任何指令 | 设备反向控制（明确不做，方案书边界） |
 | 运行时 | Java 21 + Spring Boot 3.4，原生 ServerSocket + 虚拟线程 | Netty（背压/TLS/连接数上限）、多实例分片 |
 
@@ -289,3 +289,89 @@ source scripts/env.sh
 | §3.6.3 波形入对象存储 | 不做 | 非目标，待 M2 波形迭代 |
 | §3.6.1 队列满优先丢波形 | 无数值丢弃；超限先淘汰最旧段并告警 | POC 只有数值，无波形可丢 |
 | 生产连接池 | `PGSimpleDataSource`（每批建连） | 避免引入未审批的 `spring-boot-starter-jdbc`/HikariCP |
+
+## 11. 平台接入（M3-M8-01，EXT-04 SIMULATED）
+
+POC 默认仍直连 PostgreSQL；本节是"经平台接收"的可选上行通道。平台侧契约
+`packages/contracts/openapi/device.yaml 0.1.0`、表结构 `V14__m2_device_registry.sql`
+与端点实现见 `docs/modules/m2/README.md` §12。
+
+### 11.1 开关与配置
+
+| 配置 | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `anesop.gateway.platform.mode` | `ANESOP_GATEWAY_PLATFORM_MODE` | `jdbc` | `jdbc`=直连 PostgreSQL（行为不变）；`http`=平台上报 |
+| `anesop.gateway.platform.url` | `ANESOP_GATEWAY_PLATFORM_URL` | 空 | 平台 API 基地址，如 `https://anesop.local/api` |
+| `anesop.gateway.platform.token` | `ANESOP_GATEWAY_PLATFORM_TOKEN` | 空 | 内部网关令牌，**部署注入，禁止入仓/入日志** |
+| `anesop.gateway.platform.timeout-ms` | `ANESOP_GATEWAY_PLATFORM_TIMEOUT_MS` | `3000` | 单次上报超时 |
+
+- `mode=http` 时 url/token 必填：缺失即**启动失败**（fail-closed），不在运行期无认证上报。
+- 切换只替换 `VitalSink` 实现（`GatewayConfig#vitalSink`）：解析、标准化、缓冲、退避、
+  ack、健康检查与指标全部复用，采集链路不因上行方式变化。
+- 平台侧要求设备已登记（`POST /v1/devices`），未登记设备 ingest 返回 404——先登记后采集。
+
+### 11.2 认证（X-Gateway-Token）
+
+- 上报请求头 `X-Gateway-Token` 与用户 JWT 完全分离；平台按部署注入的密钥做常量时间比较，
+  **未配置密钥时一律 401**（不"未配置即放行"）。
+- 令牌不写日志、不写审计、不进异常消息；网关侧异常只记录 HTTP 状态码。
+- **共享令牌绑定风险（M3-M8-01 复审 S-5）**：`X-Gateway-Token` 是部署级共享密钥，**未与
+  `gatewayId` 绑定**；任一持有令牌的网关可伪造其他 `gatewayId/deviceId` 上报（平台仅校验
+  令牌，不校验来源网关身份）。生产前必须实现 token→gateway 映射（每网关独立密钥）或
+  "单网关一密钥 + 轮换 + 吊销"，并叠加 mTLS/采集 VLAN allowlist；本期只登记，不实现。
+- POC 无 mTLS；生产应叠加采集 VLAN allowlist / mTLS（§8 安全项）。
+
+### 11.3 幂等（两层）
+
+1. **批次层**：网关为每批生成确定性 `batchKey = <gatewayId>-<deviceId>-<首帧seq>-<末帧seq>-<首帧毫秒>`；
+   平台 `device_ingest_log` 唯一键 `(gateway_id, batch_key)` 保证同一批只处理一次。
+   重放返回 `duplicateBatch=true`、`acceptedRows=0`，网关照常确认（ack），不重复入库。
+2. **行层**：体征明细仍由 V4 唯一键 `(device_id, seq, measured_at)` 兜底；
+   新批次携带旧帧时只计 `duplicateRows`，不新增行。
+
+因此"先入库成功、响应丢失 → 网关重试"是安全的：第二次命中批次唯一键，一次数据、一次统计。
+
+### 11.4 质量标记与拒绝
+
+- 网关已完成的单位换算/范围判定/时钟标记原样上报：`quality`（0 正常/1 可疑/2 缺失/3 超时）
+  与 `flags`（如 `hr:RANGE`、`ts:BACKFILL:-600000`）写入 `anesthesia_vital.quality/quality_flags`；
+  超范围数据**保留数值**，不用约束丢弃。
+- 只有格式非法才拒绝并计入 `rejectedRows`，原因码：`SEQ_INVALID`、`MEASURED_AT_MISSING`、
+  `QUALITY_OUT_OF_RANGE`、`VALUE_OUT_OF_RANGE`、`SOURCE_INVALID`、`FLAGS_TOO_LONG`；
+  响应只回原因码与下标，不回显报文原文，网关日志也不打印报文。
+- 平台按批次累加设备质量统计（接受/重复/拒绝/可疑/缺失），`GET /v1/devices/health`
+  汇总近 N 小时质量比例（N 默认 24h、可配置 1–168，分子/分母同一窗口；`last_seen_at`
+  仅在该批 `acceptedRows>0` 时推进）；网关本机缓冲深度仍看本节 §6 指标。
+
+### 11.5 失败处理
+
+| 平台返回 | 网关行为 |
+|---|---|
+| `202`（含部分拒绝） | 确认该批（ack），拒绝帧由平台计入统计并可由运维排查；链路不阻塞 |
+| `401` | 不确认，指数退避重试；若持续 401 说明令牌/配置错误，健康检查 DOWN 告警（§6） |
+| `404`（设备未登记） | 不确认并告警：先补登记再采集，避免未知设备写入 |
+| `5xx` / 网络错误 / 空响应 | 不确认，数据留在本地缓冲，按 `upload.retry-base-ms` 指数退避 |
+
+- 响应体缺失或无法解析同样按失败处理（**不静默 ack**）：重试由两层幂等兜底。
+- 网关崩溃/重启按 `ack.json` 位点续传（§4.2）；HTTP 模式不改变本地缓冲语义（≥4h）。
+
+### 11.6 冒烟
+
+```bash
+# 平台侧：登记设备（SYNTHETIC）
+curl -s -X POST https://anesop.local/api/v1/devices \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"gatewayId":"GW-OR-01","deviceId":"SIM-MON-01","roomId":"80000000-0000-4000-8000-000000000001","deviceType":"MONITOR"}'
+# 网关侧：切 http 模式后推帧，观察指标/健康
+ANESOP_GATEWAY_PLATFORM_MODE=http \
+ANESOP_GATEWAY_PLATFORM_URL=https://anesop.local/api \
+ANESOP_GATEWAY_PLATFORM_TOKEN=*** \
+java -jar services/device-gateway/target/device-gateway-1.0.0-SNAPSHOT.jar
+curl -s localhost:8081/actuator/health
+```
+
+### 11.7 EXT-04 状态
+
+真实设备协议、采集盒、mTLS 与现场联调仍属 **EXT-04（SIMULATED）**：本适配器验证的是
+"网关→平台 ingest"的接口、幂等、质量与失败语义，不代表真实设备已接入；真实型号清单待
+D-06 与现场勘查（A-04），接入时只新增驱动，不改本适配器。

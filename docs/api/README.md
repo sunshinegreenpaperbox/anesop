@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.4.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.5.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -13,7 +13,8 @@ packages/contracts/
 │   ├── patient.yaml       # 患者主索引、手术申请
 │   ├── scheduling.yaml    # 术间、排程、冲突、急诊加台、停台、排程分析
 │   ├── anesthesia.yaml    # 术前访视与评估、记录单、锁单、三方核查、随访
-│   └── baseline/          # 当前已发布兼容基线（4 份快照）
+│   ├── device.yaml        # 设备登记、网关批量上报（幂等）、体征窗口查询、采集健康摘要
+│   └── baseline/          # 当前已发布兼容基线（5 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -25,8 +26,9 @@ packages/contracts/
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
 | `scheduling.yaml` | 17 | 20 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史、排程分析（利用率/准点/取消率/CSV 导出） | §2.4.2、§2.3.2、§2.7.2、§3.4.2 |
-| `anesthesia.yaml` | 17 | 25 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、旧访视骨架读写、记录单读写、锁单、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **51** | **64** | 4 个限界上下文骨架 | — |
+| `anesthesia.yaml` | 22 | 34 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、旧访视骨架读写、锁单、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
+| `device.yaml` | 5 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
+| **合计** | **61** | **78** | 5 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -254,6 +256,63 @@ packages/contracts/
   指标/日期/时区/术间数/计数，不含患者标识。
 - **口径文档**：`docs/modules/m1/README.md` §12；口径版本 `analytics-1.0.0`，
   配置项见 `application.yml` 的 `anesop.m1.analytics.*`。
+
+### 3.7 麻醉记录单与时间轴（M3-M2-01，anesthesia 0.5.0 additive）
+
+> 0.5.0 只新增路径/schema/可选字段，未删除或改类型既有定义；`anesthesia.yaml` 与
+> `baseline/anesthesia.yaml` 同步更新，`oasdiff`（baseline → 当前、HEAD baseline → 当前）
+> 均无破坏性变更。锁单/修订（M3-M2-03）仍只有契约骨架，本次未实现。
+
+- **记录单（按台次唯一）**：`GET /v1/anesthesia/records?scheduleId=`（`listAnesthesiaRecords`，
+  `m2:record:read`）集合语义：台次不可见 403，未创建时返回空 `items`；
+  `POST /v1/anesthesia/records`（`createAnesthesiaRecord`，`m2:record:write`）按台次创建
+  DRAFT 记录单，重复创建 409，台次不可见 422、已取消/已完成 409。
+- **记录单详情/保存**：`GET/PUT /v1/anesthesia/records/{recordId}`（既有 operationId
+  `getAnesthesiaRecord`/`updateAnesthesiaRecord` 本次实现）。响应新增只读 `vitalSigns`
+  占位数组（本期固定空数组，M3-M8-01 采集接入后填充）；`events` 为 0.4.0 兼容字段，
+  完整时间轴走 `/events`。PUT 必须回传 `version`（过期 409），且**不再接受非空 `events`**
+  （400：事件为 append-only，请走 `POST /events`；行为已在契约描述声明）。
+- **时间轴**：`GET /v1/anesthesia/records/{recordId}/events`（`listRecordEvents`）按
+  `occurredAt` 升序、同刻按 `seq` 升序；`POST .../events`（`appendRecordEvent`）append-only，
+  `eventType ∈ {ANESTHESIA_START, INDUCTION, INTUBATION, INCISION, CUSTOM, EXTUBATION,
+  ANESTHESIA_END}`，`occurredAt` 必填且不得早于记录开始（400），重复开始/结束 409；
+  `ANESTHESIA_START` 置记录 `IN_PROGRESS` 并写开始时间，`ANESTHESIA_END` 写结束时间。
+- **用药**：`GET/POST /v1/anesthesia/records/{recordId}/drugs`
+  （`listDrugAdministrations`/`recordDrugAdministration`）。麻精类 `narcotic=true` 必须
+  `secondCheckerId` + `secondCheckerName`，缺失或与给药人同人 400；非麻精类携带核对字段
+  400（避免误认为已核对）。
+- **输液/出入量**：`GET/POST /v1/anesthesia/records/{recordId}/fluids`
+  （`listFluidRecords`/`recordFluidRecord`，`direction ∈ {INTAKE, OUTPUT}`、`amountMl > 0`）；
+  `GET .../io-summary`（`getIntakeOutputSummary`）服务端按明细汇总
+  `balanceMl = intakeMl - outputMl`，前端不得自行累加覆盖。
+- **状态映射**：契约 `AnesthesiaRecord.status` 沿用 0.4.0 枚举 `DRAFT/IN_PROGRESS/LOCKED/REVISED`；
+  数据库 `m2_anes.anesthesia_record.status` 为 `DRAFT/ONGOING`，服务端把 `ONGOING → IN_PROGRESS`
+  映射输出（0.5.0 未扩展契约枚举，避免响应枚举新增带来的兼容告警）。
+- **错误码**：400 `PARAM_INVALID`（字段级：`occurredAt`/`secondCheckerId`/`events`/`amountMl` 等）、
+  403 `AUTH_FORBIDDEN`（无 `m2:record:*` 或台次超出数据范围）、404 `RESOURCE_NOT_FOUND`
+  （记录单不存在/越界）、409 `STATE_CONFLICT`（重复记录单、版本过期、重复开始/结束）、
+  422 `BUSINESS_RULE_VIOLATION`（创建时台次不可见）。
+- **权限**：`m2:record:read` / `m2:record:write`（V13 授予 SYS_ADMIN、
+  SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST）。
+- **示例**：全部 SYNTHETIC（`SYNTH-P-0001`/“演示患者”/演示药品名），不含真实患者数据。
+
+### 3.8 设备采集接入（M3-M8-01，device 0.1.0 新增域）
+
+> 新增 device 域（无历史包袱，0.1.0 首版）；契约与 baseline 同步，`oasdiff` 无破坏性变更。
+
+- **设备台账**：`GET /v1/devices`（`listDevices`，`m2:device:read`）按网关/术间/推导状态过滤；
+  数据范围只返回可见术间设备（未绑定术间仅 ALL 可见），roomId 过滤越权 403。
+- **登记/换台**：`POST /v1/devices`（`registerDevice`，`m2:device:write`）唯一
+  `(gatewayId, deviceId)`，首次 201、幂等/换台 200、并发 409；目标术间必须在调用者数据范围内
+  （未绑定仅 ALL），否则 403；请求缺省 `status` 不覆盖已有 `MAINTENANCE`。
+- **网关上报**：`POST /v1/devices/{gatewayId}/{deviceId}/ingest`（`ingestDeviceVitals`，
+  `X-Gateway-Token` 内部令牌，无 JWT）批次幂等 + 行级幂等；共享令牌未绑定 gatewayId 的生产
+  风险见 `docs/gateway/README.md` §11.2。
+- **体征查询**：`GET .../vitals`（`listDeviceVitals`，`m2:device:read`）窗口/质量/分页；
+  设备不存在或超出数据范围统一 404。
+- **健康摘要**：`GET /v1/devices/health`（`getDeviceHealth`）窗口默认 24h、可配置 1–168；
+  质量比例分子/分母同一窗口，`last_seen_at` 仅在 `acceptedRows>0` 时推进。
+- **示例**：全部 SYNTHETIC（`SIM-*` 设备标识、演示术间 UUID），不含患者标识。
 
 ## 4. 错误模型
 
