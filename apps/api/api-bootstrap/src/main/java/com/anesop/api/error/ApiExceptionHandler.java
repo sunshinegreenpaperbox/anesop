@@ -14,6 +14,9 @@ import com.anesop.m1.api.application.SurgeryApplicationValidationException;
 import com.anesop.m1.api.schedule.ScheduleUnprocessableException;
 import com.anesop.m1.api.schedule.SchedulingConflictException;
 import com.anesop.m1.api.schedule.SchedulingValidationException;
+import com.anesop.m2.api.preop.PreopConflictException;
+import com.anesop.m2.api.preop.PreopUnprocessableException;
+import com.anesop.m2.api.preop.PreopValidationException;
 import com.anesop.m0.api.audit.AuditWriter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
@@ -192,6 +195,39 @@ public class ApiExceptionHandler {
         body.put("details", details);
         body.put("conflicts", exception.conflicts());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    /**
+     * 术前访视字段级校验（M2-M4-01）：400 {@code PARAM_INVALID}，field 由服务端固定提供，
+     * 不回显病史原文、患者标识或评分输入原文。
+     */
+    @ExceptionHandler(PreopValidationException.class)
+    public ResponseEntity<Error> handlePreopValidation(PreopValidationException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 术前访视状态/版本冲突（M2-M4-01）：409 {@code STATE_CONFLICT}。
+     * 已最终化只能新建版本、乐观锁过期、同申请重复草稿、申请状态不允许。
+     */
+    @ExceptionHandler(PreopConflictException.class)
+    public ResponseEntity<Error> handlePreopConflict(PreopConflictException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "访视单状态或版本冲突，操作未生效",
+                request);
+    }
+
+    /**
+     * 术前访视语义拒绝（M2-M4-01）：422 {@code BUSINESS_RULE_VIOLATION}，如申请不存在/不可见。
+     */
+    @ExceptionHandler(PreopUnprocessableException.class)
+    public ResponseEntity<Error> handlePreopUnprocessable(PreopUnprocessableException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
+                "术前访视业务规则拒绝", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

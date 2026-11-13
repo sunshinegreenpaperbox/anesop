@@ -80,6 +80,13 @@
       <version>${project.version}</version>
     </dependency>
 
+    <!-- M2 术前访视实现（M2-M4-01）：bootstrap 是唯一允许依赖 impl 的装配点 -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m2-impl</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
     <!-- 基础设施 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

@@ -21,9 +21,47 @@
       <artifactId>m2-api</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- 术前访视复用 M1 申请/患者可见性（同步只调 m1-api，不访问 m1 表与 mapper） -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m1-api</artifactId>
+      <version>${project.version}</version>
+    </dependency>
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-context</artifactId>
+    </dependency>
+    <!-- M2-M4-01 S-1：评分切点/量表版本用 @ConfigurationProperties（anesop.m2.preop.*）绑定 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot</artifactId>
+    </dependency>
+    <!-- 事务边界（创建/更新/最终化 + 审计同事务） -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-tx</artifactId>
+    </dependency>
+    <!-- 越权语义（AccessDeniedException），由 Web 层统一映射 403 -->
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-core</artifactId>
+    </dependency>
+    <!-- 持久层：MyBatis-Plus（版本由根 pom dependencyManagement 锁定） -->
+    <dependency>
+      <groupId>com.baomidou</groupId>
+      <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+    </dependency>
+    <!-- 评分输入/结果 jsonb 结构化序列化（allowlist 已登记 jackson-databind） -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <!-- 单测：JUnit 5 + AssertJ + Mockito（版本由 Spring Boot BOM 管理） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 </project>
