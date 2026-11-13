@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`、`anesthesia 0.3.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`、`anesthesia 0.4.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -25,8 +25,8 @@ packages/contracts/
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
 | `scheduling.yaml` | 13 | 16 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史 | §2.4.2、§2.3.2、§3.4.2 |
-| `anesthesia.yaml` | 9 | 15 | 术前访视与评估（0.3.0）、旧访视骨架读写、记录单读写、锁单、三方核查读写、随访创建/查询/列表 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **39** | **50** | 4 个限界上下文骨架 | — |
+| `anesthesia.yaml` | 17 | 25 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、旧访视骨架读写、记录单读写、锁单、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
+| **合计** | **46** | **59** | 4 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -171,6 +171,52 @@ packages/contracts/
 - **权限与审计**：V10 新增 `m2:preop:read|write`（SYS_ADMIN/SYS_ANESTHESIOLOGIST/
   SYS_NURSE_ANESTHETIST）；写操作审计 `PREOP_CREATE/PREOP_UPDATE/PREOP_FINALIZE`，detail 不含
   姓名与病史原文。
+
+### 3.5 知情同意与三方核查（M2-M5-01，anesthesia 0.4.0 additive）
+
+> 0.4.0 只新增 8 条路径 / 10 个 operation 与 12 个 schema，**未修改**既有 `ThreeWayCheck`、
+> `UpsertThreeWayCheckRequest`（记录单维度，实现留 M3）与 `PreopVisit` 骨架；
+> baseline/HEAD baseline/生成物漂移三门禁全 PASS。示例均为 SYNTHETIC。
+
+- **同意模板** `GET /v1/anesthesia/consent-templates`（`listConsentTemplates`）：
+  `m2:consent:read`；`templateCode`/`effectiveOnly` 过滤，默认只返回 ACTIVE（`includeRetired=true`
+  含停用版本）；返回 `ConsentTemplate[]`（含 `status`/`retiredAt`）。模板内容不可变：新版本以新的
+  `(templateCode, version)` 另建，已签记录冻结 `templateVersion`。V11 内置 3 条 SYNTHETIC 演示模板，
+  真实文本须医务处/法务审核（【待确认】Q-4）。
+- **模板停用** `POST /v1/anesthesia/consent-templates/{templateId}/retire`
+  （`retireConsentTemplate`）：`m2:consent:write`；ACTIVE→RETIRED 仅一次，重复停用 422；
+  停用后不可用于新签署（创建 422），历史记录仍引用旧版本；审计 `CONSENT_TEMPLATE_RETIRE`。
+- **同意记录列表** `GET /v1/anesthesia/consents?applicationId=`（`listConsents`）：
+  `m2:consent:read`；返回 `application`（申请上下文，含患者快照）+ `items`（含已拒绝/
+  已撤销历史）。申请不可见按集合语义 **403**（不返回空列表）。
+- **创建** `POST /v1/anesthesia/consents`（`createConsent`）：`m2:consent:write`；**201**，
+  初始 `WAITING_SIGN`、`caStatus=PENDING`。`templateVersion` 必须与 `templateId` 对应且模板
+  已生效且未停用；同一申请 + 模板版本已有有效记录 409；申请不可见/模板版本不匹配/已停用 422。
+- **详情** `GET /v1/anesthesia/consents/{consentId}`（`getConsent`）：越界/不存在 404。
+- **签署** `POST /v1/anesthesia/consents/{consentId}/sign`（`signConsent`）：`m2:consent:write`；
+  `WAITING_SIGN → SIGNED`，返回 `caStatus=SIMULATED` 的占位签名（EXT-05）：
+  `signatureRef=SIM-CA-<consentId>`、`signatureHash`=SHA-256（同意元数据 + 模板正文摘要，
+  不含姓名）、`signedAt/signedBy`。**不保存签名原文/图片/证书链**；签署前校验申请仍为活动状态。
+  同一申请最多一条有效 SIGNED（`uk_consent_record_signed_application`），已有未撤销 SIGNED 时
+  重复签署 409；重复签署、版本过期、已拒绝/已撤销、申请已取消/驳回 409。
+- **拒绝** `POST …/decline`（`declineConsent`）：`WAITING_SIGN → DECLINED`，`reason` 必填
+  （≤500 字，只落库不入日志/审计）；非待签署 409。
+- **撤销** `POST …/revoke`（`revokeConsent`）：`SIGNED → REVOKED`，`reason` 必填；撤销后不可再签，
+  签名留痕不可改写；非已签署 409。
+- **申请维度三方核查** `GET/POST /v1/anesthesia/applications/{applicationId}/three-way-checks`
+  （`listApplicationThreeWayChecks` / `recordApplicationThreeWayCheck`）：`m2:threeway:read|write`。
+  POST 新增版本（201，`check_version = max+1`），字段 `timeOutAt/By`、`signOutAt/By`、
+  `specimenChecked`、`implantChecked`、`issues[]`；Time-out 先录，Sign-out 可在出室后以新版本
+  补录（不得早于 Time-out）；申请不可见 404，状态不允许/并发版本冲突 409。GET 返回版本倒序
+  `items` 与 `completed`（最新版本是否同时有 Time-out 与 Sign-out），供 M3 锁单前置校验。
+- **记录维度保持**：`GET/POST /v1/anesthesia/records/{recordId}/three-way-checks` 的
+  `ThreeWayCheck` 定义不变（`recordId` 必填、无 `applicationId`/`issues`），实现留在 M3；
+  M3 落地时以 `applicationId` 关联两维度并统一完成判定口径。
+- **错误语义**：400 字段/枚举/时间/问题项校验；401 未认证；403 缺权限或集合查询越权；
+  404 单对象越界/不存在；409 重复签署、终态再流转、版本过期、重复有效同意、核查并发版本冲突；
+  422 创建时申请不可见或模板版本不存在。错误响应统一 `$ref` 共享组件，`details` 不回显
+  签署人姓名、原因原文或问题项原文。
+
 
 ## 4. 错误模型
 

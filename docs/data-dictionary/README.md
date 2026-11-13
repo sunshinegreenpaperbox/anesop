@@ -45,7 +45,9 @@
 | M2 | 术前访视与评估 | `m2_anes.preop_assessment` | 病史、气道、ASA、评分输入/结果、计划、最终化 | `PreopAssessment` | §2.4.3、§2.7.1 |
 | M2 | 麻醉记录单 | `anesthesia_record` | 状态机 + 修订版本 | `AnesthesiaRecord` | §3.4.2、§2.4.3 |
 | M2 | 麻醉事件 | `anesthesia_event` | 按记录单分区，时间倒序索引 | `AnesthesiaEvent` | §3.4.2、§2.4.3 |
-| M2 | 三方核查 | `three_way_check` | Time-out/Sign-out，锁单前置条件 | `ThreeWayCheck` | §2.4.3 |
+| M2 | 知情同意模板 | `m2_anes.consent_template` | 模板与版本，内容不可变（append-only） | `ConsentTemplate` | §2.4.3、V11 |
+| M2 | 知情同意记录 | `m2_anes.consent_record` | 签署状态机、模板版本冻结、CA 占位签名 | `ConsentRecord` | §2.4.3、§3.9.4、V11 |
+| M2 | 三方核查 | `m2_anes.three_way_check` | 申请维度 Time-out/Sign-out，append-only 版本，锁单前置 | `ApplicationThreeWayCheck`（记录维度 `ThreeWayCheck` 留 M3） | §2.4.3、V11 |
 | M2 | 用药记录 | `medication_record` | 麻精双人核对字段必填 | 契约暂未单列 | §3.4.2、§2.4.6 |
 | M2 | 生命体征 | `vital_sign` | 按天分区；波形不与数值同表 | 契约暂未单列 | §3.4.2、§3.4.4 |
 | M2 | 复苏记录 | `pacu_record` | PACU 入室/评分/转出 | 契约暂未单列 | §2.4.3、§2.7.1 |

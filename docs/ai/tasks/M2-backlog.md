@@ -28,7 +28,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 | M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Review（独立评审 blocking B-1…B-4 与 S-1…S-9 已修，待复审） |
 | M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Review（独立评审 B-1/B-2 + S-1…S-7 + Q-1…Q-3 已修；待复审） |
 | M2-M4-01 | 术前访视与评估 | `anesthesia.yaml` 扩展、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V10*` | M2-M1-01 | Review（契约 0.3.0 + V10 + m2 后端/前端 + 测试；待独立 review） |
-| M2-M5-01 | 知情同意与三方核查 | anesthesia 契约（三方核查已定义）、m2 模块 | M2-M4-01 | Blocked |
+| M2-M5-01 | 知情同意与三方核查 | anesthesia 契约（三方核查已定义）、m2 模块 | M2-M4-01 | Review（契约 0.4.0 + V11 + m2 后端/前端 + 测试；S-1…S-7 已修，待复审） |
 | M2-M6-01 | 排程分析（利用率/准点/取消） | m1 读模型、M6 报表引擎或 m1 分析接口 | M2-M2-01 | Blocked |
 
 ## 任务卡要点（执行时按 BACKLOG 模板补全为 TASK-<id>.md）
@@ -197,6 +197,50 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 ### M2-M5-01 知情同意与三方核查
 - 目标：模板与版本、签署状态（模拟 CA，EXT-05）、Time-out 记录、三方核查（已定义契约）与锁单前置联动。
 - 验收：签署流程状态机、模板版本不可变、核查完成才能锁单（409）、审计留痕、CA 占位接口 + 模拟实现。
+- 落地说明（Review）：
+  - 契约 `anesthesia 0.4.0` additive：新增 `consent-templates`、`consents`（列表/创建/详情/
+    sign/decline/revoke）、`applications/{applicationId}/three-way-checks`（GET/POST），共
+    7 路径 / 9 operation / 12 schema；既有 `ThreeWayCheck`（记录维度）与旧 `preop-visits`
+    定义未改，记录维度实现留 M3；baseline/HEAD baseline/漂移三门禁 PASS。
+  - `V11__m2_consent_threeway.sql`：`consent_template`（内容不可变，`UNIQUE(template_code,version)`，
+    3 条 SYNTHETIC 演示模板）、`consent_record`（状态机 + CA 占位 `signature_ref/hash`、
+    `ca_status=SIMULATED`、拒绝/撤销原因、部分唯一索引防重复有效同意、终态守卫触发器）、
+    `three_way_check`（申请维度 append-only `check_version`、Time-out/Sign-out、issues jsonb）；
+    权限点 `m2:consent:read|write`、`m2:threeway:read|write` 授 3 个角色（12 条授权）；
+    中文注释齐全，回滚见 docs/db/README.md §4.6。
+  - 后端：`ConsentServiceImpl`（模板版本冻结、WAITING_SIGN→SIGNED|DECLINED、SIGNED→REVOKED、
+    条件更新 0 行 409、CA 占位摘要不含 PHI、审计 CONSENT_CREATE/SIGN/DECLINE/REVOKE）与
+    `ThreeWayCheckServiceImpl`（只 INSERT + 查询、并发版本 409、完成判定、审计 THREEWAY_RECORD）；
+    `isThreeWayCheckCompleted(applicationId)` 为 M3 锁单集成点（fail-safe false）；
+    数据范围复用 M1 申请可见性（集合 403 / 单对象 404 / 创建 422）。
+  - 前端：`/m2/consent`、`/m2/three-way` 菜单入口与 `/m2/consent/:applicationId`、
+    `/m2/three-way/:applicationId` 页面（模板选择/签署/拒绝/撤销、CA=SIMULATED 标识、
+    Time-out/Sign-out/标本/植入物/问题项、版本历史）；Vitest 9 用例 + E2E 2 条（API 拦截）。
+  - 复审修复（独立评审建议 S-1…S-7，2026-11-13）：
+    - **S-1** 跨版本 Time-out：`RecordApplicationThreeWayCheckRequest.timeOutAt` 改为可选，
+      省略继承上一版本；首版必填；显式改值须 `confirmTimeOutChange=true`，否则 409；
+      前端预填上一版本并二次确认。
+    - **S-2** V11 守卫把 `signer_name/signer_relation/sign_method` 不可变校验提前到所有状态
+      （WAITING_SIGN/SIGNED/DECLINED/REVOKED），补负向迁移断言。
+    - **S-3** 模板可停用：`consent_template` 增 `status`/`retired_at`/`retired_by`，仅允许一次
+      ACTIVE→RETIRED；新增 `POST /v1/anesthesia/consent-templates/{id}/retire`（`m2:consent:write`，
+      审计 `CONSENT_TEMPLATE_RETIRE`）；列表默认 ACTIVE、`includeRetired` 可选；内容仍不可改。
+    - **S-4** 失败路径审计：sign/decline/revoke 与三方核查录入的 409/422 以 `result=0` 写审计，
+      `REQUIRES_NEW` 独立事务，detail 仅动作/标识/错误类别，无 PHI。
+    - **S-5** 前端三方核查：标本/植入物改为必选勾选确认 + 提交二次确认，未确认不发请求。
+    - **S-6** “当前有效同意”：同一申请最多一条 `status='SIGNED'`
+      （`uk_consent_record_signed_application` 部分唯一索引）；已有未撤销 SIGNED 再签 409；
+      文档明确 M3 取最新有效 SIGNED。
+    - **S-7** sign 前复用 `requireActiveApplication`：已取消/驳回申请签署 409。
+    - Q 登记：`docs/modules/m2/README.md` §10.1 增补 Q-1…Q-4（有效期/撤回与开场阻断、
+      只允许最新生效模板、告知是否限麻醉医师、Time-out 逐项确认 M3 补齐）。
+    - 测试：m2 单测 32 + 20，后端集成 10，前端 Vitest 5 + 7，E2E 2；契约 8 路径/10 operation。
+  - 测试：m2-impl 单测 39（同意 24 + 核查 15）+ 集成 6（嵌入式 PG16）；模板不可变、
+    重复签署 409、撤销后不可再签、CA 占位持久化且无签名原文列、三方核查 append-only、
+    403/404、审计 detail 无 PHI、V11 结构/注释/触发器断言。
+  - 已知限制：CA 不可用（EXT-05）签署为占位/自签哈希，不构成法律有效电子签名；真实模板文本
+    与签署人关系强制校验、问题项未闭环是否阻断锁单待医务处确认（Q-4…Q-7）；记录维度核查与
+    锁单联动留 M3。
 
 ### M2-M6-01 排程分析
 - 目标：术间利用率、准点开台率、取消率；口径可配置（D-21 报表口径）；多维筛选/导出 CSV（脱敏）。

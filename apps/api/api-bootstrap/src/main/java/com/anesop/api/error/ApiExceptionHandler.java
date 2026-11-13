@@ -14,6 +14,9 @@ import com.anesop.m1.api.application.SurgeryApplicationValidationException;
 import com.anesop.m1.api.schedule.ScheduleUnprocessableException;
 import com.anesop.m1.api.schedule.SchedulingConflictException;
 import com.anesop.m1.api.schedule.SchedulingValidationException;
+import com.anesop.m2.api.error.M2ConflictException;
+import com.anesop.m2.api.error.M2UnprocessableException;
+import com.anesop.m2.api.error.M2ValidationException;
 import com.anesop.m2.api.preop.PreopConflictException;
 import com.anesop.m2.api.preop.PreopUnprocessableException;
 import com.anesop.m2.api.preop.PreopValidationException;
@@ -227,6 +230,40 @@ public class ApiExceptionHandler {
             HttpServletRequest request) {
         return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
                 "术前访视业务规则拒绝", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 知情同意/三方核查字段级校验（M2-M5-01）：400 {@code PARAM_INVALID}，field 由服务端固定提供，
+     * 不回显签署人姓名、原因原文、问题项原文或患者标识。
+     */
+    @ExceptionHandler(M2ValidationException.class)
+    public ResponseEntity<Error> handleM2Validation(M2ValidationException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 知情同意/三方核查状态冲突（M2-M5-01）：409 {@code STATE_CONFLICT}。
+     * 重复签署、已撤销后再次签署、版本过期、同模板版本重复创建、核查并发版本冲突。
+     */
+    @ExceptionHandler(M2ConflictException.class)
+    public ResponseEntity<Error> handleM2Conflict(M2ConflictException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "同意/核查状态或版本冲突，操作未生效",
+                request);
+    }
+
+    /**
+     * 知情同意/三方核查语义拒绝（M2-M5-01）：422 {@code BUSINESS_RULE_VIOLATION}，
+     * 如创建同意时申请不可见或模板版本不存在。请求体参数错误不回显资源存在性。
+     */
+    @ExceptionHandler(M2UnprocessableException.class)
+    public ResponseEntity<Error> handleM2Unprocessable(M2UnprocessableException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
+                "知情同意/三方核查业务规则拒绝", request,
                 List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
     }
 

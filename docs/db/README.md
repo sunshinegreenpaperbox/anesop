@@ -199,6 +199,62 @@ JSON 对象）、各项分数范围 CHECK、`finalize_note varchar(500)`（最�
 - **重放**：修复后重新执行 V10 会重建空表并重新灌入 6 条权限授权；已导出的访视数据不得直接
   回灌（会与 Flyway 版本/外键冲突），须走受控数据修复流程并记录操作人与时间。
 
+### 4.6 V11（M2 知情同意与三方核查）回滚说明
+
+V11 属 expand 段：新增 `m2_anes.consent_template`（模板与版本，内容 append-only + 可停用）、
+`m2_anes.consent_record`（同意记录与签署状态机）、`m2_anes.three_way_check`（手术申请维度
+三方核查，append-only 版本化）、`uk_consent_template_code_version`、
+`uk_consent_record_active`（同一申请 + 模板版本最多一条有效同意，部分唯一索引）、
+`uk_consent_record_signed_application`（同一申请最多一条 SIGNED，部分唯一索引）、
+`uk_three_way_check_application_version` 与 12 个普通索引、4 个权限点
+`m2:consent:read|write`、`m2:threeway:read|write`（授予 SYS_ADMIN、
+SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST）；写入 3 条 SYNTHETIC 演示模板
+（ANES_GENERAL v1/v2、ANES_SEDATION v1）。不修改 V1–V10 已执行脚本，也不改写既有列与数据。
+
+关键约束：
+
+- `consent_template`：`UNIQUE (template_code, version)`；`status`（ACTIVE/RETIRED）+
+  `retired_at/retired_by`，`ck_consent_template_retired` 保证状态与停用留痕一致；
+  内容不可变由触发器 `trg_consent_template_no_update/no_delete/no_truncate` 兜底
+  （SQLSTATE 55000），唯一允许一次 `ACTIVE→RETIRED`（重复停用 422）；因 `consent_record` 外键引用，
+  TRUNCATE 先被 PostgreSQL 以 0A000 拒绝。
+- `consent_record`：`uk_consent_record_signed_application`（`WHERE status='SIGNED'`，
+  同一申请最多一条当前有效同意，撤销/拒绝不占位）、`fk_consent_record_application`、
+  `fk_consent_record_template`、
+  `ck_consent_record_status_fields`（SIGNED 必须有签署人/时间/签名标识与摘要且
+  `ca_status IN ('SIMULATED','VERIFIED')`；DECLINED 必须有原因/时间；REVOKED 必须有
+  原因/操作人/时间且保留签署留痕）、`signature_hash` 十六进制 64 位 CHECK；
+  守卫触发器 `fn_consent_record_guard`：身份列不可变、签署人姓名/关系/方式在所有状态不可变、
+  DECLINED/REVOKED 终态拒绝 UPDATE、SIGNED 只允许带原因的撤销且签名留痕不可改写、
+  DELETE/TRUNCATE 一律拒绝（55000）。
+- `three_way_check`：`UNIQUE (application_id, check_version)`、
+  `ck_three_way_check_sign_out`（Sign-out 时间与执行人成对）、
+  `ck_three_way_check_time_order`（Sign-out 不早于 Time-out）、
+  `ck_three_way_check_issues_array`（jsonb 数组）；append-only 触发器
+  `fn_three_way_check_append_only` 拒绝 UPDATE/DELETE/TRUNCATE（55000）。
+- 中文表/列注释齐全（`m2_anes` 全 schema 无缺失注释，集成测试断言）。
+
+- **应用回滚**：下线 `/v1/anesthesia/consent-templates`、`/v1/anesthesia/consents*`、
+  `/v1/anesthesia/consent-templates/{templateId}/retire`、
+  `/v1/anesthesia/applications/{applicationId}/three-way-checks` 共 10 个 operation 与前端
+  `/m2/consent*`、`/m2/three-way*` 页面（含菜单项）；术前访视、申请与排程能力不受影响。
+- **库层回滚**（前向修复脚本，需 DBA 审批 + 备份；顺序不可颠倒）：
+  `DROP TABLE m2_anes.three_way_check` → `DROP TABLE m2_anes.consent_record` →
+  `DROP TABLE m2_anes.consent_template` →
+  `DROP FUNCTION IF EXISTS m2_anes.fn_consent_template_append_only()` →
+  `DROP FUNCTION IF EXISTS m2_anes.fn_consent_record_guard()` →
+  `DROP FUNCTION IF EXISTS m2_anes.fn_three_way_check_append_only()` →
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN
+  ('b0000000-0000-4000-8000-00000000002c','b0000000-0000-4000-8000-00000000002d',
+   'b0000000-0000-4000-8000-00000000002e','b0000000-0000-4000-8000-00000000002f')` →
+  `DELETE FROM m0_platform.sys_permission WHERE code IN
+  ('m2:consent:read','m2:consent:write','m2:threeway:read','m2:threeway:write')`。
+- **数据保全**：回滚前必须导出 `consent_template`/`consent_record`/`three_way_check` 并校验行数；
+  同意与核查记录属临床留痕，须先归档到离线审计库，生产执行须人签字。
+- **不可逆项**：签名摘要、拒绝/撤销原因与核查历史无法从其他表反推；回滚后只能依赖导出归档。
+- **重放**：修复后重新执行 V11 会重建空表并重新灌入 3 条演示模板与 4 个权限点；
+  已导出数据不得直接回灌（会与 Flyway 版本/外键冲突），须走受控数据修复流程。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）

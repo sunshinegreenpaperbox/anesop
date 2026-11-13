@@ -228,6 +228,206 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/anesthesia/consent-templates': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询知情同意模板与版本
+     * @description 返回知情同意模板（按 templateCode、version 倒序）。模板内容不可变：新增版本必须
+     *     以新的 (templateCode, version) 另建，已签署的同意记录冻结 templateVersion。
+     *     默认只返回 status=ACTIVE 的模板；includeRetired=true 时同时返回已停用（RETIRED）
+     *     版本用于历史追溯。已停用模板不可用于新签署，历史记录仍引用旧版本。
+     *     本期模板为 SYNTHETIC 演示文本，真实院方文本须医务处/法务审核后以新版本写入
+     *     （【待确认】，见 docs/modules/m2/README.md）。需要权限 m2:consent:read。
+     */
+    get: operations['listConsentTemplates']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/consent-templates/{templateId}/retire': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 停用知情同意模板版本
+     * @description 将 ACTIVE 模板版本停用为 RETIRED（只能停用一次，终态不可恢复；重复停用 422）。停用后该版本
+     *     不可用于新签署（创建同意记录返回 422），但历史同意记录仍引用原 templateId/
+     *     templateVersion 且可正常查看。模板内容仍不可修改（append-only）；如需新文本请
+     *     新增 (templateCode, version)。需要权限 m2:consent:write，审计
+     *     CONSENT_TEMPLATE_RETIRE。
+     */
+    post: operations['retireConsentTemplate']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/consents': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 按手术申请查询知情同意记录
+     * @description 返回指定手术申请下的全部知情同意记录（创建时间倒序）与申请上下文。数据范围沿用 M1
+     *     申请可见性：申请不存在或超出数据范围按“集合查询越权”返回 403，不返回空列表。
+     *     需要权限 m2:consent:read。
+     */
+    get: operations['listConsents']
+    put?: never
+    /**
+     * 创建知情同意记录（待签署）
+     * @description 按手术申请与模板版本创建同意记录，初始状态 WAITING_SIGN。templateVersion 必须与
+     *     templateId 对应且模板已生效、未停用（RETIRED）；同一申请 + 同一模板版本同时只允许
+     *     一条有效记录（WAITING_SIGN/SIGNED），重复创建 409；申请不可见/模板不存在、版本不匹配
+     *     或模板已停用 422。需要权限 m2:consent:write。示例为 SYNTHETIC。
+     */
+    post: operations['createConsent']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/consents/{consentId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询知情同意记录详情
+     * @description 按标识返回同意记录；不存在或超出数据范围（沿申请可见性）返回 404。
+     *     需要权限 m2:consent:read。
+     */
+    get: operations['getConsent']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/consents/{consentId}/sign': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 签署知情同意（CA 占位）
+     * @description WAITING_SIGN → SIGNED。签署前校验手术申请仍为活动状态（SUBMITTED/ACCEPTED/
+     *     SCHEDULED），已取消/驳回返回 409。同一申请同时最多一条有效 SIGNED：若已有未撤销的
+     *     SIGNED 记录，重复签署返回 409（须先撤销或作废原记录）。CA 不可用（EXT-05）：
+     *     服务端生成占位 signatureRef 与 SHA-256 signatureHash（同意元数据 + 模板正文摘要，
+     *     不含姓名等 PHI）、signedAt，caStatus=SIMULATED；不保存签名原文/图片/证书链。
+     *     重复签署、版本过期、已拒绝/已撤销返回 409。需要权限 m2:consent:write。
+     */
+    post: operations['signConsent']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/consents/{consentId}/decline': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 拒绝知情同意
+     * @description WAITING_SIGN → DECLINED，必须填写原因。已签署/已拒绝/已撤销返回 409。
+     *     需要权限 m2:consent:write。原因只落库，不写入日志与审计原文。
+     */
+    post: operations['declineConsent']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/consents/{consentId}/revoke': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 撤销已签署的知情同意
+     * @description SIGNED → REVOKED，必须填写撤销原因并记录操作人与时间；签名留痕不可改写。
+     *     非 SIGNED 状态返回 409。需要权限 m2:consent:write。
+     *     原因只落库，不写入日志与审计原文。
+     */
+    post: operations['revokeConsent']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/applications/{applicationId}/three-way-checks': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 按手术申请查询三方核查（Time-out / Sign-out）
+     * @description 返回指定申请的核查版本列表（checkVersion 倒序）与是否完成（completed）。三方核查
+     *     为 append-only：修正必须新增版本，历史版本保留。数据范围沿申请可见性，越界/不存在
+     *     返回 404。需要权限 m2:threeway:read。记录单(record)维度核查实现留 M3。
+     */
+    get: operations['listApplicationThreeWayChecks']
+    put?: never
+    /**
+     * 录入三方核查（新增版本）
+     * @description 为手术申请新增一条三方核查版本（append-only，不可修改/删除）。Time-out 先录，
+     *     Sign-out 可在出室后以新版本补录（signOutAt 不得早于 timeOutAt）；最新版本同时含
+     *     timeOutAt 与 signOutAt 即视为完成，供 M3 锁单前置校验（isThreeWayCheckCompleted）。
+     *     跨版本时序：新增版本可省略 timeOutAt，服务端继承上一版本 Time-out 时间；若显式
+     *     传入的 timeOutAt 与上一版本不一致，必须同时传 confirmTimeOutChange=true，否则 409
+     *     （防止误改已完成的 Time-out）。首版必须显式 timeOutAt（缺失 400）。
+     *     申请不可见/不存在 404，状态不允许、Time-out 变更未确认或并发版本冲突 409。
+     *     需要权限 m2:threeway:write。示例为 SYNTHETIC。
+     */
+    post: operations['recordApplicationThreeWayCheck']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -784,6 +984,262 @@ export interface components {
       implantChecked: boolean
       /** @description 当前版本号；更新已存在的核查记录时必填。 */
       version?: number
+    }
+    /**
+     * @description 知情同意模板与版本。内容不可变：新版本以新的 (templateCode, version) 另建；
+     *     患者签署时记录冻结的 templateVersion。本期内容为 SYNTHETIC 演示文本。
+     */
+    ConsentTemplate: {
+      /** @description 模板标识（UUID 字符串）。 */
+      templateId: string
+      /** @description 模板编码（如 ANES_GENERAL）。 */
+      templateCode: string
+      /** @description 模板版本号（从 1 起；不是乐观锁）。 */
+      version: number
+      /** @description 模板标题（中文）。 */
+      title: string
+      /** @description 模板正文（患者签署的告知文本；不可修改）。 */
+      contentText: string
+      /**
+       * Format: date-time
+       * @description 生效时间；早于该时间的版本不用于新签署。
+       */
+      effectiveAt: string
+      /**
+       * @description 模板状态；RETIRED 版本不可用于新签署，历史记录仍引用旧版本。
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'RETIRED'
+      /**
+       * Format: date-time
+       * @description 停用时间；仅 RETIRED 有值，ACTIVE 为 null。
+       */
+      retiredAt?: string | null
+      /**
+       * Format: date-time
+       * @description 创建时间。
+       */
+      createdAt: string
+      /** @description 创建人用户标识；系统种子模板为 null。 */
+      createdBy: string | null
+    }
+    /** @description 知情同意模板列表；无匹配时为 items 空数组。 */
+    ConsentTemplateList: {
+      /** @description 模板版本（按 templateCode、version 倒序）。 */
+      items: components['schemas']['ConsentTemplate'][]
+    }
+    /** @description 知情同意/三方核查页所需的申请上下文（由 M1 申请服务按数据范围解析）。 */
+    AnesthesiaApplicationSummary: {
+      /** @description 手术申请标识。 */
+      applicationId: string
+      /** @description 患者标识。 */
+      patientId: string
+      patientSnapshot: components['schemas']['PreopPatientSnapshot']
+      /** @description 拟施术式。 */
+      surgeryName: string
+      /** @description 申请科室名称。 */
+      departmentName: string
+      /**
+       * @description 申请状态（沿用 scheduling 契约枚举）。
+       * @enum {string}
+       */
+      status: 'SUBMITTED' | 'ACCEPTED' | 'SCHEDULED' | 'CANCELLED' | 'REJECTED'
+    }
+    /**
+     * @description 知情同意记录。签署状态机：WAITING_SIGN → SIGNED | DECLINED；SIGNED → REVOKED。
+     *     “当前有效同意”指同一申请下 status=SIGNED 的最新记录（同时最多一条，部分唯一索引
+     *     强制；DECLINED/REVOKED 不占位），下游 M3 锁定/术前核对只取该记录。
+     *     CA 不可用（EXT-05）：caStatus=SIMULATED 表示占位签名，signatureRef/signatureHash
+     *     为服务端生成的留痕，不保存签名原文/图片/证书链；签署人姓名/关系/方式与签名字段
+     *     在已签署后均不可改写。
+     */
+    ConsentRecord: components['schemas']['AuditFields'] & {
+      /** @description 知情同意记录标识（UUID 字符串）。 */
+      consentId: string
+      /** @description 关联手术申请标识。 */
+      applicationId: string
+      /** @description 患者标识（取申请快照）。 */
+      patientId: string
+      /** @description 同意模板标识。 */
+      templateId: string
+      /** @description 模板编码（冗余便于展示）。 */
+      templateCode: string
+      /** @description 签署时冻结的模板版本号。 */
+      templateVersion: number
+      /** @description 签署时冻结的模板标题。 */
+      templateTitle: string
+      /**
+       * @description 状态；SIGNED 后只能 REVOKED，DECLINED/REVOKED 为终态。
+       * @enum {string}
+       */
+      status: 'DRAFT' | 'WAITING_SIGN' | 'SIGNED' | 'DECLINED' | 'REVOKED'
+      /** @description 签署人姓名（患者本人或法定代理人；只落库，不写入日志/审计）。 */
+      signerName: string
+      /**
+       * @description 签署人关系。
+       * @enum {string}
+       */
+      signerRelation: 'SELF' | 'SPOUSE' | 'PARENT' | 'CHILD' | 'LEGAL_GUARDIAN' | 'OTHER'
+      /**
+       * @description 签署方式；ELECTRONIC 当前为 CA 占位（SIMULATED）。
+       * @enum {string}
+       */
+      signMethod: 'PAPER' | 'ELECTRONIC'
+      /**
+       * Format: date-time
+       * @description 签署完成时间；未签署为 null。
+       */
+      signedAt: string | null
+      /** @description 签署操作人用户标识；未签署为 null。 */
+      signedBy: string | null
+      /** @description 签名占位标识（EXT-05：SIM-CA-<uuid>）；不保存签名原文。 */
+      signatureRef: string | null
+      /** @description 签名摘要（SHA-256 十六进制，64 字符）；输入不含姓名等 PHI。 */
+      signatureHash: string | null
+      /**
+       * @description CA 状态；SIMULATED 为占位签名（EXT-05 解除前唯一取值）。
+       * @enum {string}
+       */
+      caStatus: 'PENDING' | 'SIMULATED' | 'VERIFIED' | 'FAILED'
+      /** @description 拒绝原因（≤500 字符；只落库，不写入日志/审计）。 */
+      declineReason: string | null
+      /**
+       * Format: date-time
+       * @description 拒绝时间；仅 DECLINED 有值。
+       */
+      declinedAt: string | null
+      /**
+       * Format: date-time
+       * @description 撤销时间；仅 REVOKED 有值。
+       */
+      revokedAt: string | null
+      /** @description 撤销操作人用户标识；仅 REVOKED 有值。 */
+      revokedBy: string | null
+      /** @description 撤销原因（仅 REVOKED 有值；只落库，不写入日志/审计）。 */
+      revokeReason: string | null
+    }
+    /** @description 申请上下文与同意记录列表（创建时间倒序）；无记录时 items 为空数组。 */
+    ConsentRecordList: {
+      application: components['schemas']['AnesthesiaApplicationSummary']
+      /** @description 该申请下的同意记录（含已拒绝/已撤销的历史记录）。 */
+      items: components['schemas']['ConsentRecord'][]
+    }
+    /**
+     * @description 创建知情同意记录（WAITING_SIGN）。templateVersion 必须与 templateId 对应、模板已生效
+     *     且未停用；同一申请 + 同一模板版本同时只允许一条有效记录（重复创建 409）。
+     *     模板已停用（RETIRED）返回 422。
+     */
+    CreateConsentRequest: {
+      /** @description 手术申请标识（UUID 字符串）。 */
+      applicationId: string
+      /** @description 同意模板标识（UUID 字符串）。 */
+      templateId: string
+      /** @description 模板版本号；必须与 templateId 对应。 */
+      templateVersion: number
+      /** @description 签署人姓名（患者本人或法定代理人；只落库，不写入日志/审计）。 */
+      signerName: string
+      /**
+       * @description 签署人关系。
+       * @enum {string}
+       */
+      signerRelation: 'SELF' | 'SPOUSE' | 'PARENT' | 'CHILD' | 'LEGAL_GUARDIAN' | 'OTHER'
+      /**
+       * @description 签署方式；ELECTRONIC 当前为 CA 占位。
+       * @enum {string}
+       */
+      signMethod: 'PAPER' | 'ELECTRONIC'
+    }
+    /** @description 签署请求；必须回传 version，重复签署/版本过期/终态返回 409。 */
+    SignConsentRequest: {
+      /** @description 当前版本号，必须与库内一致。 */
+      version: number
+    }
+    /** @description 拒绝请求；必须回传 version 与原因。 */
+    DeclineConsentRequest: {
+      /** @description 当前版本号，必须与库内一致。 */
+      version: number
+      /** @description 拒绝原因（只落库，不写入日志/审计）。 */
+      reason: string
+    }
+    /** @description 撤销请求；仅 SIGNED 状态可撤销，必须回传 version 与原因。 */
+    RevokeConsentRequest: {
+      /** @description 当前版本号，必须与库内一致。 */
+      version: number
+      /** @description 撤销原因（只落库，不写入日志/审计）。 */
+      reason: string
+    }
+    /**
+     * @description 手术申请维度三方核查（Time-out / Sign-out）版本。append-only：不可修改/删除，
+     *     修正必须新增版本；latest 同时含 timeOutAt 与 signOutAt 视为完成（M3 锁单前置）。
+     *     记录单(record)维度的 ThreeWayCheck 定义保持不变，其实现留在 M3。
+     */
+    ApplicationThreeWayCheck: components['schemas']['AuditFields'] & {
+      /** @description 三方核查记录标识（UUID 字符串）。 */
+      checkId: string
+      /** @description 关联手术申请标识。 */
+      applicationId: string
+      /**
+       * Format: date-time
+       * @description 切皮前 Time-out 完成时间。
+       */
+      timeOutAt: string
+      /** @description Time-out 执行人用户标识。 */
+      timeOutBy: string
+      /**
+       * Format: date-time
+       * @description 出室前 Sign-out 完成时间；未完成为 null。
+       */
+      signOutAt: string | null
+      /** @description Sign-out 执行人用户标识；未完成为 null。 */
+      signOutBy: string | null
+      /** @description 标本核对是否一致。 */
+      specimenChecked: boolean
+      /** @description 植入物与耗材核对是否一致。 */
+      implantChecked: boolean
+      /** @description 问题项（最多 20 项，每项 ≤200 字符；审计只记数量不记原文）。 */
+      issues: string[]
+    }
+    /** @description 申请上下文、核查版本列表（版本号倒序）与完成标记。 */
+    ApplicationThreeWayCheckList: {
+      application: components['schemas']['AnesthesiaApplicationSummary']
+      /** @description 最新版本是否同时记录 Time-out 与 Sign-out（M3 锁单前置条件）。 */
+      completed: boolean
+      /** @description 该申请的核查版本（append-only，最新在前）。 */
+      items: components['schemas']['ApplicationThreeWayCheck'][]
+    }
+    /**
+     * @description 新增三方核查版本。Time-out 先录，Sign-out 可在出室后以新版本补录；signOutAt 不得早于
+     *     timeOutAt。signOutAt 与 signOutBy 必须成对出现；timeOutBy 缺省为当前操作人。
+     *     新增版本省略 timeOutAt 时继承上一版本；显式修改上一版本 Time-out 必须同时传
+     *     confirmTimeOutChange=true，否则 409。
+     */
+    RecordApplicationThreeWayCheckRequest: {
+      /**
+       * Format: date-time
+       * @description 切皮前 Time-out 完成时间（不得晚于当前时间 5 分钟以上）。首版必填；
+       *     新增版本可省略（继承上一版本）。与上一版本不一致时须 confirmTimeOutChange=true。
+       */
+      timeOutAt?: string
+      /**
+       * @description 显式确认修改上一版本的 Time-out 时间。仅当 timeOutAt 与上一版本不一致时生效；
+       *     缺省 false（不一致返回 409）。
+       */
+      confirmTimeOutChange?: boolean
+      /** @description Time-out 执行人用户标识；缺省为当前操作人。 */
+      timeOutBy?: string | null
+      /**
+       * Format: date-time
+       * @description 出室前 Sign-out 完成时间；未完成可留空，稍后以新版本补录。
+       */
+      signOutAt?: string | null
+      /** @description Sign-out 执行人用户标识；signOutAt 非空时必填，缺省为当前操作人。 */
+      signOutBy?: string | null
+      /** @description 标本核对是否一致。 */
+      specimenChecked: boolean
+      /** @description 植入物与耗材核对是否一致。 */
+      implantChecked: boolean
+      /** @description 问题项（最多 20 项，每项 ≤200 字符）。 */
+      issues?: string[]
     }
     /** @description 麻醉记录单保存请求；锁单后调用返回 409。 */
     UpdateAnesthesiaRecordRequest: {
@@ -2324,6 +2780,638 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
+    }
+  }
+  listConsentTemplates: {
+    parameters: {
+      query?: {
+        /** @description 模板编码过滤（如 ANES_GENERAL）；缺省返回全部模板。 */
+        templateCode?: string
+        /** @description 是否只返回已生效（effectiveAt <= 当前时间）的版本；默认 true。 */
+        effectiveOnly?: boolean
+        /** @description 是否包含已停用（RETIRED）模板版本；默认 false（只返回 ACTIVE）。 */
+        includeRetired?: boolean
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 模板与版本列表；无匹配时为 items 空数组。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "templateId": "b1000000-0000-4000-8000-000000000002",
+           *           "templateCode": "ANES_GENERAL",
+           *           "version": 2,
+           *           "title": "麻醉知情同意书（演示模板 v2）",
+           *           "contentText": "【SYNTHETIC 演示模板】患者/法定代理人已了解麻醉目的、方式、替代方案与主要风险，同意实施麻醉。",
+           *           "effectiveAt": "2026-11-01T00:00:00+08:00",
+           *           "status": "ACTIVE",
+           *           "retiredAt": null,
+           *           "createdAt": "2026-11-13T00:00:00+08:00",
+           *           "createdBy": null
+           *         },
+           *         {
+           *           "templateId": "b1000000-0000-4000-8000-000000000001",
+           *           "templateCode": "ANES_GENERAL",
+           *           "version": 1,
+           *           "title": "麻醉知情同意书（演示模板 v1）",
+           *           "contentText": "【SYNTHETIC 演示模板】患者/法定代理人已了解麻醉目的、方式、替代方案与主要风险，同意实施麻醉。",
+           *           "effectiveAt": "2025-01-01T00:00:00+08:00",
+           *           "status": "ACTIVE",
+           *           "retiredAt": null,
+           *           "createdAt": "2026-11-13T00:00:00+08:00",
+           *           "createdBy": null
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['ConsentTemplateList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  retireConsentTemplate: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 模板标识（UUID 字符串）。 */
+        templateId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 已停用（status=RETIRED，retiredAt 非空）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "templateId": "b1000000-0000-4000-8000-000000000003",
+           *       "templateCode": "ANES_SEDATION",
+           *       "version": 1,
+           *       "title": "镇静/监护麻醉知情同意书（演示模板 v1）",
+           *       "contentText": "【SYNTHETIC 演示模板】镇静/监护麻醉告知文本。",
+           *       "effectiveAt": "2025-06-01T00:00:00+08:00",
+           *       "status": "RETIRED",
+           *       "retiredAt": "2026-12-01T09:00:00+08:00",
+           *       "createdAt": "2026-11-13T00:00:00+08:00",
+           *       "createdBy": null
+           *     }
+           */
+          'application/json': components['schemas']['ConsentTemplate']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
+  listConsents: {
+    parameters: {
+      query: {
+        /** @description 手术申请标识（UUID 字符串）。 */
+        applicationId: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 申请上下文与同意记录列表；无记录时 items 为空数组。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "application": {
+           *         "applicationId": "60000000-0000-4000-8000-000000000001",
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "patientSnapshot": {
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "hisPatientNo": "SYNTH-HIS-P-0001",
+           *           "patientName": "演示患者",
+           *           "gender": "FEMALE",
+           *           "birthDate": "1972-05-18",
+           *           "age": 54,
+           *           "departmentName": "演示手术科室（合成）",
+           *           "ward": "演示病区（合成）",
+           *           "bedNo": "01"
+           *         },
+           *         "surgeryName": "演示腹腔镜胆囊切除术（合成）",
+           *         "departmentName": "演示手术科室（合成）",
+           *         "status": "SCHEDULED"
+           *       },
+           *       "items": [
+           *         {
+           *           "consentId": "17000000-0000-4000-8000-000000000001",
+           *           "applicationId": "60000000-0000-4000-8000-000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "templateId": "b1000000-0000-4000-8000-000000000002",
+           *           "templateCode": "ANES_GENERAL",
+           *           "templateVersion": 2,
+           *           "templateTitle": "麻醉知情同意书（演示模板 v2）",
+           *           "status": "SIGNED",
+           *           "signerName": "演示患者",
+           *           "signerRelation": "SELF",
+           *           "signMethod": "ELECTRONIC",
+           *           "signedAt": "2026-12-01T08:30:00+08:00",
+           *           "signedBy": "10000000-0000-4000-8000-000000000002",
+           *           "signatureRef": "SIM-CA-17000000-0000-4000-8000-000000000001",
+           *           "signatureHash": "9c1f0d2e3b4a5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
+           *           "caStatus": "SIMULATED",
+           *           "declineReason": null,
+           *           "declinedAt": null,
+           *           "revokedAt": null,
+           *           "revokedBy": null,
+           *           "revokeReason": null,
+           *           "createdAt": "2026-12-01T08:20:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000002",
+           *           "updatedAt": "2026-12-01T08:30:00+08:00",
+           *           "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *           "version": 2
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['ConsentRecordList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  createConsent: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "applicationId": "60000000-0000-4000-8000-000000000001",
+         *       "templateId": "b1000000-0000-4000-8000-000000000002",
+         *       "templateVersion": 2,
+         *       "signerName": "演示患者",
+         *       "signerRelation": "SELF",
+         *       "signMethod": "ELECTRONIC"
+         *     }
+         */
+        'application/json': components['schemas']['CreateConsentRequest']
+      }
+    }
+    responses: {
+      /** @description 已创建（WAITING_SIGN）。caStatus 初始为 PENDING。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "consentId": "17000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "templateId": "b1000000-0000-4000-8000-000000000002",
+           *       "templateCode": "ANES_GENERAL",
+           *       "templateVersion": 2,
+           *       "templateTitle": "麻醉知情同意书（演示模板 v2）",
+           *       "status": "WAITING_SIGN",
+           *       "signerName": "演示患者",
+           *       "signerRelation": "SELF",
+           *       "signMethod": "ELECTRONIC",
+           *       "signedAt": null,
+           *       "signedBy": null,
+           *       "signatureRef": null,
+           *       "signatureHash": null,
+           *       "caStatus": "PENDING",
+           *       "declineReason": null,
+           *       "declinedAt": null,
+           *       "revokedAt": null,
+           *       "revokedBy": null,
+           *       "revokeReason": null,
+           *       "createdAt": "2026-12-01T08:20:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T08:20:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['ConsentRecord']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
+  getConsent: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 知情同意记录标识（UUID 字符串）。 */
+        consentId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 同意记录详情。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "consentId": "17000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "templateId": "b1000000-0000-4000-8000-000000000002",
+           *       "templateCode": "ANES_GENERAL",
+           *       "templateVersion": 2,
+           *       "templateTitle": "麻醉知情同意书（演示模板 v2）",
+           *       "status": "SIGNED",
+           *       "signerName": "演示患者",
+           *       "signerRelation": "SELF",
+           *       "signMethod": "ELECTRONIC",
+           *       "signedAt": "2026-12-01T08:30:00+08:00",
+           *       "signedBy": "10000000-0000-4000-8000-000000000002",
+           *       "signatureRef": "SIM-CA-17000000-0000-4000-8000-000000000001",
+           *       "signatureHash": "9c1f0d2e3b4a5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
+           *       "caStatus": "SIMULATED",
+           *       "declineReason": null,
+           *       "declinedAt": null,
+           *       "revokedAt": null,
+           *       "revokedBy": null,
+           *       "revokeReason": null,
+           *       "createdAt": "2026-12-01T08:20:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T08:30:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['ConsentRecord']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  signConsent: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 知情同意记录标识（UUID 字符串）。 */
+        consentId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "version": 1
+         *     }
+         */
+        'application/json': components['schemas']['SignConsentRequest']
+      }
+    }
+    responses: {
+      /** @description 已签署（SIGNED，caStatus=SIMULATED）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "consentId": "17000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "templateId": "b1000000-0000-4000-8000-000000000002",
+           *       "templateCode": "ANES_GENERAL",
+           *       "templateVersion": 2,
+           *       "templateTitle": "麻醉知情同意书（演示模板 v2）",
+           *       "status": "SIGNED",
+           *       "signerName": "演示患者",
+           *       "signerRelation": "SELF",
+           *       "signMethod": "ELECTRONIC",
+           *       "signedAt": "2026-12-01T08:30:00+08:00",
+           *       "signedBy": "10000000-0000-4000-8000-000000000002",
+           *       "signatureRef": "SIM-CA-17000000-0000-4000-8000-000000000001",
+           *       "signatureHash": "9c1f0d2e3b4a5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
+           *       "caStatus": "SIMULATED",
+           *       "declineReason": null,
+           *       "declinedAt": null,
+           *       "revokedAt": null,
+           *       "revokedBy": null,
+           *       "revokeReason": null,
+           *       "createdAt": "2026-12-01T08:20:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T08:30:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['ConsentRecord']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  declineConsent: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 知情同意记录标识（UUID 字符串）。 */
+        consentId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "version": 1,
+         *       "reason": "演示原因：患者要求暂缓手术（合成数据）"
+         *     }
+         */
+        'application/json': components['schemas']['DeclineConsentRequest']
+      }
+    }
+    responses: {
+      /** @description 已拒绝（DECLINED）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "consentId": "17000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "templateId": "b1000000-0000-4000-8000-000000000002",
+           *       "templateCode": "ANES_GENERAL",
+           *       "templateVersion": 2,
+           *       "templateTitle": "麻醉知情同意书（演示模板 v2）",
+           *       "status": "DECLINED",
+           *       "signerName": "演示患者",
+           *       "signerRelation": "SELF",
+           *       "signMethod": "ELECTRONIC",
+           *       "signedAt": null,
+           *       "signedBy": null,
+           *       "signatureRef": null,
+           *       "signatureHash": null,
+           *       "caStatus": "PENDING",
+           *       "declineReason": "演示原因：患者要求暂缓手术（合成数据）",
+           *       "declinedAt": "2026-12-01T08:25:00+08:00",
+           *       "revokedAt": null,
+           *       "revokedBy": null,
+           *       "revokeReason": null,
+           *       "createdAt": "2026-12-01T08:20:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T08:25:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['ConsentRecord']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  revokeConsent: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 知情同意记录标识（UUID 字符串）。 */
+        consentId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "version": 2,
+         *       "reason": "演示原因：患者术前改变意愿，撤回同意（合成数据）"
+         *     }
+         */
+        'application/json': components['schemas']['RevokeConsentRequest']
+      }
+    }
+    responses: {
+      /** @description 已撤销（REVOKED）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "consentId": "17000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "templateId": "b1000000-0000-4000-8000-000000000002",
+           *       "templateCode": "ANES_GENERAL",
+           *       "templateVersion": 2,
+           *       "templateTitle": "麻醉知情同意书（演示模板 v2）",
+           *       "status": "REVOKED",
+           *       "signerName": "演示患者",
+           *       "signerRelation": "SELF",
+           *       "signMethod": "ELECTRONIC",
+           *       "signedAt": "2026-12-01T08:30:00+08:00",
+           *       "signedBy": "10000000-0000-4000-8000-000000000002",
+           *       "signatureRef": "SIM-CA-17000000-0000-4000-8000-000000000001",
+           *       "signatureHash": "9c1f0d2e3b4a5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
+           *       "caStatus": "SIMULATED",
+           *       "declineReason": null,
+           *       "declinedAt": null,
+           *       "revokedAt": "2026-12-01T09:00:00+08:00",
+           *       "revokedBy": "10000000-0000-4000-8000-000000000002",
+           *       "revokeReason": "演示原因：患者术前改变意愿，撤回同意（合成数据）",
+           *       "createdAt": "2026-12-01T08:20:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T09:00:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 3
+           *     }
+           */
+          'application/json': components['schemas']['ConsentRecord']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  listApplicationThreeWayChecks: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 手术申请标识（UUID 字符串）。 */
+        applicationId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 申请上下文、核查版本列表与完成标记；无记录时 items 为空数组且 completed=false。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "application": {
+           *         "applicationId": "60000000-0000-4000-8000-000000000001",
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "patientSnapshot": {
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "hisPatientNo": "SYNTH-HIS-P-0001",
+           *           "patientName": "演示患者",
+           *           "gender": "FEMALE",
+           *           "birthDate": "1972-05-18",
+           *           "age": 54,
+           *           "departmentName": "演示手术科室（合成）",
+           *           "ward": "演示病区（合成）",
+           *           "bedNo": "01"
+           *         },
+           *         "surgeryName": "演示腹腔镜胆囊切除术（合成）",
+           *         "departmentName": "演示手术科室（合成）",
+           *         "status": "SCHEDULED"
+           *       },
+           *       "completed": false,
+           *       "items": [
+           *         {
+           *           "checkId": "18000000-0000-4000-8000-000000000001",
+           *           "applicationId": "60000000-0000-4000-8000-000000000001",
+           *           "timeOutAt": "2026-12-01T08:50:00+08:00",
+           *           "timeOutBy": "10000000-0000-4000-8000-000000000002",
+           *           "signOutAt": null,
+           *           "signOutBy": null,
+           *           "specimenChecked": true,
+           *           "implantChecked": true,
+           *           "issues": [],
+           *           "createdAt": "2026-12-01T08:52:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000002",
+           *           "updatedAt": "2026-12-01T08:52:00+08:00",
+           *           "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *           "version": 1
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['ApplicationThreeWayCheckList']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  recordApplicationThreeWayCheck: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 手术申请标识（UUID 字符串）。 */
+        applicationId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "timeOutAt": "2026-12-01T08:50:00+08:00",
+         *       "specimenChecked": true,
+         *       "implantChecked": true,
+         *       "issues": []
+         *     }
+         */
+        'application/json': components['schemas']['RecordApplicationThreeWayCheckRequest']
+      }
+    }
+    responses: {
+      /** @description 已新增核查版本（checkVersion = 申请内递增）。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "checkId": "18000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "timeOutAt": "2026-12-01T08:50:00+08:00",
+           *       "timeOutBy": "10000000-0000-4000-8000-000000000002",
+           *       "signOutAt": null,
+           *       "signOutBy": null,
+           *       "specimenChecked": true,
+           *       "implantChecked": true,
+           *       "issues": [],
+           *       "createdAt": "2026-12-01T08:52:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T08:52:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['ApplicationThreeWayCheck']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
     }
   }
 }

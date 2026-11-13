@@ -297,21 +297,77 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 
 说明：随访任务由 M2 生成并超时提醒；PCA 与神经阻滞随访字段在 M2 细化【待确认】。
 
-### 3.8 三方核查 `three_way_check`
+### 3.8 三方核查 `m2_anes.three_way_check`（V11 已实现，M2-M5-01）
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `check_id` | bigint | 是 | 主键 | 契约 `ThreeWayCheck` |
-| `record_id` | bigint | 是 | 麻醉记录单；1:1 | §2.4.3 |
+| `id` | uuid | 是 | 主键（gen_random_uuid） | 契约 `ApplicationThreeWayCheck.checkId` |
+| `application_id` | uuid | 是 | 手术申请（FK `m1_sched.surgery_application`） | §2.4.3、V11 |
+| `check_version` | integer | 是 | 申请内版本号（从 1 递增，唯一） | append-only |
 | `time_out_at` | timestamptz | 是 | 切皮前 Time-out 完成时间 | §2.4.3 |
-| `time_out_by` | bigint | 是 | Time-out 执行人 | §2.4.3、§3.9.2 |
-| `sign_out_at` | timestamptz | 是 | 出室前 Sign-out 完成时间 | §2.4.3 |
-| `sign_out_by` | bigint | 是 | Sign-out 执行人 | §2.4.3、§3.9.2 |
+| `time_out_by` | uuid | 是 | Time-out 执行人（用户标识） | §2.4.3、§3.9.2 |
+| `sign_out_at` | timestamptz | 否 | 出室前 Sign-out 完成时间；未完成为 NULL | §2.4.3 |
+| `sign_out_by` | uuid | 否 | Sign-out 执行人；与 `sign_out_at` 成对 | §2.4.3、§3.9.2 |
 | `specimen_checked` | boolean | 是 | 标本核对是否一致 | §2.4.3 |
 | `implant_checked` | boolean | 是 | 植入物与耗材核对是否一致 | §2.4.3 |
-| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
+| `issues` | jsonb | 是 | 问题项字符串数组（最多 20 条，每条 ≤200 字） | V11 |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by`（append-only，updated=created） | §3.4.3 |
 
-说明：三方核查是锁单前置条件，`time_out_at` 与 `sign_out_at` 均记录后才允许锁单（§2.4.3）；记录单接口通过 `threeWayCheck*` 只读摘要字段暴露完成状态。核查记录是否独立成表【待确认】。
+说明：三方核查是锁单前置条件。本期实现**手术申请维度**的 append-only 版本化核查：每次录入新增
+`check_version`，记录不可 UPDATE/DELETE/TRUNCATE（触发器 SQLSTATE 55000）；最新版本同时含
+`time_out_at` 与 `sign_out_at` 视为完成，M3 锁单通过
+`ThreeWayCheckService.isThreeWayCheckCompleted(applicationId)` 读取（不直接读表）。记录单
+(record)维度的 `ThreeWayCheck` 契约不变，其表结构与 1:1 关系实现留 M3；两维度通过
+`application_id` 关联。
+
+### 3.9 知情同意模板 `m2_anes.consent_template`（V11 已实现，M2-M5-01）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键 | 契约 `ConsentTemplate.templateId` |
+| `template_code` | varchar(64) | 是 | 模板编码（如 ANES_GENERAL） | §2.4.3 |
+| `version` | integer | 是 | 模板业务版本（从 1 起）；`UNIQUE (template_code, version)` | §2.4.3 |
+| `title` | varchar(200) | 是 | 模板标题 | V11 |
+| `content_text` | text | 是 | 模板正文（患者签署的告知文本，不可修改） | §2.4.3 |
+| `effective_at` | timestamptz | 是 | 生效时间；未生效版本不用于新签署 | V11 |
+| `status` | varchar(16) | 是 | ACTIVE（可选用）/RETIRED（已停用，仅历史引用） | M2-M5-01 复审 |
+| `retired_at` / `retired_by` | timestamptz / uuid | 否 | 停用时间/操作人；仅 RETIRED 有 `retired_at` | M2-M5-01 复审 |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by`（内容 append-only） | §3.4.3 |
+
+说明：模板内容不可变，新版本以新的 `(template_code, version)` 另建（触发器拒绝内容
+UPDATE/DELETE/TRUNCATE）；唯一允许一次 `ACTIVE→RETIRED`（停用），停用后不可用于新签署，
+历史记录仍引用旧版本。V11 内置 3 条 SYNTHETIC 演示模板；正式文本、生效日期与版本审批流
+须医务处/法务确认（Q-4）。
+
+### 3.10 知情同意记录 `m2_anes.consent_record`（V11 已实现，M2-M5-01）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键 | 契约 `ConsentRecord.consentId` |
+| `application_id` | uuid | 是 | 手术申请（FK；数据范围沿申请可见性） | §2.4.3 |
+| `patient_id` | uuid | 是 | 患者标识（取申请快照，无证件号/手机号） | §3.9.3 |
+| `template_id` | uuid | 是 | 同意模板（FK） | §2.4.3 |
+| `template_version` | integer | 是 | 签署时冻结的模板版本 | §2.4.3 |
+| `status` | varchar(16) | 是 | DRAFT/WAITING_SIGN/SIGNED/DECLINED/REVOKED | M2-M5-01 |
+| `signer_name` | varchar(64) | 否 | 签署人姓名（只落库，不入日志/审计） | §3.9.3 |
+| `signer_relation` | varchar(32) | 否 | SELF/SPOUSE/PARENT/CHILD/LEGAL_GUARDIAN/OTHER | M2-M5-01 |
+| `sign_method` | varchar(16) | 否 | PAPER/ELECTRONIC（ELECTRONIC 当前为 CA 占位） | M2-M5-01 |
+| `signed_at` | timestamptz | 否 | 签署完成时间 | §2.4.3 |
+| `signed_by` | uuid | 否 | 签署操作人 | §3.9.2 |
+| `signature_ref` | varchar(128) | 否 | 占位签名标识 `SIM-CA-<uuid>`；无签名原文/图片 | §3.9.4、EXT-05 |
+| `signature_hash` | varchar(64) | 否 | SHA-256 十六进制摘要（元数据 + 模板正文摘要，不含姓名） | §3.9.4、EXT-05 |
+| `ca_status` | varchar(16) | 是 | PENDING/SIMULATED/VERIFIED/FAILED | §3.9.4 |
+| `decline_reason` / `declined_at` | varchar(500) / timestamptz | 否 | 拒绝原因与时间（仅 DECLINED） | M2-M5-01 |
+| `revoked_at` / `revoked_by` / `revoke_reason` | timestamptz / uuid / varchar(500) | 否 | 撤销时间/操作人/原因（仅 REVOKED，原因必填） | M2-M5-01 |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by/version/deleted` | §3.4.3 |
+
+说明：状态机 WAITING_SIGN → SIGNED | DECLINED；SIGNED → REVOKED。同一申请 + 同一模板版本
+同时最多一条有效记录（`uk_consent_record_active`；拒绝/撤销后可重新知情同意并保留原记录）；
+**同一申请同时最多一条 SIGNED**（`uk_consent_record_signed_application`，`WHERE status='SIGNED'`），
+即“当前有效同意”，下游 M3 取 `signed_at` 最新的 SIGNED，DECLINED/REVOKED 不占位。
+V11 守卫触发器保证身份列与 `signer_name/signer_relation/sign_method` 在所有状态不可变、
+终态不可改、已签署只能携带原因撤销且签名留痕不可改写、DELETE/TRUNCATE 拒绝。
+CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成法律意义上的电子签名。
 
 ## 4. 与契约的对应
 
@@ -324,7 +380,10 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 | `PreopAssessment` | `m2_anes.preop_assessment` | 评分输入/结果、麻醉计划、最终化（V10） |
 | `PreopVisit`（0.2.0 骨架） | 未落表 | 保留兼容，计划 1.0.0 收敛 |
 | `AnesthesiaRecord` | `anesthesia_record` | 状态机与锁单 |
-| `ThreeWayCheck` | `three_way_check` | 三方核查，锁单前置条件 |
+| `ApplicationThreeWayCheck` | `m2_anes.three_way_check` | 申请维度三方核查（V11，append-only 版本） |
+| `ThreeWayCheck`（记录维度） | 未落表（M3） | 记录单维度核查，契约保持不变，实现留 M3 |
+| `ConsentTemplate` | `m2_anes.consent_template` | 模板与版本，内容不可变（V11） |
+| `ConsentRecord` | `m2_anes.consent_record` | 同意记录与签署状态机、CA 占位签名（V11） |
 | `AnesthesiaEvent` | `anesthesia_event` | 事件时间/录入时间分离 |
 | `FollowUp` | `follow_up` | 24/48 小时随访 |
 | `CurrentUser`、`DataScope` | `sys_user`、`sys_role_data_scope` 等 | 权限投影，不是单表 |
@@ -336,7 +395,8 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 2. 术间设备配置结构、实时状态承载、隔离字段命名。
 3. 角色/权限/数据范围四张表的最终表名、权限点编码规范。
 4. 排程 `sequence_no` 唯一约束、跨天排程与改台记录是否独立成表。
-5. 麻醉记录单修订版本表、`record_hash` 算法与 CA 签名字段；三方核查是否独立成表。
+5. 麻醉记录单修订版本表与 `record_hash` 算法；记录单维度三方核查（M3）的表结构与
+   1:1 关系；CA 有效签名（EXT-05）解除后的证书链/时间戳字段。
 6. DASI 评分范围（V10 起按通行 0–58.2 实现）与院方口径、功能容量 <4 METs 切点，待临床确认。
 7. 用药剂量单位/途径字典、麻精双人核对签名字段与空安瓿台账。
 8. 生命体征指标编码、单位、采样间隔、波形存储（D-04）。

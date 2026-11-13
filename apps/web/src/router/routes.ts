@@ -8,6 +8,10 @@ import ApplicationDetailView from '../modules/m1/views/ApplicationDetailView.vue
 import ScheduleBoardView from '../modules/m1/views/ScheduleBoardView.vue'
 import PreopEntryView from '../modules/m2/views/PreopEntryView.vue'
 import PreopAssessmentView from '../modules/m2/views/PreopAssessmentView.vue'
+import ConsentEntryView from '../modules/m2/views/ConsentEntryView.vue'
+import ConsentView from '../modules/m2/views/ConsentView.vue'
+import ThreeWayCheckEntryView from '../modules/m2/views/ThreeWayCheckEntryView.vue'
+import ThreeWayCheckView from '../modules/m2/views/ThreeWayCheckView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -80,6 +84,40 @@ export const routes: RouteRecordRaw[] = [
           title: '术前访视与评估',
           icon: 'sessions',
           permissions: ['m2:preop:read'],
+          menu: false,
+        },
+      },
+      {
+        path: 'm2/consent',
+        name: 'm2-consent-entry',
+        component: ConsentEntryView,
+        meta: menuMeta('/m2/consent'),
+      },
+      {
+        path: 'm2/consent/:applicationId',
+        name: 'm2-consent',
+        component: ConsentView,
+        meta: {
+          title: '知情同意',
+          icon: 'lock',
+          permissions: ['m2:consent:read'],
+          menu: false,
+        },
+      },
+      {
+        path: 'm2/three-way',
+        name: 'm2-three-way-entry',
+        component: ThreeWayCheckEntryView,
+        meta: menuMeta('/m2/three-way'),
+      },
+      {
+        path: 'm2/three-way/:applicationId',
+        name: 'm2-three-way',
+        component: ThreeWayCheckView,
+        meta: {
+          title: '三方核查',
+          icon: 'sessions',
+          permissions: ['m2:threeway:read'],
           menu: false,
         },
       },

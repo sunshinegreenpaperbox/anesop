@@ -39,6 +39,18 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m2:preop:read'],
   },
   {
+    path: '/m2/consent',
+    title: '知情同意',
+    icon: 'lock',
+    permissions: ['m2:consent:read'],
+  },
+  {
+    path: '/m2/three-way',
+    title: '三方核查',
+    icon: 'sessions',
+    permissions: ['m2:threeway:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',
