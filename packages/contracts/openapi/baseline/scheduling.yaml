@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: ANESOP 手术排程契约（scheduling）
-  summary: 术间资源、排程查询与创建、冲突检测、急诊加台与停台
+  summary: 术间资源、排程查询与创建、冲突检测、急诊加台、停台与排程分析
   description: |
     ANESOP 手术排程域契约，对应方案书 §2.4.2（M1 手术排程管理）与 §3.4.2（排程/台次实体）。
     硬规则：同术间时段不重叠、冲突不得强行保存、急诊加台优先于择期、停台改台必选原因码。
@@ -17,7 +17,18 @@ info:
     改为**必填**（与方案书 §2.4.2「停台改台必选原因码」对齐）。
     旧 `POST .../cancel` 保留为 0.4.0 兼容（不删除，计划 1.0.0 收敛），但同样写入变更记录与
     通知 outbox，不再绕过变更历史。
-  version: 0.5.0
+
+    0.6.0（M2-M6-01，additive）新增排程分析只读接口：
+    `GET /v1/scheduling/analytics/utilization`（术间利用率）、
+    `GET /v1/scheduling/analytics/on-time`（首台准点开台率）、
+    `GET /v1/scheduling/analytics/cancellations`（取消率，按原因码分组）与
+    `GET /v1/scheduling/analytics/export`（脱敏 CSV，UTF-8 BOM）。准点率以“计划首台”为口径，
+    取消/未开始的计划首台按术间-日计入 `excludedDays`（不进入分母），并新增可选字段；
+    导出对以 `= + - @`/制表/回车开头的单元格前置单引号防公式注入。
+    权限点 `m1:analytics:read`（V12 授 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER）；
+    时间范围必填、按 Asia/Shanghai 本地日期解释、跨度 ≤ 92 天；数据范围 DEPT/ROOM 与现有排程一致。
+    口径由院方最终确定（D-21：系统出数、绩效规则院方另定），未确认项在 description 标注【待确认】。
+  version: 0.6.0
   contact:
     name: ANESOP 项目组
   license:
@@ -30,6 +41,8 @@ security:
 tags:
   - name: 手术排程
     description: 术间资源、日排程、冲突检测、急诊加台与停台操作。
+  - name: 排程分析
+    description: 术间利用率、首台准点开台率、取消率与脱敏 CSV 导出（只读聚合，口径见字段说明）。
 paths:
   /v1/scheduling/rooms:
     get:
@@ -1065,6 +1078,350 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /v1/scheduling/analytics/utilization:
+    get:
+      operationId: getSchedulingUtilization
+      tags:
+        - 排程分析
+      summary: 术间利用率（按术间与汇总）
+      description: |
+        只读聚合，权限 `m1:analytics:read`；数据范围与排程工作台一致（DEPT 本科室 / ROOM 绑定术间，
+        未绑定或无可见术间 403）。
+
+        口径（口径版本 analytics-1.0.0，时区 **Asia/Shanghai**）：
+        `术间利用率 = 总手术时长 / 可用时长`。
+        - `from`/`to` 为本地日期闭区间，跨度（含首尾）**默认 92 天**，可配置
+          `anesop.m1.analytics.max-range-days` 但**上限夹紧为 92 天**（配置 >92 时按 92 生效并 WARN），
+          超过当前上限返回 400；
+        - 分子 `totalSurgeryMinutes`：状态非 `CANCELLED` 的台次与查询区间重叠部分的**计划时长**
+          （非实际占用/麻醉时长，口径【待确认】），跨日/跨区间按重叠分钟裁剪；
+          台次按 `start_at` 归属，跨日不重复计入次日；
+        - 分母 `availableMinutes`：可见术间数 × 区间天数 × `availableMinutesPerRoomPerDay`
+          （默认 600 分钟/间/日，可配置 `anesop.m1.analytics.room-daily-available-minutes`）。
+          分母按区间内**全部自然日**计算，当前**未排除未来日期、停诊日或节假日**，
+          院方实际开放时长与开诊日历均标【待确认】；
+        - 无可见术间或无台次时各项为 0，`utilizationRate` 返回 0，不做除零；
+        - 利用率可大于 1（超排/跨区间），客户端按实际值展示。
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: 起始本地日期（含），格式 YYYY-MM-DD，按 Asia/Shanghai 解释。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: 结束本地日期（含），格式 YYYY-MM-DD；与 from 跨度默认 ≤ 92 天（上限 92）。
+          schema:
+            type: string
+            format: date
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；仅统计该科室术间，且必须在当前用户数据范围内（越界 403）。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 术间利用率汇总与明细（仅聚合值，不含患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UtilizationReport'
+              example:
+                from: '2026-12-01'
+                to: '2026-12-01'
+                timezone: Asia/Shanghai
+                formula: 总手术时长 / 可用时长
+                availableMinutesPerRoomPerDay: 600
+                days: 1
+                roomCount: 2
+                summary:
+                  totalSurgeryMinutes: 180
+                  availableMinutes: 1200
+                  utilizationRate: 0.15
+                  caseCount: 2
+                  roomCount: 2
+                  days: 1
+                rooms:
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c1'
+                    roomNo: OR-01
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    totalSurgeryMinutes: 120
+                    availableMinutes: 600
+                    utilizationRate: 0.2
+                    caseCount: 1
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c2'
+                    roomNo: OR-02
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    totalSurgeryMinutes: 60
+                    availableMinutes: 600
+                    utilizationRate: 0.1
+                    caseCount: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/scheduling/analytics/on-time:
+    get:
+      operationId: getSchedulingOnTimeRate
+      tags:
+        - 排程分析
+      summary: 首台准点开台率（按术间与汇总）
+      description: |
+        只读聚合，权限 `m1:analytics:read`；数据范围同排程工作台。
+
+        口径（口径版本 analytics-1.0.0，时区 **Asia/Shanghai**）：
+        `首台准点率 = 准点首台台次 / 已评估首台台次`。
+        - 首台：同一术间、同一本地日期内**计划开始最早**的台次（不论状态，按 `start_at` 排序，
+          相同时按 `sequence`、`id` 稳定排序）；
+        - 若该计划首台为 `CANCELLED` 或未开始（`PLANNED`/`PUBLISHED`/`DELAYED`），或缺少实际开始
+          时间，则该术间-日**不纳入准点评估**（分母排除），计入 `excludedDays`，
+          **不以下一台次替代**；`firstCaseCount = evaluatedCaseCount + excludedDays`；
+        - 实际开始：**MVP 以台次最近更新时间 `updated_at` 近似**（V8 无独立 actualStart 列，
+          HIS 尚未回写实际开台时间与真实状态；【待确认】）。正式口径须由 HIS/M3 回写真实切皮/开台
+          时间后替换；系统内该数据当前不足；
+        - 准点判定：`abs(实际开始 - 计划开始) ≤ thresholdMinutes`（默认 15 分钟，可配置
+          `anesop.m1.analytics.on-time-threshold-minutes`）；早于计划同样按绝对值计入；
+        - 分母为 0 时 `onTimeRate=0`、计数为 0，不做除零；前端在 `evaluatedCaseCount=0` 时展示
+          “暂无数据”而非 0.0%；
+        - 响应 `actualStartSource=SCHEDULE_UPDATED_AT` 明示代理口径，便于前端提示。
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: 起始本地日期（含），格式 YYYY-MM-DD，按 Asia/Shanghai 解释。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: 结束本地日期（含），格式 YYYY-MM-DD；与 from 跨度默认 ≤ 92 天（上限 92）。
+          schema:
+            type: string
+            format: date
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；仅统计该科室术间，且必须在当前用户数据范围内（越界 403）。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 首台准点率汇总与明细（仅聚合值，不含患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnTimeReport'
+              example:
+                from: '2026-12-01'
+                to: '2026-12-01'
+                timezone: Asia/Shanghai
+                thresholdMinutes: 15
+                actualStartSource: SCHEDULE_UPDATED_AT
+                summary:
+                  firstCaseCount: 2
+                  evaluatedCaseCount: 2
+                  excludedDays: 0
+                  onTimeCount: 1
+                  delayedCount: 1
+                  onTimeRate: 0.5
+                rooms:
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c1'
+                    roomNo: OR-01
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    firstCaseCount: 1
+                    evaluatedCaseCount: 1
+                    excludedDays: 0
+                    onTimeCount: 1
+                    delayedCount: 0
+                    onTimeRate: 1.0
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c2'
+                    roomNo: OR-02
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    firstCaseCount: 1
+                    evaluatedCaseCount: 1
+                    excludedDays: 0
+                    onTimeCount: 0
+                    delayedCount: 1
+                    onTimeRate: 0.0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/scheduling/analytics/cancellations:
+    get:
+      operationId: getSchedulingCancellationRate
+      tags:
+        - 排程分析
+      summary: 取消率（按原因码与术间分组）
+      description: |
+        只读聚合，权限 `m1:analytics:read`；数据范围同排程工作台。
+
+        口径（口径版本 analytics-1.0.0，时区 **Asia/Shanghai**）：
+        `取消率 = 取消台次 / 总台次`。
+        - 统计区间内（按台次计划开始日期归属）全部未删除台次，已取消台次也进入分母；
+        - `from`/`to` 跨度（含首尾）默认 92 天，可配置但上限夹紧为 92 天，超过当前上限返回 400；
+        - 取消台次为 `status=CANCELLED`（含急诊抢占择期台次，原因码 `EMERGENCY_PREEMPT`）；
+        - 原因码取该台次最近一条 `STOP` 变更记录；无变更记录（历史数据）归 `UNSPECIFIED`，
+          不臆造具体原因；
+        - 分母为 0 时 `cancellationRate=0`，不做除零；原因占比 `shareOfCancelled` 在取消数为 0 时为 0。
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: 起始本地日期（含），格式 YYYY-MM-DD，按 Asia/Shanghai 解释。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: 结束本地日期（含），格式 YYYY-MM-DD；与 from 跨度默认 ≤ 92 天（上限 92）。
+          schema:
+            type: string
+            format: date
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；仅统计该科室术间，且必须在当前用户数据范围内（越界 403）。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 取消率汇总、原因码分组与术间明细（仅聚合值，不含患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancellationReport'
+              example:
+                from: '2026-12-01'
+                to: '2026-12-01'
+                timezone: Asia/Shanghai
+                summary:
+                  totalCases: 4
+                  cancelledCases: 1
+                  cancellationRate: 0.25
+                byReason:
+                  - reasonCode: PATIENT_CONDITION
+                    cancelledCases: 1
+                    shareOfCancelled: 1.0
+                byRoom:
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c1'
+                    roomNo: OR-01
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    totalCases: 3
+                    cancelledCases: 1
+                    cancellationRate: 0.3333
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c2'
+                    roomNo: OR-02
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    totalCases: 1
+                    cancelledCases: 0
+                    cancellationRate: 0.0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/scheduling/analytics/export:
+    get:
+      operationId: exportSchedulingAnalytics
+      tags:
+        - 排程分析
+      summary: 导出排程分析 CSV（脱敏）
+      description: |
+        只读导出，权限 `m1:analytics:read`；数据范围与对应分析接口一致。
+
+        脱敏要求（AGENTS 患者数据红线）：
+        - 仅输出指标名、日期区间、术间编号/科室、聚合计数与比率；
+        - **不含**患者姓名、住院号、证件号、手机号、诊断、手术申请号或任何患者标识；
+        - UTF-8 编码并带 BOM（Excel 中文兼容）；`Content-Type: text/csv;charset=UTF-8`；
+        - **公式注入防护**：以 `=`、`+`、`-`、`@`、制表符或回车开头的单元格先前置单引号 `'`，
+          再按 CSV 规则处理逗号/引号/换行，防止 Excel/Sheets 将科室名、术间号或原因码当公式执行；
+        - 流式输出，行数随术间/原因码数量变化；空数据集仍输出表头与汇总 0 行。
+
+        `metric` 取值与列口径：
+        - `utilization`：利用率汇总 + 每术间；
+        - `on-time`：准点率汇总 + 每术间；
+        - `cancellations`：取消率汇总 + 每术间 + 每原因码。
+        参数校验：`metric`/`format` 非法、缺 `from`/`to`、跨度超过 92 天上限、`deptId` 非法 → 400。
+      parameters:
+        - name: metric
+          in: query
+          required: true
+          description: 指标：utilization=利用率，on-time=准点率，cancellations=取消率。
+          schema:
+            type: string
+            enum:
+              - utilization
+              - on-time
+              - cancellations
+        - name: from
+          in: query
+          required: true
+          description: 起始本地日期（含），格式 YYYY-MM-DD，按 Asia/Shanghai 解释。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: 结束本地日期（含），格式 YYYY-MM-DD；与 from 跨度默认 ≤ 92 天（上限 92）。
+          schema:
+            type: string
+            format: date
+        - name: format
+          in: query
+          required: true
+          description: 导出格式；当前仅支持 csv（UTF-8 BOM）。
+          schema:
+            type: string
+            enum:
+              - csv
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；仅导出该科室术间，且必须在当前用户数据范围内（越界 403）。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 脱敏 CSV 文件（UTF-8 BOM），仅聚合值与术间/日期。
+          headers:
+            Content-Disposition:
+              description: 附件文件名，形如 attachment; filename="scheduling-utilization-2026-12-01-2026-12-31.csv"。
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+              example: |
+                metric,from,to,scope,roomNo,deptName,reasonCode,totalSurgeryMinutes,availableMinutes,utilizationRate,caseCount,firstCaseCount,evaluatedCaseCount,onTimeCount,onTimeRate,totalCases,cancelledCases,cancellationRate,shareOfCancelled
+                utilization,2026-12-01,2026-12-01,SUMMARY,ALL,ALL,,180,1200,0.15,2,,,,,,,,
+                utilization,2026-12-01,2026-12-01,ROOM,OR-01,麻醉科（合成）,,120,600,0.2,1,,,,,,,,
+                utilization,2026-12-01,2026-12-01,ROOM,OR-02,麻醉科（合成）,,60,600,0.1,1,,,,,,,,
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 components:
   securitySchemes:
     bearerAuth:
@@ -1293,6 +1650,16 @@ components:
             siteId:
               type: string
               description: 院区标识。
+            deptId:
+              type:
+                - string
+                - 'null'
+              description: 术间所属科室标识（UUID）；排程分析按此过滤，未配置为 null。
+            deptName:
+              type:
+                - string
+                - 'null'
+              description: 术间所属科室名称（演示合成文本）；用于排程分析筛选展示。
             status:
               type: string
               description: 术间当前状态。
@@ -2184,3 +2551,396 @@ components:
           type: integer
           description: 申请当前版本号，用于乐观锁。
           minimum: 1
+    UtilizationRoom:
+      type: object
+      description: 单术间利用率明细（仅聚合值）。
+      required:
+        - roomId
+        - roomNo
+        - totalSurgeryMinutes
+        - availableMinutes
+        - utilizationRate
+        - caseCount
+      properties:
+        roomId:
+          type: string
+          description: 术间标识。
+        roomNo:
+          type: string
+          description: 术间编号（院内唯一，可安全展示）。
+        deptId:
+          type:
+            - string
+            - 'null'
+          description: 术间所属科室标识；未配置为 null。
+        deptName:
+          type:
+            - string
+            - 'null'
+          description: 术间所属科室名称（演示合成文本）；未配置为 null。
+        totalSurgeryMinutes:
+          type: integer
+          description: 区间内非 CANCELLED 台次与查询区间重叠的计划分钟数（跨日按重叠裁剪）。
+          minimum: 0
+        availableMinutes:
+          type: integer
+          description: 该术间区间可用分钟数 = 区间天数 × 每间每日可用分钟配置。
+          minimum: 0
+        utilizationRate:
+          type: number
+          format: double
+          description: 利用率 = totalSurgeryMinutes / availableMinutes；分母为 0 时为 0，可大于 1。
+          minimum: 0
+        caseCount:
+          type: integer
+          description: 区间内非 CANCELLED 台次数。
+          minimum: 0
+    UtilizationSummary:
+      type: object
+      description: 利用率汇总（所有可见术间）。
+      required:
+        - totalSurgeryMinutes
+        - availableMinutes
+        - utilizationRate
+        - caseCount
+        - roomCount
+        - days
+      properties:
+        totalSurgeryMinutes:
+          type: integer
+          description: 汇总总手术分钟数。
+          minimum: 0
+        availableMinutes:
+          type: integer
+          description: 汇总可用分钟数 = 可见术间数 × 区间天数 × 每间每日可用分钟配置。
+          minimum: 0
+        utilizationRate:
+          type: number
+          format: double
+          description: 汇总利用率 = totalSurgeryMinutes / availableMinutes；分母为 0 时为 0。
+          minimum: 0
+        caseCount:
+          type: integer
+          description: 汇总台次数。
+          minimum: 0
+        roomCount:
+          type: integer
+          description: 纳入统计的可见术间数。
+          minimum: 0
+        days:
+          type: integer
+          description: 区间天数（含首尾）。
+          minimum: 0
+    UtilizationReport:
+      type: object
+      description: 术间利用率报告（口径版本 analytics-1.0.0，Asia/Shanghai）。
+      required:
+        - from
+        - to
+        - timezone
+        - formula
+        - availableMinutesPerRoomPerDay
+        - days
+        - roomCount
+        - summary
+        - rooms
+      properties:
+        from:
+          type: string
+          format: date
+          description: 起始本地日期（含）。
+        to:
+          type: string
+          format: date
+          description: 结束本地日期（含）。
+        timezone:
+          type: string
+          description: 统计时区；固定 Asia/Shanghai（DST 不受影响）。
+          examples:
+            - Asia/Shanghai
+        formula:
+          type: string
+          description: 口径公式说明（展示用，不参与计算）。
+          examples:
+            - 总手术时长 / 可用时长
+        availableMinutesPerRoomPerDay:
+          type: integer
+          description: 每术间每日可用分钟配置（默认 600，院方口径【待确认】）。
+          minimum: 1
+        days:
+          type: integer
+          description: 区间天数（含首尾）。
+          minimum: 0
+        roomCount:
+          type: integer
+          description: 纳入统计的可见术间数。
+          minimum: 0
+        summary:
+          $ref: '#/components/schemas/UtilizationSummary'
+        rooms:
+          type: array
+          description: 按术间编号排序的利用率明细；无可见术间时为空数组。
+          items:
+            $ref: '#/components/schemas/UtilizationRoom'
+    OnTimeRoom:
+      type: object
+      description: 单术间首台准点明细（仅聚合值）。
+      required:
+        - roomId
+        - roomNo
+        - firstCaseCount
+        - evaluatedCaseCount
+        - excludedDays
+        - onTimeCount
+        - delayedCount
+        - onTimeRate
+      properties:
+        roomId:
+          type: string
+          description: 术间标识。
+        roomNo:
+          type: string
+          description: 术间编号。
+        deptId:
+          type:
+            - string
+            - 'null'
+          description: 术间所属科室标识；未配置为 null。
+        deptName:
+          type:
+            - string
+            - 'null'
+          description: 术间所属科室名称（演示合成文本）；未配置为 null。
+        firstCaseCount:
+          type: integer
+          description: 计划首台术间-日数（同日同术间计划开始最早的台次，不论状态）。
+          minimum: 0
+        evaluatedCaseCount:
+          type: integer
+          description: 已评估首台数（计划首台已开始且实际开始时间可用）。
+          minimum: 0
+        excludedDays:
+          type: integer
+          description: 未纳入评估的术间-日数（计划首台取消/未开始/缺实际开始时间；从分母排除）。
+          minimum: 0
+        onTimeCount:
+          type: integer
+          description: 准点首台数（|实际开始 - 计划开始| ≤ 阈值）。
+          minimum: 0
+        delayedCount:
+          type: integer
+          description: 延误首台数 = evaluatedCaseCount - onTimeCount。
+          minimum: 0
+        onTimeRate:
+          type: number
+          format: double
+          description: 准点率 = onTimeCount / evaluatedCaseCount；分母为 0 时为 0。
+          minimum: 0
+          maximum: 1
+    OnTimeSummary:
+      type: object
+      description: 首台准点率汇总。
+      required:
+        - firstCaseCount
+        - evaluatedCaseCount
+        - excludedDays
+        - onTimeCount
+        - delayedCount
+        - onTimeRate
+      properties:
+        firstCaseCount:
+          type: integer
+          description: 汇总计划首台术间-日数（= evaluatedCaseCount + excludedDays）。
+          minimum: 0
+        evaluatedCaseCount:
+          type: integer
+          description: 汇总已评估首台数（准点率分母）。
+          minimum: 0
+        excludedDays:
+          type: integer
+          description: 汇总未纳入评估的术间-日数（计划首台取消/未开始/缺实际开始时间）。
+          minimum: 0
+        onTimeCount:
+          type: integer
+          description: 汇总准点首台数。
+          minimum: 0
+        delayedCount:
+          type: integer
+          description: 汇总延误首台数。
+          minimum: 0
+        onTimeRate:
+          type: number
+          format: double
+          description: 汇总准点率；分母为 0 时为 0。
+          minimum: 0
+          maximum: 1
+    OnTimeReport:
+      type: object
+      description: 首台准点开台率报告（口径版本 analytics-1.0.0，Asia/Shanghai）。
+      required:
+        - from
+        - to
+        - timezone
+        - thresholdMinutes
+        - actualStartSource
+        - summary
+        - rooms
+      properties:
+        from:
+          type: string
+          format: date
+          description: 起始本地日期（含）。
+        to:
+          type: string
+          format: date
+          description: 结束本地日期（含）。
+        timezone:
+          type: string
+          description: 统计时区；固定 Asia/Shanghai。
+          examples:
+            - Asia/Shanghai
+        thresholdMinutes:
+          type: integer
+          description: 准点阈值（分钟，默认 15，可配置 anesop.m1.analytics.on-time-threshold-minutes）。
+          minimum: 0
+          maximum: 1440
+        actualStartSource:
+          type: string
+          description: 实际开始数据来源；MVP 固定 SCHEDULE_UPDATED_AT（HIS 回写前【待确认】）。
+          enum:
+            - SCHEDULE_UPDATED_AT
+        summary:
+          $ref: '#/components/schemas/OnTimeSummary'
+        rooms:
+          type: array
+          description: 按术间编号排序的准点明细；无可见术间时为空数组。
+          items:
+            $ref: '#/components/schemas/OnTimeRoom'
+    CancellationReason:
+      type: object
+      description: 取消原因码分组（仅聚合计数）。
+      required:
+        - reasonCode
+        - cancelledCases
+        - shareOfCancelled
+      properties:
+        reasonCode:
+          type: string
+          description: 原因码；取最近一条 STOP 变更记录，无记录为 UNSPECIFIED（不臆造原因）。
+          x-extensible-enum:
+            - PATIENT_CONDITION
+            - SURGEON_UNAVAILABLE
+            - ROOM_EQUIPMENT_FAILURE
+            - ANESTHESIA_RISK
+            - SCHEDULE_CHANGE
+            - OTHER
+            - EMERGENCY_PREEMPT
+            - UNSPECIFIED
+        cancelledCases:
+          type: integer
+          description: 该原因码取消台次数。
+          minimum: 0
+        shareOfCancelled:
+          type: number
+          format: double
+          description: 占全部取消台次比例；取消数为 0 时为 0。
+          minimum: 0
+          maximum: 1
+    CancellationRoom:
+      type: object
+      description: 单术间取消率明细（仅聚合值）。
+      required:
+        - roomId
+        - roomNo
+        - totalCases
+        - cancelledCases
+        - cancellationRate
+      properties:
+        roomId:
+          type: string
+          description: 术间标识。
+        roomNo:
+          type: string
+          description: 术间编号。
+        deptId:
+          type:
+            - string
+            - 'null'
+          description: 术间所属科室标识；未配置为 null。
+        deptName:
+          type:
+            - string
+            - 'null'
+          description: 术间所属科室名称（演示合成文本）；未配置为 null。
+        totalCases:
+          type: integer
+          description: 区间内总台次（含已取消）。
+          minimum: 0
+        cancelledCases:
+          type: integer
+          description: 取消台次数。
+          minimum: 0
+        cancellationRate:
+          type: number
+          format: double
+          description: 取消率 = cancelledCases / totalCases；分母为 0 时为 0。
+          minimum: 0
+          maximum: 1
+    CancellationSummary:
+      type: object
+      description: 取消率汇总。
+      required:
+        - totalCases
+        - cancelledCases
+        - cancellationRate
+      properties:
+        totalCases:
+          type: integer
+          description: 区间内总台次（含已取消）。
+          minimum: 0
+        cancelledCases:
+          type: integer
+          description: 取消台次数。
+          minimum: 0
+        cancellationRate:
+          type: number
+          format: double
+          description: 取消率；分母为 0 时为 0。
+          minimum: 0
+          maximum: 1
+    CancellationReport:
+      type: object
+      description: 取消率报告（口径版本 analytics-1.0.0，Asia/Shanghai）。
+      required:
+        - from
+        - to
+        - timezone
+        - summary
+        - byReason
+        - byRoom
+      properties:
+        from:
+          type: string
+          format: date
+          description: 起始本地日期（含）。
+        to:
+          type: string
+          format: date
+          description: 结束本地日期（含）。
+        timezone:
+          type: string
+          description: 统计时区；固定 Asia/Shanghai。
+          examples:
+            - Asia/Shanghai
+        summary:
+          $ref: '#/components/schemas/CancellationSummary'
+        byReason:
+          type: array
+          description: 按原因码分组，取消台次数倒序；无取消时为空数组。
+          items:
+            $ref: '#/components/schemas/CancellationReason'
+        byRoom:
+          type: array
+          description: 按术间编号排序的取消率明细；无可见术间时为空数组。
+          items:
+            $ref: '#/components/schemas/CancellationRoom'

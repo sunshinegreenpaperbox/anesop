@@ -4,7 +4,9 @@
 > + V6（手机号加解密与用户管理，M2-M0-02）+ V7（M1 手术申请接收，M2-M1-01）
 > + V8（M1 术间与排程台次，M2-M2-01）
 > + V9（M1 停改台/急诊加台与通知 outbox，M2-M2-02）
-> + V10（M2 术前访视与评估，M2-M4-01）；
+> + V10（M2 术前访视与评估，M2-M4-01）
+> + V11（M2 知情同意与三方核查，M2-M5-01）
+> + V12（M1 排程分析权限点，M2-M6-01，data-only）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -24,6 +26,8 @@ db/
 │   ├── V8__m1_schedule_room_plan.sql       # m1_sched 术间/排程台次 + surgery_application.required_room_type + m1:schedule:*（M2-M2-01）
 │   ├── V9__m1_schedule_change_emergency.sql # m1_sched 变更记录/通知 outbox + m1:schedule:approve（M2-M2-02）
 │   ├── V10__m2_preop_assessment.sql        # m2_anes 术前访视与评估 + m2:preop:*（M2-M4-01）
+│   ├── V11__m2_consent_threeway.sql        # m2_anes 知情同意/三方核查 + m2:consent:* / m2:threeway:*（M2-M5-01）
+│   ├── V12__m1_analytics_permission.sql    # m1:analytics:read（data-only，无表/视图变更；M2-M6-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -254,6 +258,24 @@ SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST）；写入 3 条 SYNTHETIC 演示�
 - **不可逆项**：签名摘要、拒绝/撤销原因与核查历史无法从其他表反推；回滚后只能依赖导出归档。
 - **重放**：修复后重新执行 V11 会重建空表并重新灌入 3 条演示模板与 4 个权限点；
   已导出数据不得直接回灌（会与 Flyway 版本/外键冲突），须走受控数据修复流程。
+
+### 4.7 V12（M1 排程分析权限点）回滚说明
+
+V12 属 **data-only** 迁移：不建表、不改既有表/列/索引、不创建视图或物化视图，仅新增
+`m1:analytics:read` 权限点并授予 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER。M2-M6-01 的
+利用率/准点率/取消率均为对 `m1_sched` 既有表的只读聚合，**不需要新增读模型对象**；本迁移仅补齐
+权限种子（V1–V11 已合入不可修改，权限点必须由迁移写入）。
+
+- **应用回滚**：下线 `/v1/scheduling/analytics/*` 四个只读端点与前端 `/m1/analytics` 路由/菜单；
+  排程工作台、申请、术前/同意/核查能力不受影响。
+- **库层回滚**（前向修复，需 DBA 审批）：
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id =
+  'b0000000-0000-4000-8000-000000000030'` →
+  `DELETE FROM m0_platform.sys_permission WHERE code = 'm1:analytics:read'`。
+- **数据保全**：本迁移不改变业务数据，回滚无需备份 `m1_sched`；审计 `ANALYTICS_QUERY/EXPORT`
+  记录按审计留存要求保留 ≥6 个月，不得随权限回滚删除。
+- **重放**：修复后重新执行 V12 会重新插入同一权限与三条角色授权（`ON CONFLICT` 不适用，
+  需先清理再重放），已产生的分析审计不受影响。
 
 ## 5. 运行方式
 

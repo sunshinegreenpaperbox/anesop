@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`、`anesthesia 0.4.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.4.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -11,7 +11,7 @@ packages/contracts/
 ├── openapi/
 │   ├── auth.yaml          # 认证、令牌、当前用户、会话
 │   ├── patient.yaml       # 患者主索引、手术申请
-│   ├── scheduling.yaml    # 术间、排程、冲突、急诊加台、停台
+│   ├── scheduling.yaml    # 术间、排程、冲突、急诊加台、停台、排程分析
 │   ├── anesthesia.yaml    # 术前访视与评估、记录单、锁单、三方核查、随访
 │   └── baseline/          # 当前已发布兼容基线（4 份快照）
 ├── rules/error-responses.js
@@ -24,9 +24,9 @@ packages/contracts/
 |---|---:|---:|---|---|
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
-| `scheduling.yaml` | 13 | 16 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史 | §2.4.2、§2.3.2、§3.4.2 |
+| `scheduling.yaml` | 17 | 20 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史、排程分析（利用率/准点/取消率/CSV 导出） | §2.4.2、§2.3.2、§2.7.2、§3.4.2 |
 | `anesthesia.yaml` | 17 | 25 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、旧访视骨架读写、记录单读写、锁单、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **46** | **59** | 4 个限界上下文骨架 | — |
+| **合计** | **51** | **64** | 4 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -218,6 +218,43 @@ packages/contracts/
   签署人姓名、原因原文或问题项原文。
 
 
+### 3.6 排程分析（M2-M6-01，scheduling 0.6.0 additive）
+
+> 0.6.0 只新增 4 条路径 / 4 个 operation 与 10 个分析 schema，并在 `OperatingRoom` 上新增可选
+> `deptId/deptName`（供科室筛选展示）；未修改既有端点的请求/响应结构。baseline/HEAD baseline/
+> 生成物漂移三门禁全 PASS。
+
+- **利用率** `GET /v1/scheduling/analytics/utilization?from=&to=&deptId=`
+  （`getSchedulingUtilization`）：`m1:analytics:read`；`from`/`to` 必填，按
+  `Asia/Shanghai` 本地日期闭区间解释，跨度默认 92 天（配置可减小，但上限夹紧为 92 天）；
+  返回汇总与按术间明细。分子为状态非 `CANCELLED` 台次与区间重叠的**计划**分钟（非实际占用，
+  【待确认】；跨日裁剪），分母为可见术间数 × 天数 × `room-daily-available-minutes`
+  （默认 600，【待确认】；含区间内全部自然日，未排除未来/停诊日【待确认】）；空数据 0。
+- **准点率** `GET /v1/scheduling/analytics/on-time?...`（`getSchedulingOnTimeRate`）：
+  每术间每本地日**计划开始最早**台次的 `|实际开始 - 计划开始| ≤ 阈值`
+  （默认 ±15 分钟，`on-time-threshold-minutes` 可配置）。该计划首台取消/未开始（或缺实际开始）
+  时整日**不纳入评估**（分母排除），计入 `excludedDays`，不以下一台次替代；
+  `firstCaseCount = evaluatedCaseCount + excludedDays`。**实际开始 MVP 以台次
+  `updated_at` 近似**（V8 无独立 actual_start 列、HIS 未回写、系统内实际开台数据不足，
+  【待确认】），响应 `actualStartSource=SCHEDULE_UPDATED_AT` 明示；`evaluatedCaseCount=0`
+  时前端展示“暂无数据”。
+- **取消率** `GET /v1/scheduling/analytics/cancellations?...`
+  （`getSchedulingCancellationRate`）：`CANCELLED` 台次 / 区间内总台次（已取消也进分母），
+  按最近 `STOP` 变更记录的原因码分组；无记录归 `UNSPECIFIED`；急诊抢占计入
+  `EMERGENCY_PREEMPT`；分母 0 时比率为 0。
+- **CSV 导出** `GET /v1/scheduling/analytics/export?metric=&from=&to=&format=csv`
+  （`exportSchedulingAnalytics`）：流式 `text/csv;charset=UTF-8`，带 UTF-8 BOM；列仅含
+  指标/日期/术间编号/科室/原因码/聚合计数与比率，**不含**患者姓名、住院号、证件号、
+  手机号、诊断、申请号。对以 `=`、`+`、`-`、`@`、制表/回车开头的单元格前置单引号 `'`
+  再按 CSV 规则转义，防 Excel/Sheets 公式注入。`metric` ∈ utilization/on-time/cancellations，
+  `format` 仅 csv；跨度默认 92 天（配置上限夹紧 92），非法参数 400。
+- **数据范围与权限**：DEPT 本科室术间、ROOM 绑定术间，未绑定/无可见术间/SELF 403；
+  权限点 `m1:analytics:read`（V12 授 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER，只读）。
+- **审计**：`ANALYTICS_QUERY`/`ANALYTICS_EXPORT`（`resource_type=ANALYTICS`）只记
+  指标/日期/时区/术间数/计数，不含患者标识。
+- **口径文档**：`docs/modules/m1/README.md` §12；口径版本 `analytics-1.0.0`，
+  配置项见 `application.yml` 的 `anesop.m1.analytics.*`。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -282,10 +319,10 @@ packages/contracts/
 - **契约兼容性：0.3.0 为 additive（仅新增端点/字段；删除类变更推迟到 1.0.0 并走 major+ADR）。**
   已删除的安全字段以 `deprecated: true` 兼容占位恢复，实现不返回真实值；历史端点同样只标
   `deprecated` 不物理删除。任何删除/改类型必须先完成 1.0.0 major 评审与 ADR，禁止在 0.x 内私删。
-- `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`
-  （M2-M2-02：停台/变更历史端点、急诊 201 + approval 为 additive；改台 `reasonCode` 必填与
-  移除急诊不可达 200 是未发布窗口内的两项收紧，登记于 ADR-0012，合入前需提交评审通过的
-  0.5.0 baseline）。路径主版本为 `/v1`。
+- `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、
+  `anesthesia 0.4.0`（0.6.0/M2-M6-01 仅新增排程分析 4 条只读路径、10 个 schema 与
+  `OperatingRoom.deptId/deptName` 可选字段，属 additive；0.5.0 的停改台/急诊与改台 reasonCode
+  必填见 §3.3/ADR-0012）。路径主版本为 `/v1`。
 - **兼容变更**（只增不删）：新增可选字段、新增接口、新增响应字段、新增枚举值（调用方需容忍未知值）；更新 `minor`/`patch`，评审通过后同步 baseline。
 - **阻断性变更**（oasdiff `--fail-on WARN` 即失败）：删除路径或 operation；请求体新增必填字段；请求字段类型变更；响应必填字段删除；响应字段类型变更。删除/收紧枚举值、改变字段语义同样按破坏性变更处理。
 - **兼容例外（M2 契约冻结前）**：响应新增必填字段按 warning 处理、不阻断，但必须在 PR 说明调用方兼容方案，并在下表登记；M2 契约冻结前清零。

@@ -1,7 +1,7 @@
 # M1 手术排程管理（模块说明）
 
-> 状态：M2-M1-01「手术申请接收与校验」+ M2-M2-01「排程工作台与冲突检测」+ M2-M2-02「停改台与急诊加台」落地版（2026-11-13）。
-> 契约：`packages/contracts/openapi/scheduling.yaml` 0.5.0、`patient.yaml` 0.3.0；
+> 状态：M2-M1-01「手术申请接收与校验」+ M2-M2-01「排程工作台与冲突检测」+ M2-M2-02「停改台与急诊加台」+ M2-M6-01「排程分析」落地版（2026-11-13）。
+> 契约：`packages/contracts/openapi/scheduling.yaml` 0.6.0、`patient.yaml` 0.3.0；
 > 方案书：§2.4.2（M1 手术排程）、§2.7.1（HIS 集成）、§3.4.2/§3.4.3（实体与数据库）、
 > §3.5.3（I-01a/I-01b）、§3.9.2（RBAC/数据权限）、§3.9.3（加密脱敏）。
 > 全部示例、演示账号、患者、术间与申请均为 **SYNTHETIC** 合成数据。
@@ -18,7 +18,8 @@ M1 负责围术期排程上游的“手术申请接收与校验”和“术间/�
 - 维护术间主数据与日排程台次，提供规则引擎冲突检测（创建/调整事务内复检，409 + conflicts[]）；
 - 停台/改台/急诊加台与变更留痕：原因码白名单、审批矩阵、抢占择期台次、通知 outbox（模拟）。
 
-非目标：排程分析（M2-M6-01）、设备依赖与人员资质主数据（M3）、真实短信/企业微信通知（EXT）。
+非目标：设备依赖与人员资质主数据（M3）、真实短信/企业微信通知（EXT）。排程分析
+（M2-M6-01）为只读聚合，口径与已知限制见 §12。
 
 ## 2. 代码结构
 
@@ -27,13 +28,15 @@ apps/api/modules/m1/
 ├── api/  com.anesop.m1.api
 │   ├── application/  SurgeryApplicationService、查询条件、异常、状态语义
 │   ├── schedule/     SchedulingService、SchedulingConflictException、校验/语义异常
+│   ├── analytics/    SchedulingAnalyticsService（利用率/准点/取消率/CSV 导出）
 │   ├── his/          HisSurgeryApplicationPort 端口与入站记录（模拟标记）
 │   ├── patient/      PatientQueryService（患者脱敏摘要）
-│   └── security/     M1Permissions（m1:application:* / m1:patient:read / m1:schedule:*）
+│   └── security/     M1Permissions（m1:application:* / m1:patient:read / m1:schedule:* / m1:analytics:read）
 └── impl/ com.anesop.m1.impl
     ├── application/  SurgeryApplicationServiceImpl（事务/幂等/状态机/审计）
     ├── schedule/     SchedulingServiceImpl（事务/锁/规则引擎调用/审计）
     │   └── rule/     SchedulingRule、注册表与 5 条规则（重叠/术者/患者/类型/时间窗）
+    ├── analytics/    SchedulingAnalyticsServiceImpl（只读 SQL 聚合 + 脱敏 CSV）
     ├── patient/      PatientQueryServiceImpl（数据范围过滤）
     ├── his/          MockHisApplicationAdapter（SYNTHETIC 生成器）
     ├── persistence/  实体与 Mapper（m1_sched 五表；术间行 FOR UPDATE）
@@ -43,7 +46,7 @@ apps/api/modules/m1/
 模块边界：`m1-impl` 只依赖 `m1-api`、`m0-api`（认证主体、数据范围、审计）与基础设施；
 不访问其他模块 impl，不跨 schema 读写 M0 表。`api-bootstrap` 是唯一依赖 `m1-impl` 的装配点。
 
-## 3. 接口（scheduling 0.5.0 与 patient 0.3.0）
+## 3. 接口（scheduling 0.6.0 与 patient 0.3.0）
 
 ### 3.1 手术申请与患者摘要
 
@@ -74,6 +77,24 @@ SYS_ADMIN/SYS_SURGEON/SYS_OR_MANAGER）并受数据范围约束；旧 `GET /v1/p
 | POST | `/v1/scheduling/schedules/{scheduleId}/stop` | `stopSchedule` | `m1:schedule:write`（IN_PROGRESS 另需 `m1:schedule:approve`） | 停台状态机 + 原因码白名单 + 变更/审计/通知；返回 CANCELLED 台次 |
 | GET | `/v1/scheduling/schedules/{scheduleId}/changes` | `listScheduleChanges` | `m1:schedule:read` | 变更历史（STOP/MODIFY/EMERGENCY + 审批/抢占关系），受数据范围约束 |
 | POST | `/v1/scheduling/emergency-cases` | `addEmergencyCase` | `m1:schedule:approve` | 急诊加台（201 + approval）；可抢占冲突中的择期台次 |
+
+### 3.3 排程分析（M2-M6-01，scheduling 0.6.0 additive）
+
+| 方法 | 路径 | operationId | 权限 | 说明 |
+|---|---|---|---|---|
+| GET | `/v1/scheduling/analytics/utilization?from=&to=&deptId=` | `getSchedulingUtilization` | `m1:analytics:read` | 术间利用率汇总 + 按术间；`from/to` 必填、跨度 ≤ 92 天 |
+| GET | `/v1/scheduling/analytics/on-time?from=&to=&deptId=` | `getSchedulingOnTimeRate` | `m1:analytics:read` | 首台准点率汇总 + 按术间；阈值默认 ±15 分钟 |
+| GET | `/v1/scheduling/analytics/cancellations?from=&to=&deptId=` | `getSchedulingCancellationRate` | `m1:analytics:read` | 取消率汇总 + 原因码分组 + 按术间 |
+| GET | `/v1/scheduling/analytics/export?metric=&from=&to=&format=csv&deptId=` | `exportSchedulingAnalytics` | `m1:analytics:read` | 脱敏 CSV（UTF-8 BOM、流式）；仅聚合值与术间/日期 |
+
+- 时间范围按 `Asia/Shanghai` 本地日期闭区间解释；`from/to` 缺失、格式非法、`from > to`、
+  跨度 > 92 天、`deptId` 非法、`metric`/`format` 非法统一 400（`PARAM_INVALID`）。
+- 数据范围与排程工作台一致：`ALL` 全院；`DEPT/SITE` 本科室/院区术间；`ROOM` 绑定术间；
+  未绑定、无可见术间或 `SELF` → 403（fail-closed）；导出同样受范围约束。
+- 审计 `ANALYTICS_QUERY` / `ANALYTICS_EXPORT`（`resource_type=ANALYTICS`），detail 只含
+  metric/from/to/timezone/roomCount/计数，不含患者姓名、住院号、诊断、申请号。
+- 权限点 `m1:analytics:read`（V12 授 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER，只读；
+  不授予排程写/审批权限）。前端路由 `/m1/analytics` 与菜单同权限点。
 
 旧 `POST /v1/scheduling/conflicts/check`（`checkScheduleConflict`）标记 `deprecated`，计划 1.0.0
 删除；**0.4.0 仍映射到同一 `checkConflicts` 服务方法**（响应与新端点逐字节一致），不得删除
@@ -211,10 +232,12 @@ COMPLETED / CANCELLED ──stop────────────────
   （SYS_ADMIN、SYS_SURGEON、SYS_OR_MANAGER，患者摘要最小权限）；V2 的 `m1:access` 菜单占位保留；
 - V8 新增 `m1:schedule:read`/`m1:schedule:write`，**仅授 SYS_ADMIN、SYS_OR_MANAGER**（最小权限：
   外科/麻醉医师不直接改排程）；V9 新增 `m1:schedule:approve`（同样仅授 SYS_ADMIN、
-  SYS_OR_MANAGER），用于术中停台与急诊加台/抢占；
-- 审计动作：`SURGERY_APPLICATION_CREATE/IMPORT/CANCEL`（resource_type=`SURGERY_APPLICATION`）
-  与 `SCHEDULE_CREATE/UPDATE/CANCEL/STOP/PREEMPT/EMERGENCY_CREATE`（resource_type=`SCHEDULE`，
-  detail 只含 applicationId/roomId/时段/序号/reasonCode/changeId）；
+  SYS_OR_MANAGER），用于术中停台与急诊加台/抢占；V12 新增 `m1:analytics:read`
+  （SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER），仅用于排程分析只读与导出；
+- 审计动作：`SURGERY_APPLICATION_CREATE/IMPORT/CANCEL`（resource_type=`SURGERY_APPLICATION`）、
+  `SCHEDULE_CREATE/UPDATE/CANCEL/STOP/PREEMPT/EMERGENCY_CREATE`（resource_type=`SCHEDULE`，
+  detail 只含 applicationId/roomId/时段/序号/reasonCode/changeId）与
+  `ANALYTICS_QUERY/ANALYTICS_EXPORT`（resource_type=`ANALYTICS`，detail 只含聚合口径与计数）；
 - 403 由 `ApiExceptionHandler` 写 `ACCESS_DENIED` 审计；审计 detail 只含状态、来源、原因码等非 PHI 字段。
 
 ## 8. 排程规则引擎（`SchedulingRule` + 注册表）
@@ -255,14 +278,14 @@ COMPLETED / CANCELLED ──stop────────────────
 
 - 后端单测（`m1-impl`）：服务状态机/幂等/数据范围/校验、Masker/Hasher、Mock 适配器、
   排程 5 条规则（含边界相接）与排程服务（冲突/版本/状态/审计/数据范围/原因码/时间窗）；
-  m1-impl 共 100 用例，JaCoCo 行 94.31%、分支 71.58%（阈值 80/70）；
+  m1-impl 共 142 用例，JaCoCo 行 93.86%、分支 71.69%（阈值 80/70）；
 - 后端集成（`api-bootstrap`，嵌入式 PG16）：模拟导入幂等、脱敏与无明文、创建/列表/筛选/详情、
   取消状态历史 + 审计、403、DEPT 数据范围、患者摘要接口；排程 14 用例：术间列表/`siteId`+
   `status` 过滤与非法参数 400、创建→日查询→详情→调整→取消 + 3 条审计、409 + conflicts[]
   （重叠/术者/患者/类型）、冲突预检与新/旧端点响应一致、时间窗 400/申请状态（409/422）、
   403/DEPT/ROOM 越界与跨科室申请 404（无 PHI 泄露）、并发同室/同术者/同患者恰一成功、
-  1000 条日排程查询 <2s 本地基准；后端合计 347 用例（api-bootstrap 98 / m0 144 / m1 100 /
-  contracts 5）；
+  1000 条日排程查询 <2s 本地基准；后端 m1 相关用例全绿（m1-impl 142；api-bootstrap 含
+  排程分析 11（10 功能 + 1 大区间性能）及其余集成用例）；
 - 前端 Vitest：申请列表渲染/筛选/错误/权限按钮隐藏、详情与 404；排程工作台加载/冲突预检/
   409 提示（优先解析 `conflicts[]` 并保留 `conflictingScheduleId`，缺失时回退 `details`）/
   冲突解决/仅 PLANNED/PUBLISHED 显示调整取消/本地时区日期/只读权限；
@@ -271,6 +294,11 @@ COMPLETED / CANCELLED ──stop────────────────
 - 迁移/安全：V7/V8 结构断言（`uk_schedule_application_active`/`ck_schedule_time_window`/
   `ck_schedule_priority`/权限授予/5 个 SYNTHETIC 术间）、状态历史 append-only 负向用例、
   并发导入仅建一行、缺 pepper 启动失败；
+- 排程分析：m1-impl 单测 15（公式/阈值/空数据/数据范围/CSV 脱敏与公式注入/计划首台排除/
+  配置夹紧/审计）、api-bootstrap 集成 11（手算期望、计划首台取消与未开始排除、跨日与 23:59、
+  DEPT/ROOM/未绑定 403、参数校验、CSV 行数/无 PHI、审计、空数据 0、92 天 3000 台次性能）、
+  Vitest 7（含 SYS_QC_MANAGER 科室下拉、evaluatedCaseCount=0 暂无数据）、E2E 2
+  （SYS_QC_MANAGER 分析页/无权限 403）；
 - 契约：`bash scripts/gen-contracts.sh` + `bash scripts/contract-check.sh`（spectral/oasdiff/HEAD
   baseline/漂移全绿）。
 
@@ -284,4 +312,62 @@ COMPLETED / CANCELLED ──stop────────────────
 - 1000 条日排程查询本地基准 <2s（`SchedulingApiIntegrationTest#thousandScheduleQueryStaysUnderLocalBaseline`，
   嵌入式 PG16 + MockMvc，含 JSON 序列化；仅作本机回归基线，非生产容量承诺）；
 - `patient.yaml` 中 `/v1/surgery-applications*` 为 S0-05 历史端点，已在 0.3.0 标记 `deprecated`，
-  由 scheduling 的 `/v1/scheduling/applications*` 取代，M1 契约收敛时统一下线。
+  由 scheduling 的 `/v1/scheduling/applications*` 取代，M1 契约收敛时统一下线；
+- 排程分析准点率的实际开始时间：V8 无独立 `actual_start_at` 列、HIS 未回写，MVP 以台次
+  `updated_at` 近似（`actualStartSource=SCHEDULE_UPDATED_AT`），已完成台次可能被后续状态更新
+  覆盖；【待确认】正式口径须由 HIS/M3 回写真实开台/切皮时间后替换（见 §12）。
+- **准点率数据不足（Q-1）**：准点率依赖 M3/HIS 回写实际开台时间与真实台次状态；当前系统内
+  V8 只有计划时间与 `updated_at`，HIS 未接入，**实际开台数据不足**。因此
+  `evaluatedCaseCount=0` 时前端显示“暂无数据”而非 0.0%，该指标在 HIS 接入前不得用于绩效考核。
+
+## 12. 排程分析口径（M2-M6-01）
+
+> 口径版本 `analytics-1.0.0`；时区固定 `Asia/Shanghai`（无 DST，跨日边界按本地日计算）。
+> 决策 D-21：系统出数、绩效规则院方另定；D-14：运营指标 T+1。以下阈值/可用时长为默认值，
+> 院方确认后只改配置，不改代码分支。口径决策与待确认项见 `docs/adr/0015-排程分析口径与待确认项.md`。
+
+### 12.1 术间利用率
+
+- 公式：`总手术时长 / 可用时长`。
+- 分子：状态非 `CANCELLED` 的台次与查询区间重叠部分的**计划**分钟数（非实际占用/麻醉时长，
+  【待确认】）；跨日/跨区间按重叠裁剪，同一台次不重复计入次日。
+- 分母：可见术间数 × 区间天数（含首尾）× `anesop.m1.analytics.room-daily-available-minutes`
+  （默认 **600 分钟/间/日**）。分母按区间内**全部自然日**计算，当前**未排除未来日期、停诊日
+  或节假日**，院方实际开放时长与开诊日历均【待确认】。
+- 空数据集返回 0，不做除零；利用率可大于 1（超排）。按术间与汇总同时返回。
+
+### 12.2 首台准点开台率
+
+- 公式：`准点首台台次 / 已评估首台台次`。
+- 首台：同一术间、同一本地日期内**计划开始最早**的台次（不论状态，按 `start_at` 排序，
+  相同则按 `sequence`、`id` 稳定排序）。
+- 不纳入评估（Q-2）：若该计划首台为 `CANCELLED` 或未开始（`PLANNED`/`PUBLISHED`/`DELAYED`），
+  或缺少实际开始时间，则该术间-日**不进入分母**，计入 `excludedDays`；
+  **不以下一台次替代**。恒等式 `firstCaseCount = evaluatedCaseCount + excludedDays`。
+- 判定：`abs(实际开始 - 计划开始) ≤ 阈值`；阈值
+  `anesop.m1.analytics.on-time-threshold-minutes` 默认 **15 分钟**（可配置 0–1440）。
+- 实际开始：**MVP 以台次 `updated_at` 近似**（V8 无独立 `actual_start_at`，HIS 未回写；
+  【待确认】）。已完成台次若后续有状态更新，`updated_at` 可能晚于实际开台，指标会偏保守；
+  正式口径须由 HIS/M3 回写真实切皮/开台时间后切换，并通过 `actualStartSource` 标识来源。
+  当前系统内实际开台数据不足（见 §11）。
+- 空数据集/无可评估首台返回 0，不做除零；`evaluatedCaseCount=0` 时前端展示“暂无数据”
+  而非 0.0%。
+
+### 12.3 取消率
+
+- 公式：`取消台次 / 总台次`。
+- 统计区间内（按台次计划开始日期归属）全部未删除台次；已取消台次也进入分母。
+- 取消定义 `status=CANCELLED`，含急诊抢占择期台次（原因码 `EMERGENCY_PREEMPT`）。
+- 原因码取该台次最近一条 `STOP` 变更记录；无记录的历史数据归 `UNSPECIFIED`，不臆造原因。
+- 按原因码 `shareOfCancelled` 与按术间同时返回；分母为 0 时比率为 0。
+
+### 12.4 配置（application.yml）
+
+| 配置 | 默认 | 说明 |
+|---|---:|---|
+| `anesop.m1.analytics.on-time-threshold-minutes` | 15 | 准点阈值（±分钟） |
+| `anesop.m1.analytics.room-daily-available-minutes` | 600 | 每术间每日可用分钟（利用率分母） |
+| `anesop.m1.analytics.max-range-days` | 92 | 查询/导出最大跨度（含首尾）；配置 >92 时夹紧为 92 并 WARN |
+
+非法值（阈值 <0/>1440、可用分钟 <1/>1440、跨度 <1/>366）启动即拒绝（fail-closed）；
+跨度配置 93–366 可启动但实际按 92 生效并留 WARN 日志（契约上限固定 92，不随配置放宽）。
