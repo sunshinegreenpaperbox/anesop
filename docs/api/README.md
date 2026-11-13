@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.4.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -24,9 +24,9 @@ packages/contracts/
 |---|---:|---:|---|---|
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
-| `scheduling.yaml` | 11 | 14 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台、停台 | §2.4.2、§2.3.2、§3.4.2 |
+| `scheduling.yaml` | 13 | 16 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史 | §2.4.2、§2.3.2、§3.4.2 |
 | `anesthesia.yaml` | 6 | 10 | 术前访视读写、记录单读写、锁单、三方核查读写、随访创建/查询/列表 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **34** | **43** | 4 个限界上下文骨架 | — |
+| **合计** | **36** | **45** | 4 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -97,6 +97,45 @@ packages/contracts/
   计划 1.0.0 删除）；0.4.0 仍映射同一服务方法（响应一致），不删除任何既有字段/端点。
 - `GET /v1/scheduling/rooms` 按契约实现 `siteId`/`status` 查询参数过滤，非法值 400。
 
+### 3.3 停改台、急诊加台与变更留痕（M2-M2-02，scheduling 0.5.0）
+
+> 0.5.0 尚未发布：其中「改台 reasonCode 必填」与「移除急诊端点不可达的 200」相对 HEAD 的
+> 0.4.0 是**已评审的未发布窗口收紧**（ADR-0012）；合入前需把评审通过的 0.5.0 契约复制到
+> baseline 并提交，HEAD baseline 门禁才会转绿。
+
+- **停台** `POST /v1/scheduling/schedules/{scheduleId}/stop`（`stopSchedule`）：原因码必填且
+  必须在白名单内（`PATIENT_CONDITION`/`SURGEON_UNAVAILABLE`/`ROOM_EQUIPMENT_FAILURE`/
+  `ANESTHESIA_RISK`/`SCHEDULE_CHANGE`/`OTHER`），`reason` 可选；返回 200 + `Schedule`
+  （status=`CANCELLED`）。`PLANNED`/`PUBLISHED`/`DELAYED` 直接停台；`IN_PROGRESS` 术中停台
+  必须持 `m1:schedule:approve`（否则 403）；终态 409、版本过期 409。成功写
+  `schedule_change_request`（STOP/APPROVED）、`SCHEDULE_STOP` 审计与通知 outbox
+  （`SCHEDULE_STOPPED`，payload 无 PHI）。旧 `POST .../cancel` 保留为 0.4.0 兼容（描述注明
+  新流程用 `/stop`），计划 1.0.0 收敛；兼容端点同样复用停台留痕路径，写 STOP 变更记录与
+  outbox，不绕过变更历史（S-1）。
+- **改台** 复用 `PUT /v1/scheduling/schedules/{scheduleId}`：`reasonCode` **必填**（白名单
+  `SCHEDULE_ADJUST`/`PATIENT_CONDITION`/`SURGEON_UNAVAILABLE`/`ROOM_EQUIPMENT_FAILURE`/
+  `ANESTHESIA_RISK`/`OTHER`；缺失/非法 400），成功写 MODIFY 变更、`SCHEDULE_UPDATE` 审计与
+  `SCHEDULE_MODIFIED` 通知；前端不预填、必须由操作人选择（Q-1，方案书 §2.4.2）。冲突/版本
+  语义不变（409）。
+- **急诊加台** `POST /v1/scheduling/emergency-cases`（`addEmergencyCase`）：需
+  `m1:schedule:approve`（V9 仅授 SYS_ADMIN/SYS_OR_MANAGER），缺失 403；请求新增
+  `expectedEnd`（缺省按申请时长推算）、`sequenceNo`、`preemptScheduleId`，`roomId/expectedStart`
+  MVP 必填。成功 **201** + `EmergencyAddResult.approval`（changeType=EMERGENCY、status=APPROVED、
+  申请人/审批人/时间、抢占关系），急诊台次 `priority=EMERGENCY`。冲突且未指定抢占 → 409
+  `Error.conflicts[]`（`conflictingScheduleId` 为可抢占候选）；指定抢占且命中冲突中的
+  PLANNED/PUBLISHED 择期台次 → 原台次置 `CANCELLED`（reason=`EMERGENCY_PREEMPT`）并写 STOP
+  变更/审计/通知，再落急诊台次；人员/患者冲突不可抢占（仍 409）。成功响应仅 **201**
+  （不可达的 200 已移除，Q-3）。抢占目标在事务内 `SELECT ... FOR UPDATE` 锁定后复检状态/
+  优先级/术间/时段，任一变化返回 409 `PREEMPT_CONFLICT`，不会误停并发改台移走的台次（B-1）。
+- **变更历史** `GET /v1/scheduling/schedules/{scheduleId}/changes`（`listScheduleChanges`）：
+  `m1:schedule:read` + 数据范围；返回 STOP/MODIFY/EMERGENCY 的 `ScheduleChange[]`（原因码、
+  审批状态/审批人、`preemptScheduleId`、版本），按 `requestedAt` 倒序；越界/不存在 404。
+  支持 `page`/`size`（缺省 1/50，上限 200）与 `meta` 分页，属 additive（S-7）。
+- **通知端口（SIMULATED）**：`NotificationPort` 当前实现只写 `m1_sched.notification_outbox`
+  并记录无 PHI 日志，`NotificationDispatcher` 轮询 PENDING → SENT（失败退避，3 次后 FAILED）；
+  真实短信/企业微信通道为 **EXT**，接入前 payload 白名单与数据库 `ck_notification_outbox_no_phi`
+  双重禁止 PHI。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -161,9 +200,10 @@ packages/contracts/
 - **契约兼容性：0.3.0 为 additive（仅新增端点/字段；删除类变更推迟到 1.0.0 并走 major+ADR）。**
   已删除的安全字段以 `deprecated: true` 兼容占位恢复，实现不返回真实值；历史端点同样只标
   `deprecated` 不物理删除。任何删除/改类型必须先完成 1.0.0 major 评审与 ADR，禁止在 0.x 内私删。
-- `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient 0.3.0`、`scheduling 0.4.0`
-  （M2-M2-01：新增排程工作台/冲突检测端点与可选字段，compatible additive；旧冲突检测端点仅
-  标 `deprecated`）。路径主版本为 `/v1`。
+- `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`
+  （M2-M2-02：停台/变更历史端点、急诊 201 + approval 为 additive；改台 `reasonCode` 必填与
+  移除急诊不可达 200 是未发布窗口内的两项收紧，登记于 ADR-0012，合入前需提交评审通过的
+  0.5.0 baseline）。路径主版本为 `/v1`。
 - **兼容变更**（只增不删）：新增可选字段、新增接口、新增响应字段、新增枚举值（调用方需容忍未知值）；更新 `minor`/`patch`，评审通过后同步 baseline。
 - **阻断性变更**（oasdiff `--fail-on WARN` 即失败）：删除路径或 operation；请求体新增必填字段；请求字段类型变更；响应必填字段删除；响应字段类型变更。删除/收紧枚举值、改变字段语义同样按破坏性变更处理。
 - **兼容例外（M2 契约冻结前）**：响应新增必填字段按 warning 处理、不阻断，但必须在 PR 说明调用方兼容方案，并在下表登记；M2 契约冻结前清零。
@@ -171,6 +211,8 @@ packages/contracts/
 | 已登记例外 | oasdiff 行为 | 处理与截止 |
 |---|---|---|
 | 响应新增必填字段 | warning | 不阻断；PR 说明调用方兼容方案，M2 契约冻结前清零 |
+| 改台 `reasonCode` 由可选改必填（0.5.0 未发布） | error（仅 HEAD baseline） | ADR-0012；提交评审通过的 0.5.0 baseline 后 HEAD 门禁清零，不绕过 |
+| 移除急诊不可达 200（0.5.0 未发布） | error（仅 HEAD baseline） | ADR-0012；提交评审通过的 0.5.0 baseline 后 HEAD 门禁清零，不绕过 |
 
 - **基线**：`openapi/baseline/<域>.yaml` 是上一次人工评审通过的兼容快照。只有契约评审通过且确认兼容后，才可人工复制当前契约覆盖 baseline，并在**同一 PR** 说明版本、评审结论与差异；禁止为了过检而修改 baseline，禁止脚本自动覆盖。
 - **拦截**：`scripts/contract-check.sh` 以 spectral（0 error/0 warning）+ oasdiff breaking（`--fail-on WARN`）+ 生成物漂移（重跑 `gen:ts` 并对比前后 `git diff`，干净树上等价于 `git diff --exit-code`）三道门禁；任一失败即非 0 退出。

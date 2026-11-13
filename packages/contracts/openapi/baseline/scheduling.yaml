@@ -9,7 +9,15 @@ info:
     兼容性说明（ADR-0011 增补）：0.4.0 将 `Conflict.conflictType` 由 `enum` 放宽为
     `x-extensible-enum`，属**非严格 additive**（类型放宽，TS 侧由字面量联合变为 `string`），
     不破坏 JSON 结构；客户端须按字符串分支并容忍未知值。
-  version: 0.4.0
+
+    0.5.0（M2-M2-02，additive）新增停台 `POST /v1/scheduling/schedules/{scheduleId}/stop`
+    （原因码白名单 + 状态机 + 变更记录 + 通知 outbox）、变更历史
+    `GET /v1/scheduling/schedules/{scheduleId}/changes`（支持 page/size 分页）；急诊加台新增
+    201 响应与 `approval` 记录、`preemptScheduleId` 抢占语义；改台 `PUT` 的 `reasonCode`
+    改为**必填**（与方案书 §2.4.2「停台改台必选原因码」对齐）。
+    旧 `POST .../cancel` 保留为 0.4.0 兼容（不删除，计划 1.0.0 收敛），但同样写入变更记录与
+    通知 outbox，不再绕过变更历史。
+  version: 0.5.0
   contact:
     name: ANESOP 项目组
   license:
@@ -327,9 +335,14 @@ paths:
         - 手术排程
       summary: 调整排程（改时间/改术间）
       description: |
-        调整既有台次的术间与计划时段。服务端先锁定目标术间行（`SELECT ... FOR UPDATE`），
+        调整既有台次的术间与计划时段（改台）。服务端先锁定目标术间行（`SELECT ... FOR UPDATE`），
         再在事务内复检冲突；冲突返回 409，`Error.conflicts` 列出冲突类型与冲突台次。
         必须回传 `version`，版本过期返回 409，不静默覆盖。
+
+        改台留痕（M2-M2-02）：`reasonCode` 必填（0.5.0，方案书 §2.4.2「停台改台必选原因码」），
+        必须命中白名单（缺失/非法 400 `PARAM_INVALID`，`details[].field=reasonCode`）；成功后写
+        `schedule_change_request`（changeType=MODIFY，approvalStatus=APPROVED）、
+        `SCHEDULE_UPDATE` 审计与 `SCHEDULE_MODIFIED` 通知（payload 无 PHI）。
       parameters:
         - name: scheduleId
           in: path
@@ -349,6 +362,8 @@ paths:
               plannedEnd: '2026-12-01T15:30:00+08:00'
               sequenceNo: 2
               version: 1
+              reasonCode: SCHEDULE_ADJUST
+              reason: 演示改台原因（合成数据）
       responses:
         '200':
           description: 调整成功，返回更新后的台次。
@@ -389,6 +404,142 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+  /v1/scheduling/schedules/{scheduleId}/stop:
+    post:
+      operationId: stopSchedule
+      tags:
+        - 手术排程
+      summary: 停台（状态机 + 原因码 + 变更留痕）
+      description: |
+        停台状态机（M2-M2-02，方案书 §2.4.2）：`PLANNED`/`PUBLISHED`/`DELAYED` 由持
+        `m1:schedule:write` 的排程管理员直接停台；`IN_PROGRESS`（术中停台）必须同时持
+        `m1:schedule:approve`（SYS_ADMIN/SYS_OR_MANAGER），否则 403。`COMPLETED`/`CANCELLED`
+        为终态，再次停台返回 409 `STATE_CONFLICT`；版本过期返回 409 `VERSION_CONFLICT`。
+
+        原因码必填且必须在白名单内（缺省/非法 400 `PARAM_INVALID`，`details[].field=reasonCode`）；
+        `reason` 可选。成功时：台次置 `CANCELLED`、释放台次占用、写 `schedule_change_request`
+        （changeType=STOP，approvalStatus=APPROVED）、写 `SCHEDULE_STOP` 审计、写入
+        `notification_outbox`（事件 `SCHEDULE_STOPPED`，payload 只含标识与原因码，无 PHI）。
+        与 0.4.0 的 `POST .../cancel` 相比，本端点额外落变更记录与通知，旧端点保留兼容。
+      parameters:
+        - name: scheduleId
+          in: path
+          description: 排程标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StopScheduleRequest'
+            example:
+              reasonCode: PATIENT_CONDITION
+              reason: 演示停台原因（合成数据）
+              version: 4
+      responses:
+        '200':
+          description: 停台成功，返回状态为 CANCELLED 的台次。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+              example:
+                scheduleId: '8000000000000000001'
+                applicationId: '6000000000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                roomId: '7000000000000000001'
+                roomNo: OR-01
+                sequenceNo: 1
+                plannedStart: '2026-12-01T08:30:00+08:00'
+                plannedEnd: '2026-12-01T11:00:00+08:00'
+                actualStart: '2026-12-01T08:35:00+08:00'
+                actualEnd: null
+                status: CANCELLED
+                priority: ELECTIVE
+                changeReason: 演示停台原因（合成数据）
+                createdAt: '2026-11-09T11:20:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-12-01T09:10:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 5
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/scheduling/schedules/{scheduleId}/changes:
+    get:
+      operationId: listScheduleChanges
+      tags:
+        - 手术排程
+      summary: 查询台次变更记录（停台/改台/急诊审批历史）
+      description: |
+        返回该台次的变更留痕（M2-M2-02）：停台（STOP）、改台（MODIFY）、急诊加台与抢占
+        （EMERGENCY）的申请/审批记录，按 `requestedAt` 倒序。查询受当前用户数据范围约束：
+        台次不存在或超出范围返回 404（不泄露存在性）；需 `m1:schedule:read`。
+        `page`/`size` 为 additive 分页参数（缺省 page=1、size=50，size 上限 200）；
+        `meta` 回显分页信息，便于后续留痕量增长时前端翻页。
+      parameters:
+        - name: scheduleId
+          in: path
+          description: 排程标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: 页码，从 1 开始；缺省 1。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          description: 每页条数；缺省 50，上限 200。
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: 变更记录列表；无记录时 items 为空数组。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleChangeList'
+              example:
+                items:
+                  - changeId: '9000000000000000001'
+                    scheduleId: '8000000000000000001'
+                    applicationId: '6000000000000000001'
+                    changeType: STOP
+                    reasonCode: PATIENT_CONDITION
+                    reason: 演示停台原因（合成数据）
+                    status: APPROVED
+                    preemptScheduleId: null
+                    requestedBy: '1000000000000000001'
+                    requestedAt: '2026-12-01T09:10:00+08:00'
+                    approvedBy: '1000000000000000001'
+                    approvedAt: '2026-12-01T09:10:00+08:00'
+                    version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /v1/scheduling/conflicts/check:
     post:
       operationId: checkScheduleConflict
@@ -443,8 +594,24 @@ paths:
         - 手术排程
       summary: 急诊加台
       description: |
-        急诊手术绿色通道加台：优先占用空档，必要时提示挤占并触发加台审批；急诊优先于择期，
-        术后补记原因（§2.3.2）。
+        急诊手术绿色通道加台（M2-M2-02，方案书 §2.4.2、§2.3.2）：急诊优先于择期。
+        调用方必须持 `m1:schedule:approve`（SYS_ADMIN/SYS_OR_MANAGER），缺失 403；
+        事务内校验目标术间/时段冲突并写审批记录。
+
+        冲突处理（MVP）：未指定 `preemptScheduleId` 时返回 409 `SCHEDULE_CONFLICT`，
+        `Error.conflicts[]` 列出冲突台次（`conflictingScheduleId`），前端据此提示可抢占的
+        择期台次；指定 `preemptScheduleId` 且该台次确为冲突中的择期台次（PLANNED/PUBLISHED）
+        时，先将其置 `CANCELLED`（reasonCode=EMERGENCY_PREEMPT）并写 STOP 变更记录/通知，
+        再插入 priority=EMERGENCY 的急诊台次。单纯人员/患者冲突不可通过抢占消除，仍 409。
+
+        成功返回 201：台次落库、`schedule_change_request` 写 EMERGENCY 审批记录
+        （approvalStatus=APPROVED，approvedBy=调用人）、写 `SCHEDULE_EMERGENCY_CREATE` 审计、
+        写通知 outbox（`EMERGENCY_SCHEDULED`，抢占时另写 `SCHEDULE_PREEMPTED`），
+        payload 只含标识/原因码，无 PHI。
+
+        并发正确性：抢占目标在事务内以 `SELECT ... FOR UPDATE` 锁定后**复检**状态
+        （PLANNED/PUBLISHED）、优先级（ELECTIVE）、术间（必须仍为目标术间）与时段（仍与本次
+        候选冲突）；任一不再满足返回 409 `PREEMPT_CONFLICT`，不会误停已被改台移走的台次。
       requestBody:
         required: true
         content:
@@ -457,9 +624,14 @@ paths:
               reasonCode: EMERGENCY_GREEN_CHANNEL
               reason: 演示急诊加台（合成数据）
               expectedStart: '2026-12-01T13:00:00+08:00'
+              expectedEnd: '2026-12-01T15:00:00+08:00'
+              sequenceNo: 3
+              preemptScheduleId: null
       responses:
         '200':
-          description: 急诊加台受理结果；需审批时 approvalRequired 为 true。
+          description: |
+            保留响应声明（兼容 0.4.0 调用方；当前 0.5.0 MVP 实现恒返回 201）。
+            该字段用于避免 0.x 阶段的破坏性删除（ADR-0011），1.0.0 时若确认不可达再走 major 清理。
           content:
             application/json:
               schema:
@@ -469,6 +641,26 @@ paths:
                 scheduleId: '8000000000000000002'
                 approvalRequired: true
                 conflicts: []
+        '201':
+          description: 急诊加台成功，返回急诊台次与审批记录。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmergencyAddResult'
+              example:
+                accepted: true
+                scheduleId: '8000000000000000002'
+                approvalRequired: true
+                conflicts: []
+                approval:
+                  changeId: '9000000000000000002'
+                  changeType: EMERGENCY
+                  status: APPROVED
+                  requestedBy: '1000000000000000001'
+                  requestedAt: '2026-12-01T12:55:00+08:00'
+                  approvedBy: '1000000000000000001'
+                  approvedAt: '2026-12-01T12:55:00+08:00'
+                  preemptScheduleId: null
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -484,8 +676,12 @@ paths:
       operationId: cancelSchedule
       tags:
         - 手术排程
-      summary: 停台/取消排程
-      description: 停台或取消排程必须选择原因码并写变更记录；已开始台次不允许直接取消（409）。
+      summary: 停台/取消排程（0.4.0 兼容，已弃用）
+      description: |
+        0.4.0 兼容端点：停台或取消排程必须选择原因码；已开始/已结束/已取消台次不允许直接取消
+        （409 `STATE_CONFLICT`）。0.5.0 起与 `/stop` 复用同一停台留痕路径：除审计外同样写入
+        `schedule_change_request`（STOP）与 `notification_outbox`，不再绕过变更历史；
+        新调用方应使用 `POST /v1/scheduling/schedules/{scheduleId}/stop`（计划 1.0.0 收敛）。
       parameters:
         - name: scheduleId
           in: path
@@ -1267,13 +1463,24 @@ components:
             - EMERGENCY
     UpdateScheduleRequest:
       type: object
-      description: 调整排程请求；服务端锁定术间并在事务内复检冲突。
+      description: |
+        调整排程（改台）请求；服务端锁定术间并在事务内复检冲突。0.5.0 起**服务端强制要求**
+        `reasonCode`（方案书 §2.4.2「停台改台必选原因码」），缺失或非法返回 400
+        `PARAM_INVALID`；契约字段保持 optional 以维持 0.x 的 additive 兼容（ADR-0011），
+        1.0.0 major 时再将其声明为 required。
       required:
         - plannedStart
         - plannedEnd
         - sequenceNo
         - version
       properties:
+        reasonCode:
+          type: string
+          description: |
+            改台原因码（服务端必填，缺失 400；字段在 1.0.0 前保持 optional）。白名单：SCHEDULE_ADJUST、SURGEON_UNAVAILABLE、
+            ROOM_EQUIPMENT_FAILURE、PATIENT_CONDITION、ANESTHESIA_RISK、OTHER；
+            缺失/非法返回 400 `PARAM_INVALID`（`details[].field=reasonCode`）。
+          maxLength: 32
         roomId:
           type: [string, 'null']
           description: 目标术间标识；为 null 时保持原术间不变。
@@ -1360,12 +1567,15 @@ components:
             - APPLICATION_ALREADY_SCHEDULED
             - VERSION_CONFLICT
             - STATE_CONFLICT
+            - PREEMPT_CONFLICT
           description: |
             冲突类型。开放枚举（`x-extensible-enum`）：已登记值见列表，服务端可新增规则类型，
             客户端必须容忍未知值并按字符串分支。当前规则：ROOM_OVERLAP=术间时段重叠、
             STAFF_CONFLICT=术者冲突、PATIENT_CONFLICT=患者台次冲突、ROOM_TYPE_MISMATCH=术间类型不匹配、
             APPLICATION_ALREADY_SCHEDULED=申请已有生效台次、VERSION_CONFLICT=乐观锁版本过期、
-            STATE_CONFLICT=台次状态不允许该操作；TIME_WINDOW_INVALID 保留给内部规则防御
+            STATE_CONFLICT=台次状态不允许该操作、PREEMPT_CONFLICT=急诊抢占目标在锁定后复检已变化
+            （状态/优先级/术间/时段不再满足抢占条件，请刷新后重试）；
+            TIME_WINDOW_INVALID 保留给内部规则防御
             （API 边界的时间窗非法统一 400，不再以 409 返回）。EQUIPMENT_CONFLICT/
             ISOLATION_CONFLICT/QUALIFICATION_MISMATCH 为后续设备、隔离与资质规则预留。
         severity:
@@ -1397,7 +1607,10 @@ components:
             $ref: '#/components/schemas/Conflict'
     EmergencyAddRequest:
       type: object
-      description: 急诊加台请求。
+      description: |
+        急诊加台请求（M2-M2-02）。`roomId` 与 `expectedStart` 在 MVP 必填（缺失 400）；
+        `expectedEnd` 缺省时按申请 `plannedDurationMin` 推算；`preemptScheduleId` 用于显式
+        抢占冲突中的择期台次（需 `m1:schedule:approve`）。
       required:
         - applicationId
         - reasonCode
@@ -1408,20 +1621,35 @@ components:
           description: 急诊手术申请标识。
         roomId:
           type: [string, 'null']
-          description: 指定术间；为 null 时由规则引擎推荐空档。
+          description: 指定术间；MVP 必填（为 null 返回 400），为规则推荐空档预留。
         reasonCode:
           type: string
-          description: 加台原因码，来自字典。
+          description: |
+            加台原因码白名单：EMERGENCY_GREEN_CHANNEL、EMERGENCY_PREEMPT、OTHER；
+            非法值返回 400 `PARAM_INVALID`。
         reason:
           type: string
-          description: 原因说明（演示文本）。
+          description: 原因说明（演示文本，≤500 字符，不含患者标识）。
         expectedStart:
           type: [string, 'null']
           format: date-time
-          description: 期望开始时间；为 null 时尽快安排。
+          description: 期望开始时间；MVP 必填。
+        expectedEnd:
+          type: [string, 'null']
+          format: date-time
+          description: 期望结束时间；为 null 时按申请预计时长推算，必须晚于开始时间。
+        sequenceNo:
+          type: integer
+          description: 台次序号（可选）；缺省按同日同时段已有台次顺延。
+          minimum: 1
+        preemptScheduleId:
+          type: [string, 'null']
+          description: |
+            拟抢占的择期台次标识（可选）。必须命中本次冲突台次且状态为 PLANNED/PUBLISHED，
+            否则 409；抢占成功后被抢占台次置 CANCELLED（reasonCode=EMERGENCY_PREEMPT）。
     EmergencyAddResult:
       type: object
-      description: 急诊加台受理结果。
+      description: 急诊加台受理结果；201 时携带 approval 审批记录。
       required:
         - accepted
         - approvalRequired
@@ -1435,12 +1663,159 @@ components:
           description: 生成的排程标识；未落排程为 null。
         approvalRequired:
           type: boolean
-          description: 是否触发加台审批。
+          description: 是否触发加台审批；M2-M2-02 起急诊加台必经审批，固定 true。
         conflicts:
           type: array
           description: 挤占或冲突提示。
           items:
             $ref: '#/components/schemas/Conflict'
+        approval:
+          $ref: '#/components/schemas/EmergencyApproval'
+          description: 急诊加台审批记录（0.5.0 新增，201 响应必带，status=APPROVED）。
+    EmergencyApproval:
+      type: object
+      description: 急诊加台审批记录（schedule_change_request 的对外投影，无 PHI）。
+      required:
+        - changeId
+        - changeType
+        - status
+        - requestedAt
+      properties:
+        changeId:
+          type: string
+          description: 变更记录标识。
+        changeType:
+          type: string
+          description: 变更类型；急诊加台固定 EMERGENCY。
+          enum:
+            - EMERGENCY
+        status:
+          type: string
+          description: 审批状态；MVP 由持 approve 权限者直接批准，固定 APPROVED。
+          enum:
+            - PENDING
+            - APPROVED
+            - REJECTED
+        requestedBy:
+          type: string
+          description: 申请人用户标识。
+        requestedAt:
+          type: string
+          format: date-time
+          description: 申请时间（服务端时间）。
+        approvedBy:
+          type: [string, 'null']
+          description: 审批人用户标识；未审批为 null。
+        approvedAt:
+          type: [string, 'null']
+          format: date-time
+          description: 审批时间（服务端时间）；未审批为 null。
+        preemptScheduleId:
+          type: [string, 'null']
+          description: 被抢占的择期台次标识；未抢占为 null。
+    StopScheduleRequest:
+      type: object
+      description: |
+        停台请求（M2-M2-02）。`reasonCode` 必填且必须在服务端白名单内；`reason` 可选。
+        白名单（按变更类型）：停台 PATIENT_CONDITION、SURGEON_UNAVAILABLE、
+        ROOM_EQUIPMENT_FAILURE、ANESTHESIA_RISK、SCHEDULE_CHANGE、OTHER；改台
+        SCHEDULE_ADJUST、PATIENT_CONDITION、SURGEON_UNAVAILABLE、ROOM_EQUIPMENT_FAILURE、
+        ANESTHESIA_RISK、OTHER；急诊 EMERGENCY_GREEN_CHANNEL、EMERGENCY_PREEMPT、OTHER。
+      required:
+        - reasonCode
+        - version
+      properties:
+        reasonCode:
+          type: string
+          description: 停台原因码；白名单见 schema 描述，非法值 400 `PARAM_INVALID`。
+          maxLength: 32
+        reason:
+          type: [string, 'null']
+          description: 停台原因说明（可选，≤500 字符，不含患者标识）。
+          maxLength: 500
+        version:
+          type: integer
+          description: 台次当前版本号；过期返回 409 `VERSION_CONFLICT`。
+          minimum: 1
+    ScheduleChange:
+      type: object
+      description: 台次变更记录（停台/改台/急诊审批历史，append-only）。
+      required:
+        - changeId
+        - scheduleId
+        - applicationId
+        - changeType
+        - reasonCode
+        - status
+        - requestedAt
+        - version
+      properties:
+        changeId:
+          type: string
+          description: 变更记录标识。
+        scheduleId:
+          type: string
+          description: 台次标识。
+        applicationId:
+          type: string
+          description: 手术申请标识。
+        changeType:
+          type: string
+          description: 变更类型：STOP=停台，MODIFY=改台，EMERGENCY=急诊加台/抢占。
+          enum:
+            - STOP
+            - MODIFY
+            - EMERGENCY
+        reasonCode:
+          type: string
+          description: 原因码（白名单值）。
+        reason:
+          type: [string, 'null']
+          description: 原因说明（演示文本，无患者标识）；未填为 null。
+        status:
+          type: string
+          description: |
+            审批状态。MVP：持 write 的停台/改台、持 approve 的急诊加台均直接生效记
+            APPROVED；PENDING/REJECTED 保留给后续双人审批（EXT，见 docs/modules/m1）。
+          enum:
+            - PENDING
+            - APPROVED
+            - REJECTED
+        preemptScheduleId:
+          type: [string, 'null']
+          description: 抢占关系中的另一台次标识；无抢占为 null。
+        requestedBy:
+          type: string
+          description: 申请人/执行人用户标识。
+        requestedAt:
+          type: string
+          format: date-time
+          description: 申请/执行时间（服务端时间）。
+        approvedBy:
+          type: [string, 'null']
+          description: 审批人用户标识；PENDING/REJECTED 场景可缺省，未审批为 null。
+        approvedAt:
+          type: [string, 'null']
+          format: date-time
+          description: 审批时间（服务端时间）；未审批为 null。
+        version:
+          type: integer
+          description: 变更记录版本号（append-only，创建为 1）。
+          minimum: 1
+    ScheduleChangeList:
+      type: object
+      description: 台次变更记录分页列表；按 requestedAt 倒序。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 变更记录；无记录为空数组。
+          items:
+            $ref: '#/components/schemas/ScheduleChange'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+          description: 分页元数据（0.5.0 additive）；缺省 page=1、size=50。
     CancelScheduleRequest:
       type: object
       description: 停台/取消排程请求；原因码必填并进入统计。

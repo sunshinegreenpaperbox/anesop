@@ -2,7 +2,8 @@
 
 > 状态：S0-06 基线 + V3（认证令牌）+ V4（M2 采集骨架）+ V5（数据范围绑定，M2-M0-01）
 > + V6（手机号加解密与用户管理，M2-M0-02）+ V7（M1 手术申请接收，M2-M1-01）
-> + V8（M1 术间与排程台次，M2-M2-01）；
+> + V8（M1 术间与排程台次，M2-M2-01）
+> + V9（M1 停改台/急诊加台与通知 outbox，M2-M2-02）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -20,6 +21,7 @@ db/
 │   ├── V6__m0_user_phone_crypto.sql        # sys_user.phone_key_id/phone_updated_at + 一致性约束 + m0:user:*（M2-M0-02）
 │   ├── V7__m1_schedule_application.sql     # m1_sched 患者快照/手术申请/状态历史（含 append-only 触发器）+ m1:application:* / m1:patient:read（M2-M1-01）
 │   ├── V8__m1_schedule_room_plan.sql       # m1_sched 术间/排程台次 + surgery_application.required_room_type + m1:schedule:*（M2-M2-01）
+│   ├── V9__m1_schedule_change_emergency.sql # m1_sched 变更记录/通知 outbox + m1:schedule:approve（M2-M2-02）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -140,6 +142,33 @@ SYS_ADMIN/SYS_OR_MANAGER），`schedule.priority smallint NOT NULL DEFAULT 0`（
   真实术间主数据不得由种子代替，须走院方主数据维护流程。
 - **重放**：修复后重新执行 V8 会重建空表并重新灌入 5 个合成术间；已导出排程数据不得直接回灌。
 
+
+### 4.4 V9（M1 停改台/急诊加台与通知 outbox）回滚说明
+
+V9 属 expand 段：新增 `m1_sched.schedule_change_request`（台次变更申请/审批留痕）与
+`m1_sched.notification_outbox`（模拟通知发件箱）两表、索引与一个权限点
+`m1:schedule:approve`（仅授 SYS_ADMIN/SYS_OR_MANAGER）；不修改 V1–V8 已执行脚本，也不改写
+既有列与数据。关键约束：`ck_change_request_approval`（PENDING 无审批人、APPROVED/REJECTED
+必须有审批人与时间）、`ck_change_request_type`（STOP/MODIFY/EMERGENCY）、
+`ck_notification_outbox_no_phi`（payload 禁止患者姓名/住院号/证件号/手机号/诊断等键）、
+`ck_notification_outbox_no_phi_value`（值级拒绝 15 位以上连续数字）；`schedule_change_request`
+为完全 append-only，触发器 `trg_schedule_change_request_no_update/no_delete/no_truncate` 拒绝
+改写与删除（SQLSTATE 55000，B-2）。
+
+- **应用回滚**：下线 `/v1/scheduling/schedules/{scheduleId}/stop`、
+  `/v1/scheduling/schedules/{scheduleId}/changes`、`/v1/scheduling/emergency-cases` 与工作台
+  停台/急诊入口；保留原 `POST .../cancel` 与排程查询/创建/调整能力，申请/患者/麻醉记录不受影响。
+- **库层回滚**（前向修复脚本，需 DBA 审批 + 备份；顺序不可颠倒）：
+  `DROP TABLE m1_sched.notification_outbox` → `DROP TABLE m1_sched.schedule_change_request` →
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id = '...29'` →
+  `DELETE FROM m0_platform.sys_permission WHERE code = 'm1:schedule:approve'`。
+- **数据保全**：回滚前必须导出两张表（审批留痕与待发通知）到受控介质并校验行数；审批留痕
+  不得丢失，须先归档到离线审计库；待发通知可直接丢弃（模拟端口，EXT 未接入）。
+- **不可逆项**：`schedule_change_request` 为只增留痕，回滚后无法从台次表反推审批人/时间；
+  如需保留，只能依赖导出归档。
+- **重放**：修复后重新执行 V9 会重建空表；已导出的审批记录不得直接回灌（会与 Flyway 版本/
+  外键冲突），须走受控数据修复流程并记录操作人与时间。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）
@@ -155,7 +184,7 @@ source scripts/env.sh
 
 测试断言分两条路径：
 
-- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 8 条（V1–V8）、
+- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 9 条（V1–V9）、
   二次 `migrate()` 执行 0 条、V1→V2 升级成功、约束/索引/注释存在、平台预置种子正确、
   `sys_user=0` 且无 `demo_admin`、审计表 UPDATE/DELETE/TRUNCATE 被数据库拒绝；
 - **演示路径**（追加 `db/seed/demo`）：V100 后 `demo_admin`（ALL）、`demo_dept`（DEPT，绑定麻醉科）、
