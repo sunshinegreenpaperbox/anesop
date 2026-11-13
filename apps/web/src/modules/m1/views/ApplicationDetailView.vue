@@ -21,6 +21,7 @@ const loading = ref(false)
 const error = ref<ApiError | null>(null)
 
 const canWrite = computed(() => auth.hasPermission('m1:application:write'))
+const canReadPreop = computed(() => auth.hasPermission('m2:preop:read'))
 
 const statusLabels: Record<ApplicationStatus, string> = {
   SUBMITTED: '已提交',
@@ -111,6 +112,14 @@ function goBack(): void {
   void router.push({ name: 'm1-applications' })
 }
 
+function openPreop(): void {
+  if (!application.value) return
+  void router.push({
+    name: 'm2-preop',
+    params: { applicationId: application.value.applicationId },
+  })
+}
+
 async function handleCancel(): Promise<void> {
   const current = application.value
   if (!current) return
@@ -159,6 +168,14 @@ watch(
       </div>
       <div class="detail__actions">
         <el-button data-testid="back-button" @click="goBack">返回列表</el-button>
+        <el-button
+          v-if="application && canReadPreop"
+          type="primary"
+          data-testid="preop-entry"
+          @click="openPreop"
+        >
+          术前访视
+        </el-button>
         <el-button
           v-if="application && canWrite && !isTerminal(application.status)"
           type="danger"

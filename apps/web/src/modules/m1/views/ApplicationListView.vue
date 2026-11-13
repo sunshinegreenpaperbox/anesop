@@ -28,6 +28,7 @@ const error = ref<ApiError | null>(null)
 const filters = ref<ApplicationFilters>({ status: '', urgency: '', departmentName: '' })
 
 const canWrite = computed(() => auth.hasPermission('m1:application:write'))
+const canReadPreop = computed(() => auth.hasPermission('m2:preop:read'))
 
 const statusOptions: Array<{ value: ApplicationStatus; label: string }> = [
   { value: 'SUBMITTED', label: '已提交' },
@@ -120,6 +121,10 @@ function handlePageChange(next: number): void {
 
 function openDetail(application: SurgeryApplication): void {
   void router.push({ name: 'm1-application-detail', params: { id: application.applicationId } })
+}
+
+function openPreop(application: SurgeryApplication): void {
+  void router.push({ name: 'm2-preop', params: { applicationId: application.applicationId } })
 }
 
 async function handleImport(): Promise<void> {
@@ -297,6 +302,15 @@ onMounted(() => {
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+            <el-button
+              v-if="canReadPreop"
+              link
+              type="primary"
+              data-testid="preop-entry"
+              @click="openPreop(row)"
+            >
+              术前访视
+            </el-button>
             <el-button
               v-if="canWrite && !isTerminal(row.status)"
               link

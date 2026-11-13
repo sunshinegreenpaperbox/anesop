@@ -6,6 +6,8 @@ import SessionsView from '../modules/m0/views/SessionsView.vue'
 import ApplicationListView from '../modules/m1/views/ApplicationListView.vue'
 import ApplicationDetailView from '../modules/m1/views/ApplicationDetailView.vue'
 import ScheduleBoardView from '../modules/m1/views/ScheduleBoardView.vue'
+import PreopEntryView from '../modules/m2/views/PreopEntryView.vue'
+import PreopAssessmentView from '../modules/m2/views/PreopAssessmentView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -63,6 +65,23 @@ export const routes: RouteRecordRaw[] = [
         name: 'm1-schedule',
         component: ScheduleBoardView,
         meta: menuMeta('/m1/schedule'),
+      },
+      {
+        path: 'm2/preop',
+        name: 'm2-preop-entry',
+        component: PreopEntryView,
+        meta: menuMeta('/m2/preop'),
+      },
+      {
+        path: 'm2/preop/:applicationId',
+        name: 'm2-preop',
+        component: PreopAssessmentView,
+        meta: {
+          title: '术前访视与评估',
+          icon: 'sessions',
+          permissions: ['m2:preop:read'],
+          menu: false,
+        },
       },
       {
         path: 'm0/sessions',

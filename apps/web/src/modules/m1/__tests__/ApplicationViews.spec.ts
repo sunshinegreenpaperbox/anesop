@@ -138,6 +138,35 @@ describe('ApplicationListView 手术申请列表', () => {
     expect(wrapper.text()).toContain('trace-403')
   })
 
+  it('具备 m2:preop:read 时提供“术前访视”入口并跳转 /m2/preop/:applicationId', async () => {
+    resetAppState()
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:application:read', 'm2:preop:read'] }))
+    await router.push('/m1/applications')
+    const queue = createFetchQueue([jsonResponse(page())])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    const entry = wrapper.find('[data-testid="preop-entry"]')
+    expect(entry.exists()).toBe(true)
+    await entry.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('m2-preop')
+    expect(router.currentRoute.value.params.applicationId).toBe(application.applicationId)
+  })
+
+  it('无 m2:preop:read 时隐藏“术前访视”入口', async () => {
+    const queue = createFetchQueue([jsonResponse(page())])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountList()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="preop-entry"]').exists()).toBe(false)
+  })
+
   it('无写权限时隐藏导入与取消按钮', async () => {
     resetAppState()
     seedAuthenticatedUser(syntheticUser({ permissions: ['m1:application:read'] }))
@@ -179,6 +208,25 @@ describe('ApplicationDetailView 手术申请详情', () => {
     expect(wrapper.text()).toContain('HIS 导入')
     expect(wrapper.text()).toContain('已提交')
     expect(wrapper.find('[data-testid="cancel-button"]').exists()).toBe(true)
+  })
+
+  it('详情页提供“术前访视”入口并跳转 /m2/preop/:applicationId', async () => {
+    resetAppState()
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:application:read', 'm2:preop:read'] }))
+    await router.push(`/m1/applications/${application.applicationId}`)
+    const queue = createFetchQueue([jsonResponse(application)])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountDetail()
+    await flushPromises()
+
+    const entry = wrapper.find('[data-testid="preop-entry"]')
+    expect(entry.exists()).toBe(true)
+    await entry.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('m2-preop')
+    expect(router.currentRoute.value.params.applicationId).toBe(application.applicationId)
   })
 
   it('详情 404 时展示错误码且无取消按钮', async () => {
