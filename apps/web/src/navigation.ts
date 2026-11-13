@@ -57,6 +57,12 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m2:threeway:read'],
   },
   {
+    path: '/m2/records',
+    title: '麻醉记录',
+    icon: 'sessions',
+    permissions: ['m2:record:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',

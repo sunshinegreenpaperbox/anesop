@@ -151,3 +151,108 @@ export function recordThreeWayCheck(
     payload,
   )
 }
+
+/* ---------------------------------------------------------------------------
+ * 麻醉记录单与时间轴（anesthesia.yaml 0.5.0，M3-M2-01）
+ * 事件/用药/出入量 append-only；麻精类用药必须双人核对；记录单未锁定时可改（乐观锁 version）。
+ * ------------------------------------------------------------------------- */
+
+export type AnesthesiaRecordDetail = anesthesiaComponents['schemas']['AnesthesiaRecord']
+export type AnesthesiaRecordList = anesthesiaComponents['schemas']['AnesthesiaRecordList']
+export type CreateAnesthesiaRecordRequest =
+  anesthesiaComponents['schemas']['CreateAnesthesiaRecordRequest']
+export type UpdateAnesthesiaRecordRequest =
+  anesthesiaComponents['schemas']['UpdateAnesthesiaRecordRequest']
+export type RecordEvent = anesthesiaComponents['schemas']['RecordEvent']
+export type RecordEventList = anesthesiaComponents['schemas']['RecordEventList']
+export type CreateRecordEventRequest = anesthesiaComponents['schemas']['CreateRecordEventRequest']
+export type DrugAdministration = anesthesiaComponents['schemas']['DrugAdministration']
+export type DrugAdministrationList = anesthesiaComponents['schemas']['DrugAdministrationList']
+export type AdministerDrugRequest = anesthesiaComponents['schemas']['AdministerDrugRequest']
+export type FluidRecord = anesthesiaComponents['schemas']['FluidRecord']
+export type FluidRecordList = anesthesiaComponents['schemas']['FluidRecordList']
+export type RecordFluidRequest = anesthesiaComponents['schemas']['RecordFluidRequest']
+export type IntakeOutputSummary = anesthesiaComponents['schemas']['IntakeOutputSummary']
+export type RecordEventType = RecordEvent['eventType']
+export type FluidDirection = FluidRecord['direction']
+
+/** 事件类型中文标签；CUSTOM 为自定义关键事件。 */
+export const recordEventLabels: Record<string, string> = {
+  ANESTHESIA_START: '麻醉开始',
+  INDUCTION: '诱导',
+  INTUBATION: '插管',
+  INCISION: '切皮',
+  CUSTOM: '关键事件',
+  EXTUBATION: '拔管',
+  ANESTHESIA_END: '麻醉结束',
+}
+
+/** 按台次查询记录单（0 或 1 条）；台次不可见 403。 */
+export function listAnesthesiaRecords(scheduleId: string): Promise<AnesthesiaRecordList> {
+  const query = new URLSearchParams({ scheduleId })
+  return http.get<AnesthesiaRecordList>(`/v1/anesthesia/records?${query.toString()}`)
+}
+
+/** 按台次创建记录单（DRAFT）；重复创建 409，台次不可见 422。 */
+export function createAnesthesiaRecord(
+  payload: CreateAnesthesiaRecordRequest,
+): Promise<AnesthesiaRecordDetail> {
+  return http.post<AnesthesiaRecordDetail>('/v1/anesthesia/records', payload)
+}
+
+/** 记录单详情；不存在或越界 404。 */
+export function getAnesthesiaRecord(recordId: string): Promise<AnesthesiaRecordDetail> {
+  return http.get<AnesthesiaRecordDetail>(`/v1/anesthesia/records/${recordId}`)
+}
+
+/** 保存记录单（未锁定可改；必须回传 version，过期 409）。 */
+export function updateAnesthesiaRecord(
+  recordId: string,
+  payload: UpdateAnesthesiaRecordRequest,
+): Promise<AnesthesiaRecordDetail> {
+  return http.put<AnesthesiaRecordDetail>(`/v1/anesthesia/records/${recordId}`, payload)
+}
+
+/** 时间轴事件（occurredAt 升序，同刻按 seq）。 */
+export function listRecordEvents(recordId: string): Promise<RecordEventList> {
+  return http.get<RecordEventList>(`/v1/anesthesia/records/${recordId}/events`)
+}
+
+/** 追加时间轴事件（append-only）；早于记录开始 400。 */
+export function appendRecordEvent(
+  recordId: string,
+  payload: CreateRecordEventRequest,
+): Promise<RecordEvent> {
+  return http.post<RecordEvent>(`/v1/anesthesia/records/${recordId}/events`, payload)
+}
+
+/** 用药记录（按给药时间倒序）。 */
+export function listDrugAdministrations(recordId: string): Promise<DrugAdministrationList> {
+  return http.get<DrugAdministrationList>(`/v1/anesthesia/records/${recordId}/drugs`)
+}
+
+/** 记录用药：麻精类必须双人核对（缺失/同人 400）。 */
+export function recordDrugAdministration(
+  recordId: string,
+  payload: AdministerDrugRequest,
+): Promise<DrugAdministration> {
+  return http.post<DrugAdministration>(`/v1/anesthesia/records/${recordId}/drugs`, payload)
+}
+
+/** 输液/出入量明细（按记录时间倒序）。 */
+export function listFluidRecords(recordId: string): Promise<FluidRecordList> {
+  return http.get<FluidRecordList>(`/v1/anesthesia/records/${recordId}/fluids`)
+}
+
+/** 记录入量/出量（amountMl 必须大于 0）。 */
+export function recordFluidRecord(
+  recordId: string,
+  payload: RecordFluidRequest,
+): Promise<FluidRecord> {
+  return http.post<FluidRecord>(`/v1/anesthesia/records/${recordId}/fluids`, payload)
+}
+
+/** 出入量汇总（服务端计算，balanceMl = intakeMl - outputMl）。 */
+export function getIntakeOutputSummary(recordId: string): Promise<IntakeOutputSummary> {
+  return http.get<IntakeOutputSummary>(`/v1/anesthesia/records/${recordId}/io-summary`)
+}

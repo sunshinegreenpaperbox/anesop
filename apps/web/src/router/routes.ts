@@ -13,6 +13,8 @@ import ConsentEntryView from '../modules/m2/views/ConsentEntryView.vue'
 import ConsentView from '../modules/m2/views/ConsentView.vue'
 import ThreeWayCheckEntryView from '../modules/m2/views/ThreeWayCheckEntryView.vue'
 import ThreeWayCheckView from '../modules/m2/views/ThreeWayCheckView.vue'
+import RecordEntryView from '../modules/m2/views/RecordEntryView.vue'
+import RecordView from '../modules/m2/views/RecordView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -125,6 +127,23 @@ export const routes: RouteRecordRaw[] = [
           title: '三方核查',
           icon: 'sessions',
           permissions: ['m2:threeway:read'],
+          menu: false,
+        },
+      },
+      {
+        path: 'm2/records',
+        name: 'm2-records-entry',
+        component: RecordEntryView,
+        meta: menuMeta('/m2/records'),
+      },
+      {
+        path: 'm2/records/:scheduleId',
+        name: 'm2-record',
+        component: RecordView,
+        meta: {
+          title: '麻醉记录单',
+          icon: 'sessions',
+          permissions: ['m2:record:read'],
           menu: false,
         },
       },
