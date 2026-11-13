@@ -57,6 +57,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.access.AccessDeniedException;
 
@@ -85,6 +86,7 @@ class AcquisitionServiceImplTest {
     private AuditWriter auditWriter;
     private DataScopeResolver dataScopeResolver;
     private SchedulingService schedulingService;
+    private ApplicationEventPublisher eventPublisher;
     private AcquisitionServiceImpl service;
 
     @BeforeEach
@@ -95,12 +97,13 @@ class AcquisitionServiceImplTest {
         auditWriter = mock(AuditWriter.class);
         dataScopeResolver = mock(DataScopeResolver.class);
         schedulingService = mock(SchedulingService.class);
+        eventPublisher = mock(ApplicationEventPublisher.class);
         org.mockito.Mockito.lenient().when(dataScopeResolver.resolve(any())).thenReturn(ALL_SCOPE);
         AcquisitionProperties properties = new AcquisitionProperties(TOKEN, 120L, 24L, 24L, true);
         service = new AcquisitionServiceImpl(registryMapper, ingestLogMapper, vitalMapper,
                 new GatewayTokenVerifier(properties), properties, auditWriter,
                 Clock.fixed(NOW, ZoneOffset.UTC), new ObjectMapper(), dataScopeResolver,
-                schedulingService);
+                schedulingService, eventPublisher);
     }
 
     // --------------------------------------------------------------- 设备登记 --
@@ -249,7 +252,7 @@ class AcquisitionServiceImplTest {
         AcquisitionServiceImpl unconfigured = new AcquisitionServiceImpl(registryMapper, ingestLogMapper,
                 vitalMapper, new GatewayTokenVerifier(noToken), noToken, auditWriter,
                 Clock.fixed(NOW, ZoneOffset.UTC), new ObjectMapper(), dataScopeResolver,
-                schedulingService);
+                schedulingService, eventPublisher);
 
         assertThatThrownBy(() -> unconfigured.ingest(GATEWAY, DEVICE, "anything",
                 new IngestRequest("B1", List.of(frame(1, 0))), null))

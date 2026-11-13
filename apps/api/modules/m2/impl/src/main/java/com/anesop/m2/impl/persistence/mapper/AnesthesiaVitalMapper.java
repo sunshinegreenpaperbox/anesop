@@ -121,4 +121,33 @@ public interface AnesthesiaVitalMapper {
             """)
     List<GatewayQualityRow> qualitySince(@Param("since") Instant since,
             @Param("now") Instant now);
+
+    /**
+     * 告警评估用体征采样（{@code m2_anes.anesthesia_vital}，只读）。
+     *
+     * <p>取最近 {@code limit} 帧并按 measured_at 升序返回（服务层再正序处理）：记录时长可能
+     * 超过 1 Hz × 数小时，用上限截断保护内存，截断时保留**最近**的采样（临床最相关），
+     * 截断事实由服务层写入日志与评估结果说明，不静默。
+     */
+    @Select("""
+            SELECT seq, measured_at, hr, spo2, nibp_sys, nibp_dia, etco2, temp,
+                   quality, quality_flags
+              FROM (
+                    SELECT seq, measured_at, hr, spo2, nibp_sys, nibp_dia, etco2, temp,
+                           quality, quality_flags
+                      FROM m2_anes.anesthesia_vital
+                     WHERE gateway_id = #{gatewayId}
+                       AND device_id = #{deviceId}
+                       AND measured_at >= #{from}
+                       AND measured_at <= #{to}
+                     ORDER BY measured_at DESC, seq DESC
+                     LIMIT #{limit}
+                   ) recent
+             ORDER BY measured_at ASC, seq ASC
+            """)
+    List<VitalRow> selectAlertSamples(@Param("gatewayId") String gatewayId,
+            @Param("deviceId") String deviceId,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            @Param("limit") int limit);
 }

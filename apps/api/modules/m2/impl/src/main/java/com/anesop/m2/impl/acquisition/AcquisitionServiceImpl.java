@@ -58,6 +58,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -123,6 +124,7 @@ public class AcquisitionServiceImpl implements AcquisitionService {
     private final ObjectMapper objectMapper;
     private final DataScopeResolver dataScopeResolver;
     private final SchedulingService schedulingService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 构造服务。
@@ -137,6 +139,7 @@ public class AcquisitionServiceImpl implements AcquisitionService {
      * @param objectMapper    JSON 解析（质量统计 jsonb 文本）
      * @param dataScopeResolver 数据范围解析（m0-api）
      * @param schedulingService 可见术间查询（m1-api，不访问 m1 表）
+     * @param eventPublisher   领域事件发布（ingest 提交后触发告警评估，AFTER_COMMIT）
      */
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
             justification = "Spring 注入的单例 Mapper/写入器由容器管理；ObjectMapper 防御性拷贝")
@@ -149,7 +152,8 @@ public class AcquisitionServiceImpl implements AcquisitionService {
             Clock clock,
             ObjectMapper objectMapper,
             DataScopeResolver dataScopeResolver,
-            SchedulingService schedulingService) {
+            SchedulingService schedulingService,
+            ApplicationEventPublisher eventPublisher) {
         this.registryMapper = registryMapper;
         this.ingestLogMapper = ingestLogMapper;
         this.vitalMapper = vitalMapper;
@@ -160,6 +164,7 @@ public class AcquisitionServiceImpl implements AcquisitionService {
         this.objectMapper = objectMapper.copy();
         this.dataScopeResolver = dataScopeResolver;
         this.schedulingService = schedulingService;
+        this.eventPublisher = eventPublisher;
     }
 
     // ------------------------------------------------------------- 设备台账 --
@@ -346,6 +351,12 @@ public class AcquisitionServiceImpl implements AcquisitionService {
                 rejections.size(), false, rejections, receivedAt);
         audit(ACTION_INGEST, RESOURCE_DEVICE, device, ingestDetail(result, suspect, missing), null,
                 context, AUDIT_ACTOR_GATEWAY);
+        if (inserted > 0) {
+            // 领域事件在事务内发布，@TransactionalEventListener(AFTER_COMMIT) 在提交后评估；
+            // 采集回滚时不产生告警（评审 B-1 / ADR-0017）。
+            eventPublisher.publishEvent(new VitalsIngestedEvent(gateway, device, batchKey,
+                    inserted, receivedAt));
+        }
         return result;
     }
 

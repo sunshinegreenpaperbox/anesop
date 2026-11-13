@@ -71,6 +71,30 @@ public final class M2Permissions {
     /** Spring Security 授权表达式中的麻醉记录单书写权限：{@code PERM_m2:record:write}。 */
     public static final String AUTHORITY_RECORD_WRITE = "PERM_" + RECORD_WRITE;
 
+    /** 术中预警规则与告警只读（规则列表、记录单告警列表）。 */
+    public static final String ALERT_READ = "m2:alert:read";
+
+    /** 告警确认/忽略（临床处置留痕）。 */
+    public static final String ALERT_ACK = "m2:alert:ack";
+
+    /** 预警规则配置（仅 SYS_ADMIN；阈值须临床顾问确认后录入）。 */
+    public static final String ALERT_CONFIGURE = "m2:alert:configure";
+
+    /** 抢救记录书写（append-only）。 */
+    public static final String RESCUE_WRITE = "m2:rescue:write";
+
+    /** Spring Security 授权表达式中的预警只读权限：{@code PERM_m2:alert:read}。 */
+    public static final String AUTHORITY_ALERT_READ = "PERM_" + ALERT_READ;
+
+    /** Spring Security 授权表达式中的告警处置权限：{@code PERM_m2:alert:ack}。 */
+    public static final String AUTHORITY_ALERT_ACK = "PERM_" + ALERT_ACK;
+
+    /** Spring Security 授权表达式中的规则配置权限：{@code PERM_m2:alert:configure}。 */
+    public static final String AUTHORITY_ALERT_CONFIGURE = "PERM_" + ALERT_CONFIGURE;
+
+    /** Spring Security 授权表达式中的抢救记录书写权限：{@code PERM_m2:rescue:write}。 */
+    public static final String AUTHORITY_RESCUE_WRITE = "PERM_" + RESCUE_WRITE;
+
     private M2Permissions() {
     }
 }

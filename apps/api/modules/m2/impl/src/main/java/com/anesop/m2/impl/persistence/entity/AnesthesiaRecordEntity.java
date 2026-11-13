@@ -24,6 +24,8 @@ public class AnesthesiaRecordEntity {
     private UUID scheduleId;
     private UUID applicationId;
     private UUID patientId;
+    /** 创建时经 m1-api 快照的术间（V16）；采集落库事件按它匹配 ONGOING 记录。 */
+    private UUID roomId;
     private String status;
     private String anesthesiaType;
     private Instant startedAt;
@@ -69,6 +71,14 @@ public class AnesthesiaRecordEntity {
 
     public void setPatientId(UUID patientId) {
         this.patientId = patientId;
+    }
+
+    public UUID getRoomId() {
+        return roomId;
+    }
+
+    public void setRoomId(UUID roomId) {
+        this.roomId = roomId;
     }
 
     public String getStatus() {

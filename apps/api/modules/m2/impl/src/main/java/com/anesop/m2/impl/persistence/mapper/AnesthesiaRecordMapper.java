@@ -3,6 +3,7 @@ package com.anesop.m2.impl.persistence.mapper;
 import com.anesop.m2.impl.persistence.entity.AnesthesiaRecordEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -22,11 +23,11 @@ public interface AnesthesiaRecordMapper extends BaseMapper<AnesthesiaRecordEntit
 
     @Insert("""
             INSERT INTO m2_anes.anesthesia_record
-                (id, schedule_id, application_id, patient_id, status, anesthesia_type,
+                (id, schedule_id, application_id, patient_id, room_id, status, anesthesia_type,
                  started_at, ended_at, created_at, created_by, updated_at, updated_by,
                  version, deleted)
             VALUES
-                (#{id}, #{scheduleId}, #{applicationId}, #{patientId}, #{status},
+                (#{id}, #{scheduleId}, #{applicationId}, #{patientId}, #{roomId}, #{status},
                  #{anesthesiaType}, #{startedAt}, #{endedAt}, #{createdAt}, #{createdBy},
                  #{updatedAt}, #{updatedBy}, #{version}, false)
             """)
@@ -41,7 +42,7 @@ public interface AnesthesiaRecordMapper extends BaseMapper<AnesthesiaRecordEntit
      * 必须在事务内调用；返回 null 表示记录单不存在。
      */
     @Select("""
-            SELECT id, schedule_id, application_id, patient_id, status, anesthesia_type,
+            SELECT id, schedule_id, application_id, patient_id, room_id, status, anesthesia_type,
                    started_at, ended_at, created_at, created_by, updated_at, updated_by,
                    version, deleted
               FROM m2_anes.anesthesia_record
@@ -76,4 +77,25 @@ public interface AnesthesiaRecordMapper extends BaseMapper<AnesthesiaRecordEntit
             @Param("endedAt") Instant endedAt,
             @Param("updatedAt") Instant updatedAt,
             @Param("updatedBy") UUID updatedBy);
+
+    /**
+     * 术间内进行中且已开始的记录单（V16 room_id 快照）。
+     *
+     * <p>采集落库后的领域事件按此匹配活动记录：只评估 {@code status=ONGOING 且
+     * started_at IS NOT NULL、ended_at IS NULL} 的记录；DRAFT 不评估（评审 B-3）。
+     * 一个术间通常只有一张活动记录，按开始时间倒序返回以便多处异常时优先最新。
+     */
+    @Select("""
+            SELECT id, schedule_id, application_id, patient_id, room_id, status, anesthesia_type,
+                   started_at, ended_at, created_at, created_by, updated_at, updated_by,
+                   version, deleted
+              FROM m2_anes.anesthesia_record
+             WHERE room_id = #{roomId}
+               AND status = 'ONGOING'
+               AND started_at IS NOT NULL
+               AND ended_at IS NULL
+               AND deleted = false
+             ORDER BY started_at DESC
+            """)
+    List<AnesthesiaRecordEntity> selectOngoingByRoom(@Param("roomId") UUID roomId);
 }

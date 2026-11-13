@@ -214,6 +214,8 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         entity.setScheduleId(scheduleId);
         entity.setApplicationId(UUID.fromString(schedule.getApplicationId()));
         entity.setPatientId(UUID.fromString(schedule.getPatientId()));
+        // 术间快照（V16）：采集落库事件按 roomId 匹配活动记录，禁止跨模块读 m1 表。
+        entity.setRoomId(parseUuid(schedule.getRoomId()));
         entity.setStatus(STATUS_DRAFT);
         entity.setAnesthesiaType(anesthesiaType);
         entity.setCreatedAt(now);
