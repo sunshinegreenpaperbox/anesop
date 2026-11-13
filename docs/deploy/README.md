@@ -54,6 +54,25 @@
 - `.env.example` 是唯一允许入库的 env 文件（`.gitignore` 对 `.env`/`.env.*` 有例外规则）；
   提交前用 `git status` 确认没有把真实 `.env` 或证书带进来。
 
+### 2.1 关键环境变量（生产必填，全部由 `.env` 注入）
+
+| 变量 | 必填 | 格式/生成 | 说明 |
+|---|---|---|---|
+| `ANESOP_DB_*` / `POSTGRES_*` | 是 | 强口令 | 数据库连接；生产值入密码管理系统 |
+| `ANESOP_JWT_SECRET` | 是 | Base64，解码后 ≥32 字节；`openssl rand -base64 48` | JWT 签名密钥；缺失/占位/低熵拒绝启动 |
+| `ANESOP_FIELD_KEY` | 是 | Base64，解码后恰好 32 字节；`openssl rand -base64 32` | 手机号 AES-256-GCM 字段密钥 |
+| `ANESOP_PHONE_PEPPER` | 是 | Base64，解码后 ≥32 字节；`openssl rand -base64 48` | 手机号 HMAC pepper，与字段密钥分离 |
+| `ANESOP_INPATIENT_PEPPER` | 是 | Base64，解码后 ≥32 字节；`openssl rand -base64 48` | M1 住院号 HMAC pepper；缺失/非法 Base64/<32 字节拒绝启动，丢失将无法匹配历史住院号哈希 |
+| `SPRING_PROFILES_ACTIVE` | 是 | `prod` | 生产 profile；禁止 `dev`/`test` |
+| `SPRING_FLYWAY_LOCATIONS` | 是 | `filesystem:/opt/anesop/db/migration` | 生产只加载迁移，不含演示种子 |
+
+- **M1 pepper（B-2）fail-closed**：`anesop.m1.inpatient-pepper.allow-dev-generated` 生产显式为
+  `false`；dev/test 才允许进程内随机生成并 WARN，重启后旧住院号哈希不可复用。
+- 密钥不得写入仓库、日志、截图或工单；轮换先备份并演练（字段密钥丢失 = 手机号密文永久不可解密）。
+- **Nginx 日志（B-3）**：`/api/` 使用 `log_format anesop_no_query`（仅 `$request_method $uri
+  $server_protocol`，不含 query/请求参数），医学检索走 `POST /v1/patients/search`；部署后
+  用 `nginx -t` 校验，禁止把 `/api/` 的 `access_log` 改回 combined（combined 含 `$request`）。
+
 ## 3. 首次部署（一键起，首次约 10 分钟）
 
 > 以下命令在**具备 Docker 的部署机**执行；本仓库施工环境未执行（EXT-08）。

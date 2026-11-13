@@ -51,7 +51,8 @@ class SimulatedDeviceTest {
                 assertThat(lines.get(0)).contains("|SIM-E2E-01|1|");
                 assertThat(lines.get(1)).contains("|SIM-E2E-01|2|");
             }
-            client.join(5_000L);
+            // SimulatedDevice.main 每帧真实 sleep 1s（2 帧），10s 仅为并发负载下的宽余量
+            client.join(10_000L);
             assertThat(client.isAlive()).isFalse();
         }
     }

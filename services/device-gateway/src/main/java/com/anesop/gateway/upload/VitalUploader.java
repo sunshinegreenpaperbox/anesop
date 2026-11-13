@@ -12,8 +12,10 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +42,8 @@ public final class VitalUploader implements AutoCloseable {
     private final VitalRepository repository;
     private final GatewayProperties.Upload config;
     private final MeterRegistry meterRegistry;
+    /** 时间源：生产为 {@link System#currentTimeMillis()}，测试可注入可控时钟。 */
+    private final LongSupplier nowEpochMillis;
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicInteger connected = new AtomicInteger(1);
@@ -48,19 +52,39 @@ public final class VitalUploader implements AutoCloseable {
     private final AtomicLong nextAttemptEpochMillis = new AtomicLong(0L);
 
     /**
-     * 构造上传器并注册 gauge。
+     * 构造上传器并注册 gauge（生产构造器，时间源为系统时钟）。
      *
      * @param buffer       本地缓冲
      * @param repository   入库仓储
      * @param properties   网关配置
      * @param meterRegistry 指标注册表
      */
+    @Autowired
     public VitalUploader(LocalBuffer buffer, VitalRepository repository, GatewayProperties properties,
             MeterRegistry meterRegistry) {
+        this(buffer, repository, properties, meterRegistry, System::currentTimeMillis);
+    }
+
+    /**
+     * 构造上传器并注入时间源（包可见，仅供同包测试去掉对真实时间的依赖）。
+     *
+     * <p>退避窗口（{@code nextAttemptEpochMillis}）与最近成功时间全部取自该时间源，
+     * 测试可推进可控时钟来验证"窗口内不重试、窗口外重试"，无需 sleep 赌调度时序。
+     * 生产路径仍由上面的公开构造器传入系统时钟，行为不变。
+     *
+     * @param buffer          本地缓冲
+     * @param repository      入库仓储
+     * @param properties      网关配置
+     * @param meterRegistry   指标注册表
+     * @param nowEpochMillis  时间源（epoch 毫秒）
+     */
+    VitalUploader(LocalBuffer buffer, VitalRepository repository, GatewayProperties properties,
+            MeterRegistry meterRegistry, LongSupplier nowEpochMillis) {
         this.buffer = buffer;
         this.repository = repository;
         this.config = properties.upload();
         this.meterRegistry = meterRegistry;
+        this.nowEpochMillis = nowEpochMillis;
         Gauge.builder(GatewayMetricNames.UPLOAD_CONNECTED, connected, AtomicInteger::doubleValue)
                 .register(meterRegistry);
         Gauge.builder(GatewayMetricNames.UPLOAD_CONSECUTIVE_FAILURES, consecutiveFailures,
@@ -79,7 +103,7 @@ public final class VitalUploader implements AutoCloseable {
         if (!running.get() || paused.get() || !config.enabled()) {
             return;
         }
-        if (System.currentTimeMillis() < nextAttemptEpochMillis.get()) {
+        if (nowEpochMillis.getAsLong() < nextAttemptEpochMillis.get()) {
             return;
         }
         drain();
@@ -195,7 +219,7 @@ public final class VitalUploader implements AutoCloseable {
     private void onSuccess() {
         consecutiveFailures.set(0);
         connected.set(1);
-        lastSuccessEpochMillis.set(System.currentTimeMillis());
+        lastSuccessEpochMillis.set(nowEpochMillis.getAsLong());
         nextAttemptEpochMillis.set(0L);
     }
 
@@ -203,7 +227,7 @@ public final class VitalUploader implements AutoCloseable {
         int failures = consecutiveFailures.incrementAndGet();
         connected.set(0);
         long delay = RetryBackoff.delayMillis(failures, config.retryBaseMs(), config.retryMaxMs());
-        nextAttemptEpochMillis.set(System.currentTimeMillis() + delay);
+        nextAttemptEpochMillis.set(nowEpochMillis.getAsLong() + delay);
         meterRegistry.counter(GatewayMetricNames.FRAMES_FAILED, "device", deviceId).increment(batchSize);
         LOG.warn("上传失败，数据保留在缓冲 device={} failures={} delayMs={} sqlState={}",
                 deviceId, failures, delay, error.getSQLState());

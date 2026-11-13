@@ -52,6 +52,15 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class DeviceGatewayEndToEndTest {
 
+    /*
+     * 超时余量：本类走真实 TCP + 真实 @Scheduled 调度，无法注入时钟；并发负载下
+     * socket 读、按 100ms 固定延迟的调度与嵌入式 PG 都可能被 CPU 争用拖慢。
+     * 因此按"条件等待 + 宽余量"处理：判定只依赖行数/指标等显式条件，超时值取
+     * 实测耗时的数倍（本机实测 660 帧约 3s，留 180s）；不使用固定 sleep 猜时序。
+     */
+    private static final Duration AWAIT_LARGE_BATCH = Duration.ofSeconds(180);
+    private static final Duration AWAIT_SMALL_BATCH = Duration.ofSeconds(60);
+    private static final Duration AWAIT_HEALTH = Duration.ofSeconds(120);
     private static final Path BUFFER_DIR = createBufferDir();
     private static final String DEVICE_TEN_MINUTES = "SIM-MON-01";
     private static final String DEVICE_OFFLINE = "SIM-MON-02";
@@ -112,7 +121,7 @@ class DeviceGatewayEndToEndTest {
 
         send(lines);
 
-        GatewayTestSupport.awaitTrue("660 帧全部入库", Duration.ofSeconds(120),
+        GatewayTestSupport.awaitTrue("660 帧全部入库", AWAIT_LARGE_BATCH,
                 () -> rowCount(DEVICE_TEN_MINUTES) == 660);
 
         assertThat(counter(GatewayMetricNames.FRAMES_RECEIVED, DEVICE_TEN_MINUTES)).isEqualTo(660.0d);
@@ -151,21 +160,21 @@ class DeviceGatewayEndToEndTest {
 
         send(frames);
 
-        GatewayTestSupport.awaitTrue("300 帧全部落盘", Duration.ofSeconds(30),
+        GatewayTestSupport.awaitTrue("300 帧全部落盘", AWAIT_SMALL_BATCH,
                 () -> buffer.stats().pendingRecords() >= 300);
         assertThat(rowCount(DEVICE_OFFLINE)).as("断网期间不得入库").isZero();
         assertThat(counter(GatewayMetricNames.FRAMES_BUFFERED, DEVICE_OFFLINE)).isEqualTo(300.0d);
         double bufferedWhileOffline = counter(GatewayMetricNames.FRAMES_BUFFERED, DEVICE_OFFLINE);
 
         uploader.resume();
-        GatewayTestSupport.awaitTrue("恢复后 300 帧全部补传入库", Duration.ofSeconds(90),
+        GatewayTestSupport.awaitTrue("恢复后 300 帧全部补传入库", AWAIT_LARGE_BATCH,
                 () -> rowCount(DEVICE_OFFLINE) == 300);
         assertThat(counter(GatewayMetricNames.FRAMES_UPLOADED, DEVICE_OFFLINE)).isEqualTo(300.0d);
         assertThat(counter(GatewayMetricNames.FRAMES_DUPLICATE, DEVICE_OFFLINE)).isZero();
         assertThat(distinctSeqCount(DEVICE_OFFLINE)).isEqualTo(300);
 
         send(frames);
-        GatewayTestSupport.awaitTrue("重放被唯一键幂等吸收", Duration.ofSeconds(90),
+        GatewayTestSupport.awaitTrue("重放被唯一键幂等吸收", AWAIT_LARGE_BATCH,
                 () -> counter(GatewayMetricNames.FRAMES_DUPLICATE, DEVICE_OFFLINE) >= 300.0d);
         assertThat(rowCount(DEVICE_OFFLINE)).isEqualTo(300);
 
@@ -183,7 +192,7 @@ class DeviceGatewayEndToEndTest {
     void healthAndMetricsExposePipelineState() {
         Instant base = Instant.now().minusSeconds(30);
         send(GatewayTestSupport.frames(DEVICE_HEALTH, 1, 5, base));
-        GatewayTestSupport.awaitTrue("5 帧入库", Duration.ofSeconds(60), () -> rowCount(DEVICE_HEALTH) == 5);
+        GatewayTestSupport.awaitTrue("5 帧入库", AWAIT_HEALTH, () -> rowCount(DEVICE_HEALTH) == 5);
 
         ResponseEntity<Map<String, Object>> health = restTemplate.exchange("/actuator/health",
                 HttpMethod.GET, null, new ParameterizedTypeReference<>() {

@@ -24,6 +24,11 @@ import org.junit.jupiter.api.io.TempDir;
 class TcpDeviceServerTest {
 
     private static final Instant BASE = Instant.parse("2026-11-13T00:00:00Z");
+    /**
+     * 真实回环 socket 的显式条件等待上限：判定依据是缓冲/计数条件，10s 只吸收
+     * 并发负载下 accept 与读线程被调度延迟的情况（本机实测毫秒级）。
+     */
+    private static final Duration AWAIT_SOCKET = Duration.ofSeconds(10);
     private static final String DEVICE = "SIM-TCP-01";
 
     @TempDir
@@ -78,9 +83,9 @@ class TcpDeviceServerTest {
             out.write(("X".repeat(100) + "\n").getBytes(StandardCharsets.UTF_8));
             out.flush();
 
-            GatewayTestSupport.awaitTrue("合法帧落盘", Duration.ofSeconds(5),
+            GatewayTestSupport.awaitTrue("合法帧落盘", AWAIT_SOCKET,
                     () -> peekSize(buffer, DEVICE) == 1);
-            GatewayTestSupport.awaitTrue("非法帧与超长帧计数", Duration.ofSeconds(5),
+            GatewayTestSupport.awaitTrue("非法帧与超长帧计数", AWAIT_SOCKET,
                     () -> registry.find(GatewayMetricNames.FRAMES_INVALID).counters().stream()
                             .mapToDouble(counter -> counter.count()).sum() >= 2.0d);
         }
@@ -90,7 +95,7 @@ class TcpDeviceServerTest {
                 .isEqualTo(1.0d);
         assertThat(registry.find(GatewayMetricNames.FRAMES_BUFFERED).tag("device", DEVICE).counter().count())
                 .isEqualTo(1.0d);
-        GatewayTestSupport.awaitTrue("连接断开后计数归零", Duration.ofSeconds(5),
+        GatewayTestSupport.awaitTrue("连接断开后计数归零", AWAIT_SOCKET,
                 () -> server.activeConnections() == 0);
         server.close();
         buffer.close();
@@ -107,7 +112,7 @@ class TcpDeviceServerTest {
             socket.getOutputStream().write(
                     (GatewayTestSupport.frame(DEVICE, 1, BASE) + "\n").getBytes(StandardCharsets.UTF_8));
             socket.getOutputStream().flush();
-            GatewayTestSupport.awaitTrue("拒收计数", Duration.ofSeconds(5),
+            GatewayTestSupport.awaitTrue("拒收计数", AWAIT_SOCKET,
                     () -> registry.find(GatewayMetricNames.FRAMES_FAILED).tag("device", DEVICE)
                             .counter() != null);
         }
