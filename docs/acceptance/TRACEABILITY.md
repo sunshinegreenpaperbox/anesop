@@ -27,3 +27,4 @@
 | 手术申请接收/导入/取消 | 2.4.2 | scheduling.yaml 0.3.0 | m1/application + HIS 适配器 | m1 列表/详情 | SurgeryApplicationApiIntegrationTest / m1-applications.spec.ts | 已实现（M2-M1-01，review 清障） |
 | 患者摘要与脱敏检索 | 2.4.2/3.9.3 | patient.yaml 0.3.0 | m1/patient | m1 列表 | SurgeryApplicationApiIntegrationTest（masked） | 已实现（M2-M1-01） |
 | 术前访视与风险评分 | 2.4.3 | anesthesia.yaml 0.3.0 | m2/preop | 术前访视页 | PreopScoreCalculatorTest / PreopAssessmentApiIntegrationTest | 已实现（M2-M4-01，review PASS；阈值待临床确认） |
+| 知情同意与三方核查 | 2.4.3 | anesthesia.yaml 0.4.0 | m2/consent+threeway | 同意/核查页 | ConsentApiIntegrationTest | 已实现（M2-M5-01，review PASS；CA 占位 EXT-05） |
