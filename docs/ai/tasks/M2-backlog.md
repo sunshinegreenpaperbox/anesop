@@ -25,7 +25,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 | M2-M0-02 | 手机号加密与 hash 写路径 | `db/migration/V6*`、`apps/api/modules/m0/**`、契约 | M1 | Review（V6 + 契约 0.5.0 + 用户管理；待独立 review） |
 | M2-M0-03 | E2E-04 越权 + 登录 E2E + 覆盖率 ratchet 清理 | `apps/web/e2e/**`、各 `src/test/**`、根 pom | M1 | Done（m0 96/87、gateway 91/77；ratchet 清零；9 E2E） |
 | M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Review（blocking/建议已修：B-1/B-2/B-3 + S-1…S-9 + Q-1…Q-3；待复审） |
-| M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Blocked |
+| M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Review（独立评审 blocking B-1…B-4 与 S-1…S-9 已修，待复审） |
 | M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Blocked |
 | M2-M4-01 | 术前访视与评估 | `anesthesia.yaml` 扩展、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V8*` | M2-M1-01 | Blocked |
 | M2-M5-01 | 知情同意与三方核查 | anesthesia 契约（三方核查已定义）、m2 模块 | M2-M4-01 | Blocked |
@@ -82,6 +82,38 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
   资质不符、设备冲突）；拖拽调整；甘特/看板；冲突 409 + 建议。
 - 验收：E2E-01 排程冲突（制造冲突→被拦→解决）；规则可配置；并发排程不超卖（唯一约束/乐观锁）；
   单位/集成测试；性能（1000 条 <2s 本地基准）。
+
+- 复审修复（独立 review blocking/suggestion）：
+  - **B-1** 创建/调整/冲突预检在术间范围外再校验申请/患者可见性（DEPT/SITE 跨科室→404 不泄露
+    存在性；ROOM 范围按绑定术间 dept/site 推导的文档例外），403/404 响应体断言不含
+    `patientName/hisPatientNo`；
+  - **B-2** `GET /rooms` 实现 `siteId`/`status` 过滤，非法参数 400（集成用例覆盖参数生效与 400）；
+  - **B-3** deprecated `POST /v1/scheduling/conflicts/check` 映射同一 `checkConflicts`（200 且
+    响应与新端点一致），不删除（ADR-0011）；
+  - **B-4** 跨术间术者/患者并发加 `pg_advisory_xact_lock`（key 字典序，先人员/患者后术间行锁），
+    `CyclicBarrier` 双线程用例验证同术者/同患者跨术间恰一成功；README §9 记录死锁规避；
+  - **S-1** ADR-0011 增补记录 enum→x-extensible-enum 属非严格 additive（TS 变 `string`），
+    强类型诉求记 Q；**S-2** 新增 `APPLICATION_ALREADY_SCHEDULED/VERSION_CONFLICT/STATE_CONFLICT`
+    替换误用；**S-3** `schedule.priority` 落库回显，`staffIds/equipmentTags` 契约标
+    `x-deferred: true`；**S-4** V8 结构断言（部分唯一索引/时间窗/优先级/权限/5 术间）；
+    **S-5** `CyclicBarrier` + 显式 READ_COMMITTED；**S-6** 1000 条查询基准 <2s 与前端分支单测；
+    **S-7** SYS_SURGEON 授 `m1:schedule:read`；**S-8** 409 从 `conflicts[]` 解析（保留
+    `conflictingScheduleId`）、仅 PLANNED/PUBLISHED 显示操作、本地时区日期；**S-9** reasonCode
+    白名单正则、时间窗非法统一 400。
+- 落地说明（Review）：契约 scheduling **0.4.0**（additive：`roomType`/`requiredRoomType`、
+  `PUT /v1/scheduling/schedules/{id}`、`POST /v1/scheduling/schedules/conflicts`、
+  `Error.conflicts[]`；旧 `conflicts/check` 标 deprecated）；`conflictType` 改 `x-extensible-enum`
+  以允许新增规则类型而通过 `oasdiff --fail-on WARN`。V8 `operating_room`（room_no 唯一/类型
+  GENERAL/HYBRID/INTERVENTION/状态/科室/审计+version）与 `schedule`（FK/时段检查/索引/申请活动台次
+  部分唯一索引），`surgery_application.required_room_type` 可空列；权限 `m1:schedule:read|write`
+  仅授 SYS_ADMIN/SYS_OR_MANAGER；5 个 SYNTHETIC 术间（OR-02 HYBRID、OR-03 INTERVENTION，
+  OR-05 属手术室用于 DEPT 负例）。规则引擎 `SchedulingRule` + 注册表：ROOM_OVERLAP/
+  STAFF_CONFLICT/PATIENT_CONFLICT/ROOM_TYPE_MISMATCH/TIME_WINDOW_INVALID；创建/调整事务内
+  `SELECT ... FOR UPDATE` 锁术间行后复检，冲突 409 + conflicts[]；DataScope DEPT/ROOM；
+  `SCHEDULE_CREATE/UPDATE/CANCEL` 审计。前端 `ScheduleBoardView` + API client + 5 Vitest +
+  E2E-01（409→提示→改术间成功）。测试：m1-impl 单测 94（新增规则 15 + 服务 34），m1-impl
+  覆盖率 94.79%/74.11%；集成 `SchedulingApiIntegrationTest` 8 用例（含两线程并发同室同窗恰一成功）。
+  范围外必要改动：`m0-impl` 的 `M1MigrationTest` 表清单断言加入 V8 两表（仅测试夹具，无 m0 业务代码变更）。
 
 ### M2-M4-01 术前访视与评估
 - 目标：访视单（病史/气道/ASA）、评分（RCRI/Apfel/STOP-BANG/Mallampati）、麻醉计划、签署状态；
