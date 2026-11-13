@@ -29,7 +29,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 | M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Review（独立评审 B-1/B-2 + S-1…S-7 + Q-1…Q-3 已修；待复审） |
 | M2-M4-01 | 术前访视与评估 | `anesthesia.yaml` 扩展、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V10*` | M2-M1-01 | Review（契约 0.3.0 + V10 + m2 后端/前端 + 测试；待独立 review） |
 | M2-M5-01 | 知情同意与三方核查 | anesthesia 契约（三方核查已定义）、m2 模块 | M2-M4-01 | Review（契约 0.4.0 + V11 + m2 后端/前端 + 测试；S-1…S-7 已修，待复审） |
-| M2-M6-01 | 排程分析（利用率/准点/取消） | m1 读模型、M6 报表引擎或 m1 分析接口 | M2-M2-01 | Blocked |
+| M2-M6-01 | 排程分析（利用率/准点/取消） | m1 读模型、M6 报表引擎或 m1 分析接口 | M2-M2-01 | Review（契约 0.6.0 + m1 分析服务/前端 + 测试；待独立 review） |
 
 ## 任务卡要点（执行时按 BACKLOG 模板补全为 TASK-<id>.md）
 
@@ -245,6 +245,32 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 ### M2-M6-01 排程分析
 - 目标：术间利用率、准点开台率、取消率；口径可配置（D-21 报表口径）；多维筛选/导出 CSV（脱敏）。
 - 验收：统计结果与手算一致（固定合成数据集）；性能 <10s；导出脱敏；指标口径文档化。
+
+- 落地说明（Review）：契约 scheduling **0.6.0**（additive）：新增
+  `GET /v1/scheduling/analytics/utilization|on-time|cancellations|export` 4 条只读路径与 10 个
+  分析 schema，`OperatingRoom` 增可选 `deptId/deptName`；baseline/TS/Java 同步。
+  V12 为 **data-only** 权限迁移：新增 `m1:analytics:read`（授 SYS_ADMIN/SYS_OR_MANAGER/
+  SYS_QC_MANAGER），无表/视图/物化视图变更；不改 V1–V11。后端 `m1-api` 新增
+  `SchedulingAnalyticsService`/`AnalyticsQuery`/`AnalyticsExportQuery`，`m1-impl`
+  `SchedulingAnalyticsServiceImpl` + `AnalyticsMapper` 只读 SQL 聚合：利用率为非取消台次与
+  区间重叠**计划**分钟 /（可见术间数×天数×每间每日可用分钟，默认 600）；准点率为每术间每本地日
+  **计划开始最早**台次的 `|updated_at - start_at| ≤ 阈值`（默认 15 分钟）；计划首台取消/未开始/
+  缺实际开始则该术间-日排除并计入 `excludedDays`（`firstCaseCount=evaluatedCaseCount+excludedDays`，
+  Q-2）；V8 无 actual_start，MVP 以 updated_at 近似，响应
+  `actualStartSource=SCHEDULE_UPDATED_AT`，【待确认】；`evaluatedCaseCount=0` 前端显示“暂无数据”
+  （Q-1）。取消率为 CANCELLED/区间总台次，按最近 STOP 原因码分组，无记录 UNSPECIFIED。
+  `from/to` 必填、Asia/Shanghai 本地日期，跨度默认 92 天且配置上限夹紧 92（>92 取 92 并 WARN）；
+  DEPT/ROOM/未绑定 403；CSV 流式 UTF-8 BOM、19 列、仅聚合值（无姓名/住院号/证件号/诊断），
+  以 `= + - @`/制表/回车开头的单元格前置单引号防公式注入；审计 ANALYTICS_QUERY/EXPORT 无 PHI。
+  前端 `/m1/analytics`（日期范围/科室筛选从分析响应 rooms[] 派生，不再依赖 m1:schedule:read 的
+  `/scheduling/rooms`，SYS_QC_MANAGER 可用；三指标卡片 + 4 张表、导出按钮、空/错误/权限态，
+  无 ECharts），路由/菜单权限 `m1:analytics:read`。测试：m1-impl 单测 15、api-bootstrap 集成 11
+  （手算 420/6000/0.07、计划首台 6=已评估 3+排除 3、7 台次 2 取消、跨日 23:59、DEPT 4 间/ROOM 1 间/
+  未绑定 403、CSV 7/9 行 BOM 无 PHI 与公式注入、审计、空数据 0、92 天 3000 台次 <10s 本机基线）、
+  Vitest 7、E2E 2。
+  已知限制：准点实际开始为 `updated_at` 代理、系统内实际开台数据不足（HIS/M3 未回写，【待确认】）；
+  每间每日可用时长默认 600 分钟待院方确认；利用率分子为计划时长而非实际占用、分母未排除未来/
+  停诊日（均【待确认】，待 M2 记录/接口回写后切换）。
 
 ## M1 前欠账清单（可并行清理）
 
