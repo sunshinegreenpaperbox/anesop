@@ -8,7 +8,9 @@
 > + V11（M2 知情同意与三方核查，M2-M5-01）
 > + V12（M1 排程分析权限点，M2-M6-01，data-only）
 > + V13（M2 麻醉记录单/时间轴/用药/出入量，M3-M2-01）
-> + V14（M2 设备登记与采集接入，M3-M8-01）；
+> + V14（M2 设备登记与采集接入，M3-M8-01）
+> + V15（M2 术中预警规则/告警留痕/抢救记录，M3-M2-02）
+> + V16（M2 预警实时触发水位/记录术间快照/规则待确认/抢救人员留痕，M3-M2-02 评审修复）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -32,6 +34,8 @@ db/
 │   ├── V12__m1_analytics_permission.sql    # m1:analytics:read（data-only，无表/视图变更；M2-M6-01）
 │   ├── V13__m2_anesthesia_record.sql       # m2_anes 记录单/时间轴/用药/出入量 + m2:record:*（M3-M2-01）
 │   ├── V14__m2_device_registry.sql         # m2_anes 设备登记/上报幂等日志 + m2:device:*（M3-M8-01）
+│   ├── V15__m2_alert_rescue.sql            # m2_anes 预警规则/告警/抢救记录 + m2:alert:* / m2:rescue:write（M3-M2-02）
+│   ├── V16__m2_alert_realtime_watermark_rescue_leader.sql # 记录术间快照/评估水位/规则待确认/抢救人员（M3-M2-02 评审修复）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -307,7 +311,7 @@ V14 与本脚本无表级依赖。
   回滚前必须导出四张表并校验行数，先归档到离线审计库，生产执行须人签字。
 - **重放**：修复后重新执行 V13 会重建空表并重新灌入 2 个权限点；已导出数据不得直接回灌。
 - **锁单演进**：V13 的 `status` 约束只允许 `DRAFT/ONGOING`；M3-M2-03 锁单/修订以新迁移
-  （V15+）扩展 `LOCKED/REVISED` 与锁单列，禁止回改本脚本。
+  （V17+）扩展 `LOCKED/REVISED` 与锁单列，禁止回改本脚本。
 - **单向守卫**：`fn_anesthesia_record_guard` 拒绝状态回退、`started_at` 清空/改写与
   `version` 不增；守卫依赖触发器，运行账号不得有 DDL 权限（见 §4.9 运行时权限）。
 
@@ -333,6 +337,59 @@ V14 属 expand 段：新增 `m2_anes.device_registry`（登记与术间绑定，
   **生产运行账号不得拥有 CREATE/ALTER/DROP 等 DDL 权限**——否则可 `ALTER TABLE ...
   DISABLE TRIGGER USER` 后改写已锁定/已结束的临床记录。运行账号只授业务所需
   SELECT/INSERT/UPDATE/DELETE（审计表只授 SELECT/INSERT），DDL 仅迁移账号持有。
+
+### 4.10 V15（M2 术中预警规则、告警留痕与抢救记录）回滚说明
+
+V15 属 expand 段：新增 `m2_anes.alert_rule`（规则版本行，唯一 `(code, version)` + 部分唯一索引
+`(code) WHERE enabled`）、`m2_anes.alert`（告警留痕，唯一 `dedupe_key`）、
+`m2_anes.resuscitation_record`（抢救记录，append-only）与权限点
+`m2:alert:read|ack|configure`、`m2:rescue:write`（configure 仅 SYS_ADMIN），并灌入 5 条
+**SYNTHETIC** 默认规则（阈值全部【待确认】）。不改写 V1–V14 既有表/列/约束，V13/V14 与本脚本
+无表级依赖，可独立回滚。
+
+- **应用回滚**：下线 `/v1/anesthesia/alert-rules*`、`/records/{id}/alerts*`、
+  `/alerts/{id}/acknowledge`、`/records/{id}/resuscitations` 路由与前端告警/抢救面板、
+  预警规则页；记录单、时间轴、用药、出入量与采集不受影响。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份，顺序不可颠倒）：
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN
+  ('b0000000-0000-4000-8000-000000000051','b0000000-0000-4000-8000-000000000052',
+   'b0000000-0000-4000-8000-000000000053','b0000000-0000-4000-8000-000000000054');` →
+  `DELETE FROM m0_platform.sys_permission WHERE code IN ('m2:alert:read','m2:alert:ack',
+  'm2:alert:configure','m2:rescue:write');` →
+  `DROP TABLE m2_anes.resuscitation_record;` → `DROP TABLE m2_anes.alert;` →
+  `DROP TABLE m2_anes.alert_rule;` → 删除三个触发器函数
+  （`fn_resuscitation_record_append_only`、`fn_alert_guard`、`fn_alert_rule_guard`）。
+- **不可逆项**：告警与抢救记录属临床留痕，删除前须导出并归档到离线审计库（含规则版本快照
+  `rule_id/rule_code/rule_version`）；抢救记录 `event_summary`/`drugs` 为 jsonb，归档用
+  `pg_dump -t` + `COPY ... WITH (FORMAT csv)` 双份。
+- **重放**：修复后重新执行 V15 会重建空表并重新灌入 4 个权限点与 5 条默认规则；归档数据不得
+  直接回灌（规则版本行与历史告警的 `rule_id` 对应关系须人工核对）。
+- **临床规则变更**：默认阈值仅为演示，生产启用前必须由临床顾问确认后由 SYS_ADMIN 通过
+  `PUT /v1/anesthesia/alert-rules/{ruleId}` 生成新版本；禁止直接 UPDATE 规则行（触发器只允许
+  “启用→停用”，配置列不可原地修改）。
+
+### 4.11 V16（M2 预警实时触发/评估水位/抢救人员）回滚说明
+
+V16 属 expand 段：`anesthesia_record` 增加 `room_id`（创建时经 m1-api 快照，已有记录按台次
+回填）；新增 `m2_anes.alert_watermark`（每记录单已评估 `measured_at` 水位，迁移前记录从迁移
+时刻起评估）；`alert_rule` 增加 `pending_confirmation`（阈值/时长变更待临床确认）并把默认种子
+`created_by/updated_by` 回填为系统用户 UUID；`resuscitation_record` 增加 `leader`（必填对象）
+与 `rescuers`（≥1 数组），append-only 触发器不变。不改写 V1–V15 既有列语义。
+
+- **应用回滚**：恢复 V15 时代的“查询时评估 + 手动补偿”与无人员字段的抢救表单；
+  记录单/时间轴/用药/出入量/采集不受影响（`room_id` 与水位表对旧代码是可忽略的新增）。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份，顺序不可颠倒）：
+  `DROP TABLE m2_anes.alert_watermark;` → 删除 `ck_resuscitation_leader` /
+  `ck_resuscitation_rescuers` 约束与 `leader`/`rescuers` 列（先导出抢救记录归档）→
+  `DROP INDEX m2_anes.idx_anesthesia_record_room_active;` →
+  `ALTER TABLE m2_anes.anesthesia_record DROP COLUMN room_id;` →
+  `ALTER TABLE m2_anes.alert_rule DROP COLUMN pending_confirmation;`。
+- **不可逆项**：`leader`/`rescuers` 与水位属临床留痕/评估状态，删除前 `pg_dump -t` 归档；
+  回填的种子 `created_by` 系统 UUID 不需要回滚（只影响“创建人”展示）。
+- **重放**：修复后重新执行 V16 会重建水位表并重新回填 room_id；水位重置为迁移时刻意味着
+  从该时刻起重新评估，**不会**补发历史告警（符合“不回评历史窗口”）。
+- **临床风险**：阈值变更的 `pending_confirmation` 不会自动清除；生产启用前须临床顾问逐项
+  确认（M5 权限细化承接复核流程），不得把演示默认阈值当成临床决策依据。
 
 ## 5. 运行方式
 

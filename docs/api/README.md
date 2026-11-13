@@ -1,6 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.5.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.7.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -26,9 +27,9 @@ packages/contracts/
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
 | `scheduling.yaml` | 17 | 20 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史、排程分析（利用率/准点/取消率/CSV 导出） | §2.4.2、§2.3.2、§2.7.2、§3.4.2 |
-| `anesthesia.yaml` | 22 | 34 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、旧访视骨架读写、锁单、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
-| `device.yaml` | 5 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
-| **合计** | **61** | **78** | 5 个限界上下文骨架 | — |
+| `anesthesia.yaml` | 29 | 42 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、预警规则版本化/告警评估与确认忽略/抢救记录 append-only（0.6.0）、实时触发/评估水位/规则待确认与历史版本/抢救人员留痕（0.7.0）、旧访视骨架读写、锁单、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
+| `device.yaml` | 4 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
+| **合计** | **67** | **86** | 5 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -314,6 +315,43 @@ packages/contracts/
   质量比例分子/分母同一窗口，`last_seen_at` 仅在 `acceptedRows>0` 时推进。
 - **示例**：全部 SYNTHETIC（`SIM-*` 设备标识、演示术间 UUID），不含患者标识。
 
+### 3.9 术中预警与抢救记录（M3-M2-02，anesthesia 0.7.0 additive）
+
+> 0.6.0 交付预警规则/告警/抢救记录；0.7.0（M3-M2-02 评审修复）把告警触发改为“采集落库后
+> 领域事件 + 已评估 measured_at 水位增量评估”，读取告警列表不再评估、不回评历史窗口，
+> DRAFT 不评估；规则名称可更新、阈值按指标范围校验、`pendingConfirmation` 标记与历史版本
+> 查询；抢救记录新增 `leader`/`rescuers`（服务端必填）。
+> 两版都只新增路径/可选字段，未删除或改类型既有定义（`AnesthesiaRecord.vitalSigns` 占位语义
+> 不变）；`anesthesia.yaml` 与 `baseline/anesthesia.yaml` 同步更新，`oasdiff`（baseline → 当前与
+> HEAD baseline → 当前）均无破坏性变更；示例全部 SYNTHETIC，默认阈值标【待确认】。
+
+- **规则列表** `GET /v1/anesthesia/alert-rules`（`listAlertRules`，`m2:alert:read`）：
+  每个规则编码返回当前版本（`code/metric/operator/thresholdLow/thresholdHigh/durationSeconds/
+  severity/version/enabled`）。
+- **规则配置** `PUT /v1/anesthesia/alert-rules/{ruleId}`（`updateAlertRule`，
+  `m2:alert:configure`，V15 仅 SYS_ADMIN）：保存即生成 `version+1` 新版本并停用旧版本；
+  算子与阈值必须自洽（LT 需下限、GT 需上限、OUT_OF_RANGE 需上下限且 low<high，否则 400）；
+  版本过期或请求的不是当前版本 409。
+- **规则历史** `GET /v1/anesthesia/alert-rules/{ruleId}/versions`（`listAlertRuleVersions`，
+  `m2:alert:read`）：按 code 返回全部历史版本（version 倒序），供告警 `ruleVersion` 追溯。
+- **告警列表** `GET /v1/anesthesia/records/{recordId}/alerts`（`listRecordAlerts`，
+  `m2:alert:read`）：**只读**，返回 `ruleCode/ruleVersion/metric/value/severity/triggeredAt/status`
+  等；实时告警由 ingest 成功提交后的领域事件评估落库（只评估 ONGOING 且 startedAt 非空记录，
+  按记录单快照 roomId 匹配设备），前端 5–10s 轮询兜底；记录单不可见 404。
+- **手动评估** `POST /v1/anesthesia/records/{recordId}/alerts/evaluate`
+  （`evaluateRecordAlerts`，`m2:record:write`）：调试/采集补偿；同一引擎、去重与水位，
+  只处理新采样，返回 `evaluatedRules/sampledFrames/createdAlerts/evaluatedThrough`。
+- **告警处置** `POST /v1/anesthesia/alerts/{alertId}/acknowledge`（`acknowledgeAlert`，
+  `m2:alert:ack`）：`decision=CONFIRMED|IGNORED` + 必填 `reason` + 当前 `version`；只允许
+  `TRIGGERED → ACKNOWLEDGED/IGNORED` 一次流转，重复处理/版本过期 409。
+- **抢救记录** `GET/POST /v1/anesthesia/records/{recordId}/resuscitations`
+  （`listResuscitations` 复用 `m2:record:read`；`createResuscitation` 需 `m2:rescue:write`）：
+  append-only（数据库触发器拒绝 UPDATE/DELETE，SQLSTATE 55000）；时间窗必须落在记录单时间窗内
+  （违反 400）；`eventSummary` 为对象、`drugs` 为数组（≤50 条）；`leader`（负责人）必填、
+  `rescuers`（参与人员）至少 1 人（服务端校验，缺失 400；人员姓名不入审计原文）。
+- **阈值口径**：严格不等（等于阈值不触发）；`durationSeconds` 为连续越界时长；
+  `MAP = dia + (sys − dia)/3` 由无创血压推导。详见 `docs/modules/m2/README.md` §13.2。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -379,9 +417,10 @@ packages/contracts/
   已删除的安全字段以 `deprecated: true` 兼容占位恢复，实现不返回真实值；历史端点同样只标
   `deprecated` 不物理删除。任何删除/改类型必须先完成 1.0.0 major 评审与 ADR，禁止在 0.x 内私删。
 - `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、
-  `anesthesia 0.4.0`（0.6.0/M2-M6-01 仅新增排程分析 4 条只读路径、10 个 schema 与
-  `OperatingRoom.deptId/deptName` 可选字段，属 additive；0.5.0 的停改台/急诊与改台 reasonCode
-  必填见 §3.3/ADR-0012）。路径主版本为 `/v1`。
+  `anesthesia 0.7.0`、`device 0.1.0`（0.7.0/M3-M2-02 评审修复新增规则历史 1 条只读路径、
+  `pendingConfirmation`/`evaluatedThrough`/`leader`/`rescuers` 等可选字段与
+  `UpdateAlertRuleRequest.name` 可选字段，属 additive；0.6.0/M2-M6-01 的排程分析 4 条只读
+  路径见 §3.6）。路径主版本为 `/v1`。
 - **兼容变更**（只增不删）：新增可选字段、新增接口、新增响应字段、新增枚举值（调用方需容忍未知值）；更新 `minor`/`patch`，评审通过后同步 baseline。
 - **阻断性变更**（oasdiff `--fail-on WARN` 即失败）：删除路径或 operation；请求体新增必填字段；请求字段类型变更；响应必填字段删除；响应字段类型变更。删除/收紧枚举值、改变字段语义同样按破坏性变更处理。
 - **兼容例外（M2 契约冻结前）**：响应新增必填字段按 warning 处理、不阻断，但必须在 PR 说明调用方兼容方案，并在下表登记；M2 契约冻结前清零。

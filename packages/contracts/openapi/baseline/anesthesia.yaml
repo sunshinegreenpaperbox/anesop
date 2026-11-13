@@ -15,8 +15,13 @@ info:
     必须双人核对）、输液与出入量汇总；记录单未锁定时可改（乐观锁 version），锁单仍留 M3-M2-03。
     AnesthesiaRecord.status 为契约状态（DRAFT/IN_PROGRESS），数据库存 DRAFT/ONGOING，由服务端
     映射；事件一律经 POST /events 追加（append-only），PUT 不再接受非空 events。
-    所有示例均为 SYNTHETIC 合成数据。
-  version: 0.5.0
+    0.6.0 新增术中预警规则（版本化、不可原地修改，默认阈值标【待确认】）、告警留痕
+    （TRIGGERED→ACKNOWLEDGED/IGNORED 一次流转）与抢救记录（append-only、时间窗校验）。
+    0.7.0（additive）把告警触发改为“采集落库后领域事件 + 已评估 measured_at 水位增量评估”
+    （读取告警列表不再评估、不回评历史窗口；DRAFT 不评估）；规则名称可更新、阈值按指标
+    范围校验、阈值变更标记 pendingConfirmation 并提供历史版本查询；抢救记录新增负责人
+    leader 与参与人员 rescuers（服务端必填）。所有示例均为 SYNTHETIC 合成数据。
+  version: 0.7.0
   contact:
     name: ANESOP 项目组
   license:
@@ -1540,6 +1545,515 @@ paths:
                 balanceMl: 1100
                 fluidCount: 3
                 computedAt: '2026-12-01T10:30:00+08:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/anesthesia/alert-rules:
+    get:
+      operationId: listAlertRules
+      tags:
+        - 麻醉记录
+      summary: 查询术中预警规则（默认规则、启用状态与版本）
+      description: |
+        返回每个规则编码（code）的当前版本（最新 version 行）：默认规则编码、名称、指标、
+        比较算子、阈值、持续时长、严重度与启用状态。规则由管理员配置（PUT），临床阈值口径
+        以院方确认为准，默认种子值一律标【待确认】（`anesop.m2.alert` 文档与
+        docs/modules/m2/README.md #预警规则口径）。
+
+        权限：`m2:alert:read`（SYS_ADMIN/SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）。
+        全部示例为 SYNTHETIC 合成数据。
+      responses:
+        '200':
+          description: 预警规则列表（每个 code 一条当前版本）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRuleList'
+              example:
+                items:
+                  - ruleId: '1b000000-0000-4000-8000-000000000001'
+                    code: SPO2_LOW
+                    name: 血氧饱和度过低（演示阈值【待确认】）
+                    metric: SPO2
+                    operator: LT
+                    thresholdLow: 90
+                    thresholdHigh: null
+                    durationSeconds: 0
+                    severity: CRITICAL
+                    version: 1
+                    enabled: true
+                    pendingConfirmation: true
+                    createdAt: '2026-12-01T00:00:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
+                    updatedAt: '2026-12-01T00:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                  - ruleId: '1b000000-0000-4000-8000-000000000002'
+                    code: HR_LOW
+                    name: 心动过缓（演示阈值【待确认】）
+                    metric: HR
+                    operator: LT
+                    thresholdLow: 50
+                    thresholdHigh: null
+                    durationSeconds: 30
+                    severity: WARN
+                    version: 1
+                    enabled: true
+                    pendingConfirmation: true
+                    createdAt: '2026-12-01T00:00:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
+                    updatedAt: '2026-12-01T00:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/anesthesia/alert-rules/{ruleId}:
+    put:
+      operationId: updateAlertRule
+      tags:
+        - 麻醉记录
+      summary: 配置预警规则（生成新版本，旧版本停用）
+      description: |
+        规则不可原地修改：保存时以同一 code 生成 version+1 的新行并停用旧版本（历史版本保留，
+        供审计与“告警触发时版本”追溯），返回新版本。必须回传当前 version，过期 409。
+
+        阈值口径（【待确认】）：
+        - operator=LT：低于 thresholdLow 触发，必须提供 thresholdLow；
+        - operator=GT：高于 thresholdHigh 触发，必须提供 thresholdHigh；
+        - operator=OUT_OF_RANGE：低于 thresholdLow 或高于 thresholdHigh 触发，两者都必须提供；
+        - 等于阈值不触发（严格不等）；durationSeconds 为“持续越界秒数”，0 表示首个越界采样即触发。
+
+        权限：`m2:alert:configure`（仅 SYS_ADMIN；临床阈值须经临床顾问确认后录入）。
+      parameters:
+        - name: ruleId
+          in: path
+          description: 规则当前版本标识（UUID 字符串）；非当前版本 409。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAlertRuleRequest'
+            example:
+              thresholdLow: 88
+              thresholdHigh: null
+              durationSeconds: 15
+              severity: CRITICAL
+              enabled: true
+              version: 1
+      responses:
+        '200':
+          description: 规则新版本。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRule'
+              example:
+                ruleId: '1b000000-0000-4000-8000-000000000011'
+                code: SPO2_LOW
+                name: 血氧饱和度过低（演示阈值【待确认】）
+                metric: SPO2
+                operator: LT
+                thresholdLow: 88
+                thresholdHigh: null
+                durationSeconds: 15
+                severity: CRITICAL
+                version: 2
+                enabled: true
+                pendingConfirmation: true
+                createdAt: '2026-12-02T09:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-12-02T09:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/alert-rules/{ruleId}/versions:
+    get:
+      operationId: listAlertRuleVersions
+      tags:
+        - 麻醉记录
+      summary: 查询预警规则历史版本（ruleVersion 追溯）
+      description: |
+        按规则编码返回该编码的全部历史版本（version 倒序），用于追溯某条告警的 `ruleVersion`
+        在当时使用的阈值/持续时长/严重度与待确认标记。规则不可原地修改：每次保存生成
+        `version+1` 新行并停用旧行，历史版本永不被改写。
+
+        权限：`m2:alert:read`；规则不存在 404。全部示例为 SYNTHETIC 合成数据。
+      parameters:
+        - name: ruleId
+          in: path
+          description: 该规则任一版本行标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 规则历史版本列表（version 倒序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRuleList'
+              example:
+                items:
+                  - ruleId: '1b000000-0000-4000-8000-000000000011'
+                    code: SPO2_LOW
+                    name: 血氧饱和度过低（演示阈值【待确认】）
+                    metric: SPO2
+                    operator: LT
+                    thresholdLow: 88
+                    thresholdHigh: null
+                    durationSeconds: 15
+                    severity: CRITICAL
+                    version: 2
+                    enabled: true
+                    pendingConfirmation: true
+                    createdAt: '2026-12-02T09:00:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
+                    updatedAt: '2026-12-02T09:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                  - ruleId: '1b000000-0000-4000-8000-000000000001'
+                    code: SPO2_LOW
+                    name: 血氧饱和度过低（默认阈值 90%，【待确认】）
+                    metric: SPO2
+                    operator: LT
+                    thresholdLow: 90
+                    thresholdHigh: null
+                    durationSeconds: 0
+                    severity: CRITICAL
+                    version: 1
+                    enabled: false
+                    pendingConfirmation: true
+                    createdAt: '2026-12-01T00:00:00+08:00'
+                    createdBy: '00000000-0000-4000-8000-000000000000'
+                    updatedAt: '2026-12-02T09:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/anesthesia/records/{recordId}/alerts:
+    get:
+      operationId: listRecordAlerts
+      tags:
+        - 麻醉记录
+      summary: 查询记录单告警（实时评估已落库）
+      description: |
+        返回记录单告警列表（按 triggeredAt 倒序，含规则编码/版本、指标、实测值、严重度、
+        触发时间与处理状态）。告警由“采集 ingest 成功提交后的领域事件”实时评估落库
+        （只评估 `status=ONGOING 且 startedAt != null` 的记录，按记录单创建时快照的 roomId
+        匹配设备）；读取本接口**只读、不再评估**，因此不会用当前规则重评历史窗口。
+        前端记录页建议 5–10s 轮询本接口作为兜底。
+
+        权限：`m2:alert:read`；记录单不存在或超出数据范围 404。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 告警列表（可能为空）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertList'
+              example:
+                items:
+                  - alertId: '1c000000-0000-4000-8000-000000000001'
+                    recordId: '12000000-0000-4000-8000-000000000001'
+                    ruleId: '1b000000-0000-4000-8000-000000000001'
+                    ruleCode: SPO2_LOW
+                    ruleVersion: 1
+                    metric: SPO2
+                    value: 87
+                    unit: '%'
+                    severity: CRITICAL
+                    triggeredAt: '2026-12-01T09:20:00+08:00'
+                    status: TRIGGERED
+                    acknowledgedBy: null
+                    acknowledgedAt: null
+                    acknowledgeReason: null
+                    dedupeKey: '12000000-0000-4000-8000-000000000001:SPO2_LOW:1796088000'
+                    version: 1
+                    createdAt: '2026-12-01T09:21:00+08:00'
+                    createdBy: null
+                    updatedAt: '2026-12-01T09:21:00+08:00'
+                    updatedBy: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/anesthesia/records/{recordId}/alerts/evaluate:
+    post:
+      operationId: evaluateRecordAlerts
+      tags:
+        - 麻醉记录
+      summary: 手动评估记录单告警（调试/采集补偿）
+      description: |
+        调试/联调与采集补偿入口：与实时事件评估共用同一引擎、去重语义与
+        “已评估 measured_at 水位”。只处理水位之后的新采样，不重评历史窗口；
+        DRAFT/未开始记录返回空结果（createdAlerts=0）。正常链路下告警由 ingest 事件实时产生，
+        无需调用本接口。
+
+        权限：`m2:record:write`（测试/补偿动作属于记录书写范围）；记录单不存在或超出数据范围 404。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 评估结果（幂等：已存在的告警不重复插入）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertEvaluationResult'
+              example:
+                recordId: '12000000-0000-4000-8000-000000000001'
+                evaluatedRules: 5
+                sampledFrames: 240
+                createdAlerts: 2
+                evaluatedThrough: '2026-12-01T10:30:00+08:00'
+                evaluatedAt: '2026-12-01T10:35:00+08:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/anesthesia/alerts/{alertId}/acknowledge:
+    post:
+      operationId: acknowledgeAlert
+      tags:
+        - 麻醉记录
+      summary: 确认或忽略告警
+      description: |
+        告警状态机：TRIGGERED → ACKNOWLEDGED（确认）或 IGNORED（忽略），只允许一次流转；
+        重复处理或告警已处理返回 409（不可回退、不可覆盖处理人）。reason 必填（作为临床留痕），
+        审计 detail 不含 reason 原文。必须回传当前 version，过期 409。
+
+        权限：`m2:alert:ack`（SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）；告警不存在或
+        超出数据范围 404。
+      parameters:
+        - name: alertId
+          in: path
+          description: 告警标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcknowledgeAlertRequest'
+            example:
+              decision: CONFIRMED
+              reason: 演示：已核对监护仪并调整通气参数（合成数据）
+              version: 1
+      responses:
+        '200':
+          description: 处理后的告警。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+              example:
+                alertId: '1c000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                ruleId: '1b000000-0000-4000-8000-000000000001'
+                ruleCode: SPO2_LOW
+                ruleVersion: 1
+                metric: SPO2
+                value: 87
+                unit: '%'
+                severity: CRITICAL
+                triggeredAt: '2026-12-01T09:20:00+08:00'
+                status: ACKNOWLEDGED
+                acknowledgedBy: '10000000-0000-4000-8000-000000000002'
+                acknowledgedAt: '2026-12-01T09:22:00+08:00'
+                acknowledgeReason: 演示：已核对监护仪并调整通气参数（合成数据）
+                dedupeKey: '12000000-0000-4000-8000-000000000001:SPO2_LOW:1796088000'
+                version: 2
+                createdAt: '2026-12-01T09:21:00+08:00'
+                createdBy: null
+                updatedAt: '2026-12-01T09:22:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000002'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/records/{recordId}/resuscitations:
+    get:
+      operationId: listResuscitations
+      tags:
+        - 麻醉记录
+      summary: 查询抢救记录
+      description: |
+        按开始时间倒序返回记录单的抢救记录（append-only：不可修改、不可删除）。
+        读取复用记录单可见性（`m2:record:read`），不额外新增抢救只读权限点。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 抢救记录列表（可能为空）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResuscitationRecordList'
+              example:
+                items:
+                  - resuscitationId: '1d000000-0000-4000-8000-000000000001'
+                    recordId: '12000000-0000-4000-8000-000000000001'
+                    resusType: CPR
+                    leader:
+                      userId: '10000000-0000-4000-8000-000000000002'
+                      name: 演示麻醉医师（合成）
+                    rescuers:
+                      - userId: '10000000-0000-4000-8000-000000000002'
+                        name: 演示麻醉医师（合成）
+                      - userId: '10000000-0000-4000-8000-000000000003'
+                        name: 演示麻醉护士（合成）
+                    startedAt: '2026-12-01T09:40:00+08:00'
+                    endedAt: '2026-12-01T09:46:00+08:00'
+                    eventSummary:
+                      summary: 演示：术中突发循环不稳定，行胸外按压与肾上腺素（合成数据）
+                      interventions:
+                        - 胸外按压
+                        - 肾上腺素 1 mg 静推
+                    drugs:
+                      - drugName: 肾上腺素（演示）
+                        dose: 1
+                        unit: mg
+                        route: IV
+                        administeredAt: '2026-12-01T09:41:00+08:00'
+                    outcome: SUCCESS
+                    createdAt: '2026-12-01T09:50:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000002'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createResuscitation
+      tags:
+        - 麻醉记录
+      summary: 新增抢救记录（append-only）
+      description: |
+        新增一条抢救记录：抢救时间窗必须落在该记录单的麻醉时间窗内（`startedAt` 不早于记录开始、
+        `endedAt` 不晚于记录结束或服务端当前时间 + 容差，且 `endedAt >= startedAt`，违反 400）；
+        记录单不存在或超出数据范围 404。写入后不可修改/删除（数据库触发器拒绝 UPDATE/DELETE/
+        TRUNCATE，SQLSTATE 55000）。
+
+        权限：`m2:rescue:write`（SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）；抢救类型与
+        转归枚举为【待确认】临床口径，默认种子/示例仅作演示。
+      parameters:
+        - name: recordId
+          in: path
+          description: 麻醉记录单标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateResuscitationRequest'
+            example:
+              resusType: CPR
+              leader:
+                userId: '10000000-0000-4000-8000-000000000002'
+                name: 演示麻醉医师（合成）
+              rescuers:
+                - userId: '10000000-0000-4000-8000-000000000002'
+                  name: 演示麻醉医师（合成）
+                - userId: '10000000-0000-4000-8000-000000000003'
+                  name: 演示麻醉护士（合成）
+              startedAt: '2026-12-01T09:40:00+08:00'
+              endedAt: '2026-12-01T09:46:00+08:00'
+              eventSummary:
+                summary: 演示：术中突发循环不稳定，行胸外按压与肾上腺素（合成数据）
+                interventions:
+                  - 胸外按压
+              drugs:
+                - drugName: 肾上腺素（演示）
+                  dose: 1
+                  unit: mg
+                  route: IV
+                  administeredAt: '2026-12-01T09:41:00+08:00'
+              outcome: SUCCESS
+      responses:
+        '201':
+          description: 抢救记录创建成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResuscitationRecord'
+              example:
+                resuscitationId: '1d000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                resusType: CPR
+                leader:
+                  userId: '10000000-0000-4000-8000-000000000002'
+                  name: 演示麻醉医师（合成）
+                rescuers:
+                  - userId: '10000000-0000-4000-8000-000000000002'
+                    name: 演示麻醉医师（合成）
+                  - userId: '10000000-0000-4000-8000-000000000003'
+                    name: 演示麻醉护士（合成）
+                startedAt: '2026-12-01T09:40:00+08:00'
+                endedAt: '2026-12-01T09:46:00+08:00'
+                eventSummary:
+                  summary: 演示：术中突发循环不稳定，行胸外按压与肾上腺素（合成数据）
+                  interventions:
+                    - 胸外按压
+                drugs:
+                  - drugName: 肾上腺素（演示）
+                    dose: 1
+                    unit: mg
+                    route: IV
+                    administeredAt: '2026-12-01T09:41:00+08:00'
+                outcome: SUCCESS
+                createdAt: '2026-12-01T09:50:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4516,3 +5030,537 @@ components:
         source:
           type: string
           description: 数据来源标识（设备类型/网关）。
+    AlertRule:
+      type: object
+      description: |
+        术中预警规则（0.6.0）。规则不可原地修改：每次保存生成 version+1 的新版本并停用旧版本，
+        历史版本保留用于追溯“告警触发时使用的规则版本”。阈值与持续时长为院方口径，
+        默认种子值一律标【待确认】，须经临床顾问确认后由管理员录入。
+      required:
+        - ruleId
+        - code
+        - name
+        - metric
+        - operator
+        - durationSeconds
+        - severity
+        - version
+        - enabled
+        - createdAt
+        - createdBy
+      properties:
+        ruleId:
+          type: string
+          description: 规则版本行标识（UUID 字符串）；每次保存生成新标识。
+        code:
+          type: string
+          description: 规则编码（稳定业务键，如 SPO2_LOW/HR_LOW/HR_HIGH/MAP_LOW/ETCO2_RANGE）。
+          maxLength: 64
+        name:
+          type: string
+          description: 规则名称（中文展示名）。
+          maxLength: 200
+        metric:
+          type: string
+          description: |
+            评估指标：HR=心率（bpm）、SPO2=血氧（%）、MAP=平均动脉压（mmHg，由无创血压
+            收缩/舒张压按 dia+(sys-dia)/3 推导）、ETCO2=呼气末二氧化碳（mmHg）、TEMP=体温（℃）。
+          enum:
+            - HR
+            - SPO2
+            - MAP
+            - ETCO2
+            - TEMP
+        operator:
+          type: string
+          description: |
+            比较算子：LT=低于阈值（value < thresholdLow）、GT=高于阈值（value > thresholdHigh）、
+            OUT_OF_RANGE=超出区间（value < thresholdLow 或 value > thresholdHigh）。等于阈值不触发。
+          enum:
+            - LT
+            - GT
+            - OUT_OF_RANGE
+        thresholdLow:
+          type:
+            - number
+            - 'null'
+          description: 下限阈值（LT/OUT_OF_RANGE 必填）。
+        thresholdHigh:
+          type:
+            - number
+            - 'null'
+          description: 上限阈值（GT/OUT_OF_RANGE 必填）。
+        durationSeconds:
+          type: integer
+          description: 持续越界秒数（0 表示首个越界采样即触发；须连续满足，采样间隔超阈值视为新窗口）。
+          minimum: 0
+          maximum: 3600
+        severity:
+          type: string
+          description: 严重度（INFO=提示，WARN=警告，CRITICAL=严重）。
+          enum:
+            - INFO
+            - WARN
+            - CRITICAL
+        version:
+          type: integer
+          description: 规则版本号（从 1 起，仅增）；同时作为 PUT 的乐观锁版本，过期 409。
+          minimum: 1
+        enabled:
+          type: boolean
+          description: 是否启用（停用同样生成新版本，避免原地改写历史规则）。
+        pendingConfirmation:
+          type: boolean
+          description: |
+            临床待确认标记：阈值/持续时长较上一版本变化的新版本为 true（默认种子阈值
+            【待确认】也为 true）；仅名称/严重度/启用状态变化沿用上一版本标记。
+            清除须临床顾问确认后由 M5 复核流程写入。
+        createdAt:
+          type: string
+          format: date-time
+          description: 该版本创建时间（服务端时间）。
+        createdBy:
+          type: string
+          description: |
+            该版本创建人用户标识（必填）。系统默认种子写系统用户 UUID
+            `00000000-0000-4000-8000-000000000000`，不是真人。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间（服务端时间）。
+        updatedBy:
+          type: string
+          description: 最后更新人用户标识。
+    AlertRuleList:
+      type: object
+      description: 预警规则列表（每个 code 只返回当前版本）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 规则当前版本列表（按规则编码升序）。
+          items:
+            $ref: '#/components/schemas/AlertRule'
+    UpdateAlertRuleRequest:
+      type: object
+      description: |
+        预警规则保存请求：以同一 code 生成新版本（version+1），必须回传当前 version。
+        算子与阈值必须自洽：LT 提供 thresholdLow、GT 提供 thresholdHigh、OUT_OF_RANGE 两者都提供（缺失 400）。
+      required:
+        - durationSeconds
+        - severity
+        - enabled
+        - version
+      properties:
+        name:
+          type: string
+          description: 规则名称（可选；不传沿用上一版本；1–200 字符）。
+          minLength: 1
+          maxLength: 200
+        thresholdLow:
+          type:
+            - number
+            - 'null'
+          description: 下限阈值（LT/OUT_OF_RANGE 必填，其余忽略为 null；按指标范围校验）。
+        thresholdHigh:
+          type:
+            - number
+            - 'null'
+          description: 上限阈值（GT/OUT_OF_RANGE 必填，其余忽略为 null；按指标范围校验）。
+        durationSeconds:
+          type: integer
+          description: 持续越界秒数（0–3600，0 表示立即触发）。
+          minimum: 0
+          maximum: 3600
+        severity:
+          type: string
+          description: 严重度。
+          enum:
+            - INFO
+            - WARN
+            - CRITICAL
+        enabled:
+          type: boolean
+          description: 是否启用（停用生成新版本并保留历史）。
+        version:
+          type: integer
+          description: 当前规则版本号；与当前版本不一致 409。
+          minimum: 1
+    Alert:
+      type: object
+      description: |
+        术中告警留痕。告警不可改删，只允许 TRIGGERED → ACKNOWLEDGED/IGNORED 一次流转；
+        规则编码与版本在触发时快照，规则后续升级不追溯修改历史告警。
+      required:
+        - alertId
+        - recordId
+        - ruleId
+        - ruleCode
+        - ruleVersion
+        - metric
+        - value
+        - severity
+        - triggeredAt
+        - status
+        - version
+        - createdAt
+      properties:
+        alertId:
+          type: string
+          description: 告警标识（UUID 字符串）。
+        recordId:
+          type: string
+          description: 关联麻醉记录单标识。
+        ruleId:
+          type: string
+          description: 触发时的规则版本行标识。
+        ruleCode:
+          type: string
+          description: 触发时的规则编码。
+        ruleVersion:
+          type: integer
+          description: 触发时的规则版本号（规则变更后新告警使用新版本）。
+          minimum: 1
+        metric:
+          type: string
+          description: 触发指标。
+          enum:
+            - HR
+            - SPO2
+            - MAP
+            - ETCO2
+            - TEMP
+        value:
+          type: number
+          description: 触发时的实测值（按 metric 单位）。
+        unit:
+          type: string
+          description: 指标单位（bpm/%/mmHg/℃），用于展示。
+        severity:
+          type: string
+          description: 严重度。
+          enum:
+            - INFO
+            - WARN
+            - CRITICAL
+        triggeredAt:
+          type: string
+          format: date-time
+          description: 触发时间（越界持续达到规则时长的那一采样时刻）。
+        status:
+          type: string
+          description: 处理状态（只允许 TRIGGERED → ACKNOWLEDGED/IGNORED 一次流转）。
+          enum:
+            - TRIGGERED
+            - ACKNOWLEDGED
+            - IGNORED
+        acknowledgedBy:
+          type:
+            - string
+            - 'null'
+          description: 处理人用户标识；未处理为 null。
+        acknowledgedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: 处理时间；未处理为 null。
+        acknowledgeReason:
+          type:
+            - string
+            - 'null'
+          description: 处理原因（临床留痕；不写入审计 detail 原文）。
+        dedupeKey:
+          type: string
+          description: 去重键（recordId + ruleCode + 越界窗口起始秒），用于幂等与追溯。
+        version:
+          type: integer
+          description: 告警乐观锁版本（确认/忽略必须回传，过期 409）。
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+          description: 告警落库时间（服务端时间）。
+        createdBy:
+          type:
+            - string
+            - 'null'
+          description: 落库触发人；自动评估为 null（系统动作）。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间（服务端时间）。
+        updatedBy:
+          type:
+            - string
+            - 'null'
+          description: 最后处理人用户标识。
+    AlertList:
+      type: object
+      description: 记录单告警列表（按触发时间倒序）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 告警列表。
+          items:
+            $ref: '#/components/schemas/Alert'
+    AcknowledgeAlertRequest:
+      type: object
+      description: 告警确认/忽略请求；reason 必填并作为临床留痕（审计不记录原文）。
+      required:
+        - decision
+        - reason
+        - version
+      properties:
+        decision:
+          type: string
+          description: 处理决定（CONFIRMED=确认有效处置，IGNORED=判定无需处置）。
+          enum:
+            - CONFIRMED
+            - IGNORED
+        reason:
+          type: string
+          description: 处理原因（1–500 字符，必填）。
+          minLength: 1
+          maxLength: 500
+        version:
+          type: integer
+          description: 告警当前版本；不一致 409（并发处理或已被他人处理）。
+          minimum: 1
+    AlertEvaluationResult:
+      type: object
+      description: 一次规则评估的结果（幂等：已存在的告警不重复插入）。
+      required:
+        - recordId
+        - evaluatedRules
+        - sampledFrames
+        - createdAlerts
+        - evaluatedAt
+      properties:
+        recordId:
+          type: string
+          description: 被评估的麻醉记录单标识。
+        evaluatedRules:
+          type: integer
+          description: 本次参与评估的启用规则数。
+          minimum: 0
+        sampledFrames:
+          type: integer
+          description: 本次读取的体征采样帧数（记录时间窗内、该台次术间绑定的设备）。
+          minimum: 0
+        createdAlerts:
+          type: integer
+          description: 本次新增告警数（去重后实际插入）。
+          minimum: 0
+        evaluatedThrough:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: 评估后的 measured_at 水位（只增；null 表示无可推进的新采样）。
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: 评估完成时间（服务端时间）。
+    ResuscitationParticipant:
+      type: object
+      description: 抢救负责人/参与人员（结构化留痕）；仅存人员姓名/标识，不含患者信息。
+      required:
+        - name
+      properties:
+        userId:
+          type:
+            - string
+            - 'null'
+          description: 人员账号标识（可选；未绑定账号时为 null）。
+          maxLength: 64
+        name:
+          type: string
+          description: 人员姓名（必填，1–100 字符；只落库，不写入日志/审计原文）。
+          minLength: 1
+          maxLength: 100
+    ResuscitationDrug:
+      type: object
+      description: 抢救用药明细（结构化，不含患者标识）。
+      required:
+        - drugName
+        - dose
+        - unit
+      properties:
+        drugName:
+          type: string
+          description: 药品名称（院内字典名）。
+          maxLength: 200
+        dose:
+          type: number
+          description: 剂量（必须大于 0）。
+          exclusiveMinimum: 0
+        unit:
+          type: string
+          description: 剂量单位（mg/ug/ml 等）。
+          maxLength: 16
+        route:
+          type: string
+          description: 给药途径（IV/INHALATION/EPIDURAL 等）。
+          maxLength: 32
+        administeredAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: 给药时间；为空表示抢救时间窗内未单独记录。
+    ResuscitationEventSummary:
+      type: object
+      description: 抢救事件经过摘要（结构化；不得写入姓名/证件号/住院号/手机号等直接标识）。
+      required:
+        - summary
+      properties:
+        summary:
+          type: string
+          description: 事件经过摘要（1–2000 字符）。
+          minLength: 1
+          maxLength: 2000
+        interventions:
+          type: array
+          description: 关键干预措施列表（如胸外按压/电除颤/气管插管）。
+          items:
+            type: string
+            maxLength: 200
+    ResuscitationRecord:
+      type: object
+      description: |
+        抢救记录（append-only）。抢救时间窗必须落在麻醉记录单时间窗内；写入后不可修改/删除
+        （数据库触发器拒绝 UPDATE/DELETE/TRUNCATE）。枚举口径为【待确认】。
+      required:
+        - resuscitationId
+        - recordId
+        - resusType
+        - startedAt
+        - endedAt
+        - eventSummary
+        - outcome
+        - createdAt
+        - createdBy
+      properties:
+        resuscitationId:
+          type: string
+          description: 抢救记录标识（UUID 字符串）。
+        recordId:
+          type: string
+          description: 关联麻醉记录单标识。
+        resusType:
+          type: string
+          description: |
+            抢救类型：CPR=心肺复苏，AIRWAY=气道干预，VASOPRESSOR=血管活性药支持，
+            DEFIBRILLATION=电除颤，OTHER=其他。
+          enum:
+            - CPR
+            - AIRWAY
+            - VASOPRESSOR
+            - DEFIBRILLATION
+            - OTHER
+        leader:
+          $ref: '#/components/schemas/ResuscitationParticipant'
+        rescuers:
+          type: array
+          description: 抢救参与人员（至少 1 人；服务端校验）。
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/ResuscitationParticipant'
+        startedAt:
+          type: string
+          format: date-time
+          description: 抢救开始时间（不得早于记录单开始时间）。
+        endedAt:
+          type: string
+          format: date-time
+          description: 抢救结束时间（不得早于开始，不得晚于记录结束或当前时间 + 容差）。
+        eventSummary:
+          $ref: '#/components/schemas/ResuscitationEventSummary'
+        drugs:
+          type: array
+          description: 抢救用药明细（可为空数组）。
+          items:
+            $ref: '#/components/schemas/ResuscitationDrug'
+        outcome:
+          type: string
+          description: 转归（【待确认】临床口径）：SUCCESS=复苏成功，PARTIAL=部分改善，FAILED=未成功，UNKNOWN=未记录。
+          enum:
+            - SUCCESS
+            - PARTIAL
+            - FAILED
+            - UNKNOWN
+        createdAt:
+          type: string
+          format: date-time
+          description: 录入时间（服务端时间）。
+        createdBy:
+          type: string
+          description: 录入人用户标识。
+    ResuscitationRecordList:
+      type: object
+      description: 抢救记录列表（按开始时间倒序）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 抢救记录列表。
+          items:
+            $ref: '#/components/schemas/ResuscitationRecord'
+    CreateResuscitationRequest:
+      type: object
+      description: 新增抢救记录请求；抢救时间窗必须落在记录单时间窗内（违反 400）。
+      required:
+        - resusType
+        - startedAt
+        - endedAt
+        - eventSummary
+        - outcome
+      properties:
+        resusType:
+          type: string
+          description: 抢救类型。
+          enum:
+            - CPR
+            - AIRWAY
+            - VASOPRESSOR
+            - DEFIBRILLATION
+            - OTHER
+        leader:
+          $ref: '#/components/schemas/ResuscitationParticipant'
+        rescuers:
+          type: array
+          description: 抢救参与人员（服务端必填，至少 1 人；缺失/空数组 400）。
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/ResuscitationParticipant'
+        startedAt:
+          type: string
+          format: date-time
+          description: 抢救开始时间。
+        endedAt:
+          type: string
+          format: date-time
+          description: 抢救结束时间（>= startedAt）。
+        eventSummary:
+          $ref: '#/components/schemas/ResuscitationEventSummary'
+        drugs:
+          type: array
+          description: 抢救用药明细（≤50 条）。
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/ResuscitationDrug'
+        outcome:
+          type: string
+          description: 转归（【待确认】）。
+          enum:
+            - SUCCESS
+            - PARTIAL
+            - FAILED
+            - UNKNOWN
