@@ -12,7 +12,7 @@
 | 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 140（m0-impl）+ 61（gateway）个用例、前端 32 个用例 |
 | 集成 | Spring Boot Test + 嵌入式 PostgreSQL 16（Zonky）/ Testcontainers | ≈20% | 迁移、MyBatis、认证越权、审计、网关幂等与断网补传 |
 | 契约 | spectral + oasdiff（Java DTO 反序列化用例） | — | `apps/api/api-contracts/src/test` |
-| E2E | Playwright（Chromium） | 关键路径 | 9 条（首页冒烟 3 + 登录/越权 6）；E2E-01–05 见 §6 |
+| E2E | Playwright（Chromium） | 关键路径 | 13 条（首页冒烟 3 + 登录/越权 6 + M1 申请 4）；E2E-01–05 见 §6 |
 
 比例是目标而非硬门禁；骨架期没有业务域，集成/E2E 占比会随后续里程碑上升。
 
@@ -128,7 +128,12 @@ pnpm e2e
   4. **E2E-04 UI 级**：低权限用户访问 `/m0/sessions` → `/403`，且侧边菜单不显示「会话管理」；
   5. `/me` 首次 401 → 单次 `/v1/auth/refresh` → 用新 Bearer 重放并成功（route 计数 + Authorization 断言）；
   6. 登出 → 回 `/login`，`sessionStorage` 中令牌与用户快照清空。
-- `pnpm e2e` 3 次重跑稳定（9/9，无 flaky）。
+- `apps/web/e2e/m1-applications.spec.ts` 4 条（S-9，M2-M1-01）：
+  1. 列表加载：展示 HIS 申请号、脱敏患者与状态，写权限用户可见导入/取消按钮；
+  2. 状态筛选：选择“已受理”后查询串携带 `status=ACCEPTED` 并渲染筛选结果；
+  3. 详情：点击详情进入 `/m1/applications/:id`，展示申请与 create→SUBMITTED 状态历史；
+  4. 只读权限：`m1:application:read` 用户不显示导入/取消按钮（写权限按钮隐藏）。
+- `pnpm e2e` 3 次重跑稳定（13/13，无 flaky）。
 
 > **E2E-04 口径说明**：当前为 **UI 级越权（路由守卫 + 菜单权限过滤）+ `/api/v1/auth/*` 合成响应拦截**，
 > 没有真实后端参与，因此**不得宣称已覆盖真实越权 API**。真实后端全栈越权
@@ -166,6 +171,40 @@ E2E-01–05 每条落地时必须在 PR 附带失败截图/trace，并接入 CI 
 - 禁止反模式：恒真断言、mock 被测对象、只测快乐路径、测试复制实现、改测试让实现通过。
 - Docker/浏览器/网络类环境失败标 `EXT-08`，不算测试通过，也不阻断主线。
 
+### 8.1 约定：新测试禁止依赖真实时间窗
+
+- **禁止**用固定等待去赌"退避窗口/TTL/超时是否已到期"，例如失败后 `Thread.sleep(600)`
+  再断言重试——并发负载下调用方的实际耗时不可控，必然偶发。
+- 可确定化的逻辑一律注入时间源：生产代码用 `LongSupplier`（如
+  `VitalUploader(..., LongSupplier nowEpochMillis)`）或 `java.time.Clock`，公开构造器默认
+  `System::currentTimeMillis`，包可见构造器供同包测试传入可控时钟；测试显式推进时钟，
+  断言窗口边界前不动作、到边界才动作。
+- 无法注入时钟的外部异步边界（真实 socket、`@Scheduled` 线程、嵌入式 PG）只能用**显式条件
+  等待**（`GatewayTestSupport.awaitTrue`）：断言依赖条件本身，超时按实测耗时留数倍余量并在
+  注释说明；`GatewayTestSupport.sleep` 已收为 `private`，只作轮询间隔，不得当同步手段。
+- 禁止为了"变绿"放宽或删除语义断言；修复后须保留原有用例的全部不变量（缓冲保留、指标、
+  连接状态、下次重试时间）。
+
+### 8.2 修复记录：`VitalUploaderRetryTest` 退避窗口（2026-11-13）
+
+- **现象**：`./scripts/check.sh` 并发负载下
+  `upload/VitalUploaderRetryTest#keepsRecordsAndBacksOffWhenDatabaseUnavailable` 在
+  "退避窗口内不得重试"处失败（expected 1 but 2）。
+- **根因**：用例用真实墙钟 + 500ms 基础退避，`drain()` 之后依赖"立即调用 `scheduledUpload()`
+  必然仍在 500ms 窗口内"，再 `Thread.sleep(600)` 等窗口过期。CPU 争用下 `drain()` 返回到下一次
+  `scheduledUpload()` 的真实耗时可能已超过窗口，于是"窗口内"那次调用实际已越界并重试，
+  连续失败数变成 2。实现本身正确，是测试假设了真实时序。
+- **修复**：`VitalUploader` 的时间读取（退避判定、`lastSuccessEpochMillis`、
+  `nextAttemptEpochMillis`）全部改走可注入的 `LongSupplier`，公开构造器仍传
+  `System::currentTimeMillis`，生产行为不变；用例改为可控 `AtomicLong` 时钟——失败后断言
+  `nextAttempt = T0 + 500`，窗口边界前 1ms 调用不重试，推进到边界重试（failures=2、failed
+  指标=2、数据仍在缓冲），再验证下一窗口前不重试。零休眠、零竞态，且断言比原来更强
+  （精确窗口值 + 二次退避 1000ms）。
+- **顺带核查**：`LocalBufferTest` / `LocalBufferExtraTest` 不含真实时间等待（段 TTL 只用固定
+  时间戳与 600s 间隔，容量/轮转判定与墙钟无关），未改；`DeviceGatewayEndToEndTest`、
+  `TcpDeviceServerTest`、`SimulatedDeviceTest` 的真实 socket/调度边界保留显式条件等待，
+  超时统一加大并注释（E2E 180s/120s/60s，回环 socket 10s，模拟设备 join 10s）。
+
 ## 9. CI 对应关系（S0-04 落地）
 
 | 本地步骤 | CI job（实际名） | 产物/缓存 |
@@ -187,6 +226,11 @@ CI 建议把后端、前端、E2E 拆 job 并行（本地 `check.sh` 仍串行�
 
 ## 10. 变更记录
 
+- 2026-11-13（gateway flaky 修复）：`VitalUploader` 支持注入时钟；重写
+  `VitalUploaderRetryTest` 去除真实时间窗依赖；E2E/回环 socket 用例加大条件等待余量；
+  新增 §8.1 禁止依赖真实时间窗约定与 §8.2 根因记录。
+- 2026-11-13（M2-M1-01）：新增 M1 E2E 4 条（`m1-applications.spec.ts`，API 拦截 + SYNTHETIC），
+  E2E 总数 13；后端新增 V7 迁移结构/append-only、并发导入、缺 pepper 启动失败、POST 患者检索用例。
 - 2026-11-13（M2-M0-03）：m0-impl 覆盖率 96.34%/87.52%，device-gateway 91.68%/77.39%，
   删除两处 ratchet 及全部到期临时标记；新增登录 + E2E-04 UI 级 E2E 6 条；
   Vitest 升级 4.1.12、新增 glob 14.0.6 / minimatch 11.0.8 override，devDeps 漏洞清零。

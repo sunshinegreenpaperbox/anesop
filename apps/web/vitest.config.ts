@@ -34,6 +34,10 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     environment: 'jsdom',
+    // 宿主机并行代理/CI 负载高时，Element Plus 首屏 mount 可能超过 Vitest 默认 5s；
+    // 仅放宽超时，不改变任何断言（2026-11-13 M2-M1-01 验证环境 load average≈12）。
+    testTimeout: 15_000,
+    hookTimeout: 15_000,
     setupFiles: ['src/__tests__/setup.ts'],
     server: {
       deps: {

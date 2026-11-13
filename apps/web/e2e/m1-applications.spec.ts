@@ -151,7 +151,7 @@ test.describe('M1 手术申请', () => {
 
     await expect.poll(() => urls.length).toBeGreaterThanOrEqual(2)
     expect(urls[urls.length - 1]).toContain('status=ACCEPTED')
-    await expect(page.getByText('已受理')).toBeVisible()
+    await expect(page.locator('tbody').getByText('已受理')).toBeVisible()
   })
 
   test('详情页展示申请与状态历史', async ({ page }) => {
