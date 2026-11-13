@@ -7,6 +7,10 @@ spring:
       - classpath:db/seed/demo
 
 anesop:
+  m2:
+    acquisition:
+      # 自动化测试专用 SYNTHETIC 网关令牌（仅测试类路径，不是生产密钥，禁止复用）。
+      gateway-token: synth-test-gateway-token
   m1:
     inpatient-pepper:
       # 自动化测试不注入真实 pepper：进程内随机生成（每个测试上下文独立）。

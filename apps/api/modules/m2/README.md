@@ -29,7 +29,9 @@ source scripts/env.sh
 java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.active=dev
 ```
 
-当前仅有采集表与骨架，没有麻醉记录单端点；运行需 PostgreSQL 16（Docker 不可用，EXT-08）。
+已实现术前访视/知情同意/三方核查（V10/V11）、麻醉记录单/时间轴/用药/出入量（V13，契约
+anesthesia 0.5.0）与设备采集接入/台账（V14，契约 device 0.1.0）；运行需 PostgreSQL 16
+（Docker 不可用，EXT-08）。
 
 ## 如何测试
 
@@ -46,10 +48,13 @@ java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.ac
 
 ## 关键契约
 
-- 本域契约：`packages/contracts/openapi/anesthesia.yaml`（术前访视、记录单、锁单、三方核查、
-  随访）；患者信息涉及 `packages/contracts/openapi/patient.yaml`。当前为契约骨架，服务端未实现。
+- 本域契约：`packages/contracts/openapi/anesthesia.yaml`（术前访视、知情同意、三方核查、
+  记录单/时间轴/用药/出入量 0.5.0）与 `packages/contracts/openapi/device.yaml`（设备登记、
+  网关上报、体征查询、健康摘要 0.1.0）；患者信息涉及 `patient.yaml`。
 - 采集数据表：`db/migration/V4__m2_anes_acquisition_init.sql`（`m2_anes.anesthesia_vital`，
-  S0-09 POC 已落库）；记录单/事件/用药表随 M2 迁移新增。
+  S0-09 POC 已落库）；记录单/时间轴/用药/出入量表见 V13（`anesthesia_record`、
+  `record_event`、`drug_administration`、`fluid_record`）；设备登记/上报幂等日志见 V14
+  （`device_registry`、`device_ingest_log`）。
 - 跨模块只依赖 `m2-api`；禁止其他模块直连 `m2_anes` 表。
 
 ## 负责人（占位）
@@ -60,5 +65,9 @@ java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.ac
 
 ## 状态
 
-S0-02 空模块占位（仅 `package-info.java`）；S0-09 新增 V4 `m2_anes.anesthesia_vital` 采集表。
-麻醉记录、事件、用药、复苏与随访等业务表与接口待 M2。
+S0-02 空模块占位；S0-09 新增 V4 `m2_anes.anesthesia_vital` 采集表；M2-M4-01/M2-M5-01 落地
+术前访视与知情同意/三方核查（V10/V11）；M3-M2-01 落地麻醉记录单、append-only 时间轴、
+用药（麻精双人核对）与出入量（V13，契约 anesthesia 0.5.0）；M3-M8-01 落地设备采集接入
+（V14，契约 device 0.1.0；数据范围、健康窗口与 `last_seen` 语义见
+`docs/modules/m2/README.md` §12）。预警/抢救（M3-M2-02）、锁单/修订/CA（M3-M2-03）、
+复苏与随访待后续任务。

@@ -14,6 +14,7 @@ import com.anesop.m1.api.application.SurgeryApplicationValidationException;
 import com.anesop.m1.api.schedule.ScheduleUnprocessableException;
 import com.anesop.m1.api.schedule.SchedulingConflictException;
 import com.anesop.m1.api.schedule.SchedulingValidationException;
+import com.anesop.m2.api.acquisition.GatewayAuthException;
 import com.anesop.m2.api.error.M2ConflictException;
 import com.anesop.m2.api.error.M2UnprocessableException;
 import com.anesop.m2.api.error.M2ValidationException;
@@ -73,6 +74,15 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<Error> handleAuthentication(AuthenticationException exception, HttpServletRequest request) {
+        return response(HttpStatus.UNAUTHORIZED, "AUTH_UNAUTHORIZED", "未认证或令牌已失效", request);
+    }
+
+    /**
+     * 网关令牌校验失败（M3-M8-01）：统一 401，文案固定；不回显令牌、期望值或配置状态，
+     * 也不写业务审计（避免把未认证请求头带入审计）。
+     */
+    @ExceptionHandler(GatewayAuthException.class)
+    public ResponseEntity<Error> handleGatewayAuth(GatewayAuthException exception, HttpServletRequest request) {
         return response(HttpStatus.UNAUTHORIZED, "AUTH_UNAUTHORIZED", "未认证或令牌已失效", request);
     }
 

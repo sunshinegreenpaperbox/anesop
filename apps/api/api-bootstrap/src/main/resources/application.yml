@@ -89,6 +89,23 @@ anesop:
       vo2-slope: ${ANESOP_M2_PREOP_VO2_SLOPE:0.43}
       vo2-intercept: ${ANESOP_M2_PREOP_VO2_INTERCEPT:9.6}
       four-mets-vo2-threshold: ${ANESOP_M2_PREOP_FOUR_METS_VO2_THRESHOLD:14}
+    # 设备采集接入（M3-M8-01，契约 device.yaml 0.1.0；V14 表结构）。
+    # gateway-token 默认空 = 未配置：ingest 一律 401（fail-closed，绝不"未配置即放行"）。
+    # 生产由院方密钥托管注入 ANESOP_M2_ACQUISITION_GATEWAY_TOKEN，禁止入库/入仓/入日志。
+    acquisition:
+      gateway-token: ${ANESOP_M2_ACQUISITION_GATEWAY_TOKEN:}
+      # 设备离线判定阈值（秒）：last_seen_at 超过该值未上报即推导为 OFFLINE。
+      offline-timeout-seconds: ${ANESOP_M2_ACQUISITION_OFFLINE_TIMEOUT_SECONDS:120}
+      # 体征窗口查询最大跨度（小时）：超限 422，防止一次查询扫出整月明细。
+      max-query-window-hours: ${ANESOP_M2_ACQUISITION_MAX_QUERY_WINDOW_HOURS:24}
+      # 采集健康摘要统计窗口（小时，1–168）：批次/质量比例使用同一窗口。
+      health-window-hours: ${ANESOP_M2_ACQUISITION_HEALTH_WINDOW_HOURS:24}
+      # 合成数据标记：POC/测试恒 true；真实设备接入后由部署配置改 false（V4 synthetic 语义）。
+      synthetic: ${ANESOP_M2_ACQUISITION_SYNTHETIC:true}
+    # 麻醉记录单（M3-M2-01）：事件时间容差（秒）。
+    # 未来时间超过 now+容差 400；早于最新事件或早于 now−容差 的补录必须填 entryReason。
+    record:
+      time-tolerance-seconds: ${ANESOP_M2_RECORD_TIME_TOLERANCE_SECONDS:600}
   security:
     # 默认禁止演示账号；dev/test 的 profile 文件显式置 true（B-2.3）。
     demo-accounts-allowed: false
