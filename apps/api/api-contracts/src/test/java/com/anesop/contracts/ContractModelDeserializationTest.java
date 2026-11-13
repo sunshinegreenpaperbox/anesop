@@ -11,6 +11,9 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.time.OffsetDateTime;
 import org.junit.jupiter.api.Test;
 
@@ -39,6 +42,36 @@ class ContractModelDeserializationTest {
                 .contains("@Generated(value = \"org.openapitools.codegen.languages.SpringCodegen\"");
         // 生成物不出现 Gson/JsonNullable 等未引入依赖，避免隐式运行时类路径。
         assertThat(source).doesNotContain("com.google.gson", "JsonNullable");
+    }
+
+    @Test
+    void patientContractExamplesUseUuidAndDeprecatedFieldsAreMarked() throws Exception {
+        Path root = Path.of(System.getProperty("anesop.root", ".")).toAbsolutePath().normalize();
+        Path patient = root.resolve("packages/contracts/openapi/patient.yaml");
+        Path scheduling = root.resolve("packages/contracts/openapi/scheduling.yaml");
+        assertThat(patient).exists();
+        assertThat(scheduling).exists();
+
+        Pattern patientIdExample = Pattern.compile("patientId:\\s*'([^']+)'");
+        for (Path contract : List.of(patient, scheduling)) {
+            String text = Files.readString(contract, StandardCharsets.UTF_8);
+            Matcher matcher = patientIdExample.matcher(text);
+            int count = 0;
+            while (matcher.find()) {
+                count++;
+                assertThat(matcher.group(1))
+                        .as("patientId 示例必须是 UUID 字符串：%s", contract.getFileName())
+                        .matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+            }
+            assertThat(count).as("契约应包含 patientId 示例：%s", contract.getFileName()).isPositive();
+        }
+
+        String patientText = Files.readString(patient, StandardCharsets.UTF_8);
+        for (String field : List.of("idCardMasked", "phoneMasked", "inpatientNo")) {
+            assertThat(patientText).contains("deprecated: true")
+                    .as("兼容字段 %s 必须标 deprecated", field);
+        }
+        assertThat(patientText).contains("POST /v1/patients/search");
     }
 
     @Test

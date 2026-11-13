@@ -29,19 +29,24 @@ class ProductionStartupFailureTest {
     private static final String FIELD_KEY = "CD1yp9wWS4C16iRZjsP4Mmec0QtAdarfGU6DuO0nXJE=";
     private static final String PEPPER = "DlGU1x9ipegwc7b5QYTHD1KV2CBjpukxdLf6QoXIEFOW2SFkp+oydbj7Q4bJEVSX";
 
+    /** M1 住院号 pepper（Base64、解码后 44 字节，合成测试值）。 */
+    private static final String INPATIENT_PEPPER =
+            "c3ludGhldGljLXBlcHBlci0wMTIzNDU2Nzg5LWFuZXNvcC1tMS10ZXN0";
+
     @AfterAll
     static void dropDatabases() {
         EmbeddedPostgresSupport.dropDatabase("anesop_prod_nokey");
         EmbeddedPostgresSupport.dropDatabase("anesop_prod_demo");
         EmbeddedPostgresSupport.dropDatabase("anesop_prod_nofieldkey");
         EmbeddedPostgresSupport.dropDatabase("anesop_prod_nopepper");
+        EmbeddedPostgresSupport.dropDatabase("anesop_prod_noinpatientpepper");
     }
 
     @Test
     void missingJwtSecretFailsStartupWithoutEchoingSecret() {
         String url = EmbeddedPostgresSupport.jdbcUrl("anesop_prod_nokey");
 
-        assertThatThrownBy(() -> start(url, null, FIELD_KEY, PEPPER))
+        assertThatThrownBy(() -> start(url, null, FIELD_KEY, PEPPER, INPATIENT_PEPPER))
                 .satisfies(throwable -> {
                     Throwable root = rootCause(throwable);
                     assertThat(root).isInstanceOf(IllegalStateException.class);
@@ -58,7 +63,7 @@ class ProductionStartupFailureTest {
         insertUser(jdbc, "demo_admin");
         insertUser(jdbc, "demouser");
 
-        assertThatThrownBy(() -> start(url, SECRET, FIELD_KEY, PEPPER))
+        assertThatThrownBy(() -> start(url, SECRET, FIELD_KEY, PEPPER, INPATIENT_PEPPER))
                 .satisfies(throwable -> {
                     Throwable root = rootCause(throwable);
                     assertThat(root).isInstanceOf(IllegalStateException.class);
@@ -76,7 +81,7 @@ class ProductionStartupFailureTest {
     void missingFieldKeyFailsProdStartup() {
         String url = EmbeddedPostgresSupport.jdbcUrl("anesop_prod_nofieldkey");
 
-        assertThatThrownBy(() -> start(url, SECRET, "", PEPPER))
+        assertThatThrownBy(() -> start(url, SECRET, "", PEPPER, INPATIENT_PEPPER))
                 .satisfies(throwable -> {
                     Throwable root = rootCause(throwable);
                     assertThat(root).isInstanceOf(IllegalStateException.class);
@@ -88,7 +93,7 @@ class ProductionStartupFailureTest {
     void missingPhonePepperFailsProdStartup() {
         String url = EmbeddedPostgresSupport.jdbcUrl("anesop_prod_nopepper");
 
-        assertThatThrownBy(() -> start(url, SECRET, FIELD_KEY, ""))
+        assertThatThrownBy(() -> start(url, SECRET, FIELD_KEY, "", INPATIENT_PEPPER))
                 .satisfies(throwable -> {
                     Throwable root = rootCause(throwable);
                     assertThat(root).isInstanceOf(IllegalStateException.class);
@@ -96,7 +101,20 @@ class ProductionStartupFailureTest {
                 });
     }
 
-    private static void start(String jdbcUrl, String secret, String fieldKey, String pepper) {
+    @Test
+    void missingInpatientPepperFailsProdStartup() {
+        String url = EmbeddedPostgresSupport.jdbcUrl("anesop_prod_noinpatientpepper");
+
+        assertThatThrownBy(() -> start(url, SECRET, FIELD_KEY, PEPPER, ""))
+                .satisfies(throwable -> {
+                    Throwable root = rootCause(throwable);
+                    assertThat(root).isInstanceOf(IllegalStateException.class);
+                    assertThat(root.getMessage()).contains("ANESOP_INPATIENT_PEPPER").contains("拒绝启动");
+                });
+    }
+
+    private static void start(String jdbcUrl, String secret, String fieldKey, String pepper,
+            String inpatientPepper) {
         SpringApplicationBuilder builder = new SpringApplicationBuilder(ApiApplication.class)
                 .web(WebApplicationType.SERVLET)
                 .profiles("prod");
@@ -108,7 +126,8 @@ class ProductionStartupFailureTest {
                 "--spring.datasource.password=",
                 "--anesop.security.jwt.secret=" + (secret == null ? "" : secret),
                 "--anesop.security.field-key=" + (fieldKey == null ? "" : fieldKey),
-                "--anesop.security.phone-pepper=" + (pepper == null ? "" : pepper))) {
+                "--anesop.security.phone-pepper=" + (pepper == null ? "" : pepper),
+                "--anesop.m1.inpatient-pepper.value=" + (inpatientPepper == null ? "" : inpatientPepper))) {
             fail("prod 上下文本应启动失败");
         }
     }

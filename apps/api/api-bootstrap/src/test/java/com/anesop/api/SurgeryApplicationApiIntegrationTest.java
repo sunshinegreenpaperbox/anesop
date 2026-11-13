@@ -60,9 +60,16 @@ class SurgeryApplicationApiIntegrationTest extends AbstractApiIntegrationTest {
         SyntheticAccounts.resetDemoAccounts(jdbcTemplate);
         SyntheticAccounts.ensureSurgeon(jdbcTemplate);
         // 每个用例从干净的 M1 表开始，避免导入/手工数据互相污染。
-        jdbcTemplate.update("DELETE FROM m1_sched.application_status_history");
-        jdbcTemplate.update("DELETE FROM m1_sched.surgery_application");
-        jdbcTemplate.update("DELETE FROM m1_sched.patient_snapshot");
+        // 状态历史是 append-only（S-4 触发器）：测试夹具临时 DISABLE TRIGGER USER 清理，
+        // 随后立即恢复；生产路径不得使用该开关。
+        jdbcTemplate.execute("ALTER TABLE m1_sched.application_status_history DISABLE TRIGGER USER");
+        try {
+            jdbcTemplate.update("DELETE FROM m1_sched.application_status_history");
+            jdbcTemplate.update("DELETE FROM m1_sched.surgery_application");
+            jdbcTemplate.update("DELETE FROM m1_sched.patient_snapshot");
+        } finally {
+            jdbcTemplate.execute("ALTER TABLE m1_sched.application_status_history ENABLE TRIGGER USER");
+        }
         insertPatient(PATIENT_ANES_ID, HIS_PATIENT_ANES, "演示患者甲", "SYNT****9001", "hash-9001",
                 SyntheticAccounts.DEMO_ANES_ORG_ID, "麻醉科（合成）");
         insertPatient(PATIENT_OR_ID, HIS_PATIENT_OR, "演示患者乙", "SYNT****9002", "hash-9002",
@@ -433,7 +440,8 @@ class SurgeryApplicationApiIntegrationTest extends AbstractApiIntegrationTest {
                 .andExpect(jsonPath("$.items[0].departmentName").value("麻醉科（合成）"))
                 .andReturn();
         assertThat(list.getResponse().getContentAsString())
-                .doesNotContain("\"idCard", "\"phone", "SYNTH-ZY-9001");
+                .as("兼容字段存在但为空字符串，不返回真实证件号/手机号/住院号明文")
+                .doesNotContain("110***********", "138****", "SYNTH-ZY-9001");
 
         mockMvc.perform(get("/v1/patients/" + PATIENT_ANES_ID)
                         .header("Authorization", "Bearer " + admin))

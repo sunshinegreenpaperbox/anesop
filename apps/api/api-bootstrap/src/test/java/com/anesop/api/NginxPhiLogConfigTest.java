@@ -37,8 +37,13 @@ class NginxPhiLogConfigTest {
                 .doesNotContainPattern("\\$request(?![A-Za-z0-9_])");
         assertThat(block).as("/api/ 必须使用无 query 的自定义日志格式").contains("access_log")
                 .contains("anesop_no_query");
-        assertThat(text).as("自定义格式本身也不得引用 query").contains("log_format anesop_no_query")
-                .doesNotContain("$request_uri");
+        Matcher format = Pattern.compile("log_format\\s+anesop_no_query(.*?);", Pattern.DOTALL)
+                .matcher(text);
+        assertThat(format.find()).as("必须定义 log_format anesop_no_query").isTrue();
+        assertThat(format.group(1)).as("自定义格式本身也不得引用 query")
+                .doesNotContain("$args")
+                .doesNotContain("$query_string")
+                .doesNotContainPattern("\\$request(?![A-Za-z0-9_])");
     }
 
     private static Path repoRoot() {

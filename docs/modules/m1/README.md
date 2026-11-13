@@ -48,8 +48,10 @@ apps/api/modules/m1/
 | POST | `/v1/scheduling/applications/import` | `importSurgeryApplications` | `m1:application:write` | 模拟 HIS 拉取导入；幂等，响应 `simulated=true` |
 | POST | `/v1/scheduling/applications/{applicationId}/cancel` | `cancelSchedulingApplication` | `m1:application:write` | 取消 + 状态历史 + 审计；终态/版本冲突 409 |
 
-患者摘要（patient 0.3.0）：`GET /v1/patients`（支持 `hisPatientNo` 精确过滤）与
-`GET /v1/patients/{patientId}`，同样需要 `m1:application:read` 并受数据范围约束。
+患者摘要（patient 0.3.0）：`POST /v1/patients/search`（检索条件在 JSON 请求体，避免 PHI 进入
+URL/访问日志）与 `GET /v1/patients/{patientId}`，需要 `m1:patient:read`（Q-3 最小权限：
+SYS_ADMIN/SYS_SURGEON/SYS_OR_MANAGER）并受数据范围约束；旧 `GET /v1/patients` 标记 deprecated，
+生产禁用、仅兼容。
 
 错误语义：400 字段/枚举/时长校验；401 未认证；403 缺权限或数据范围为空（写 `ACCESS_DENIED` 审计）；
 404 单对象不存在或越界（不泄露存在性）；409 重复申请/非法状态流转/乐观锁；422 患者不在快照（创建/导入无路径参数）。
@@ -75,7 +77,8 @@ apps/api/modules/m1/
 - 端口：`com.anesop.m1.api.his.HisSurgeryApplicationPort#pull(count, seed)`，返回
   `HisSurgeryApplicationBatch(simulated, adapter, applications)`；
 - 当前实现：`MockHisApplicationAdapter`，只生成 SYNTHETIC 数据，固定 `simulated=true`、
-  `adapter=MOCK_HIS`，条数钳制 3–5，相同 `seed` 生成相同申请号（保证重复导入幂等）；
+  `adapter=MOCK_HIS`，条数严格 1–5（请求多少返回多少，越界 400），相同 `seed` 生成相同申请号
+  （保证重复导入幂等）；
 - 配置：`anesop.m1.his.mock.base-seed`（默认 20260101）、`department-name`、`department-id`、`site-id`
   （测试 profile 指向 V100 演示组织；生产未配置时申请不带科室标识，DEPT 用户不可见）；
 - EXT-01（真实 HIS HL7 v2/REST 对接）未就绪：真实适配器接入时只替换端口实现，服务层与契约不变；
@@ -85,9 +88,14 @@ apps/api/modules/m1/
 
 - `m1_sched.patient_snapshot`：`his_patient_no` 唯一；只存姓名、性别、出生日期/年龄、
   `inpatient_no_masked`、`inpatient_no_hash`、科室/病区/床号；**不存身份证、手机号、住院号明文**；
-- `inpatient_no_hash`：HMAC-SHA-256（pepper 来自 `anesop.m1.patient-hash-pepper` /
-  `ANESOP_M1_PATIENT_HASH_PEPPER`），仅用于匹配/去重，唯一索引、不可逆、不出接口；
-  未注入 pepper 时退化为 SHA-256 并 WARN，仅允许 SYNTHETIC 演示/测试，生产必须注入；
+- `inpatient_no_hash`：HMAC-SHA-256（pepper 来自 `anesop.m1.inpatient-pepper.value` /
+  `ANESOP_INPATIENT_PEPPER`，Base64 且解码后 ≥32 字节），仅用于匹配/去重，唯一索引、不可逆、
+  不出接口；缺失/非法 Base64/长度不足默认拒绝启动（fail-closed），只有 dev/test 显式
+  `anesop.m1.inpatient-pepper.allow-dev-generated=true` 才生成进程内随机 pepper 并 WARN；
+- HIS 导入患者 upsert 使用单条 `INSERT ... ON CONFLICT (his_patient_no) DO UPDATE ... RETURNING id`，
+  并发导入不在已中止事务内回查；`birthDate` 缺失拒绝导入/创建（400），年龄不用 now() 伪造；
+- 状态历史 `reason_code varchar(64)` 与 `reason varchar(500)` 分列；表级触发器拒绝
+  UPDATE/DELETE/TRUNCATE（append-only，SQLSTATE 55000）；
 - 展示：住院号统一 `前 4 + **** + 后 4`（如 `SYNT****0001`）；日志与审计 detail 不含姓名、
   诊断原文、住院号（明文或脱敏值）、证件号、手机号；
 - 数据范围：`ALL` 不过滤；`DEPT` 按申请/患者 `dept_id`（逻辑外键 → `m0_platform.sys_org.id`）；
@@ -96,8 +104,9 @@ apps/api/modules/m1/
 
 ## 7. 权限与审计
 
-- V7 新增 `m1:application:read`（SYS_ADMIN、SYS_OR_MANAGER、SYS_SURGEON）与
-  `m1:application:write`（SYS_ADMIN、SYS_OR_MANAGER）；V2 的 `m1:access` 菜单占位保留；
+- V7 新增 `m1:application:read`（SYS_ADMIN、SYS_OR_MANAGER、SYS_SURGEON）、
+  `m1:application:write`（SYS_ADMIN、SYS_OR_MANAGER）与 `m1:patient:read`
+  （SYS_ADMIN、SYS_SURGEON、SYS_OR_MANAGER，患者摘要最小权限）；V2 的 `m1:access` 菜单占位保留；
 - 审计动作：`SURGERY_APPLICATION_CREATE`、`SURGERY_APPLICATION_IMPORT`、
   `SURGERY_APPLICATION_CANCEL`；resource_type 固定 `SURGERY_APPLICATION`，resource_id 为申请 UUID；
 - 403 由 `ApiExceptionHandler` 写 `ACCESS_DENIED` 审计；审计 detail 只含状态、来源、原因码等非 PHI 字段。
@@ -109,6 +118,9 @@ apps/api/modules/m1/
 - 后端集成（`api-bootstrap`，嵌入式 PG16）：模拟导入幂等（重复导入 0 新增）、脱敏与无明文、
   创建/列表/筛选/详情、409/404/400/422、取消状态历史 + 审计、403、DEPT 数据范围、患者摘要接口；
 - 前端 Vitest：列表渲染/筛选/错误/权限按钮隐藏、详情与 404；
+- M1 Playwright E2E（`apps/web/e2e/m1-applications.spec.ts`，API 拦截 + SYNTHETIC）：列表加载、
+  状态筛选、详情/状态历史、只读用户导入/取消按钮隐藏；
+- 迁移/安全：V7 结构断言、状态历史 append-only 负向用例、并发导入仅建一行、缺 pepper 启动失败；
 - 契约：`bash scripts/gen-contracts.sh` + `bash scripts/contract-check.sh`（spectral/oasdiff/漂移全绿）。
 
 ## 9. 已知限制与后续

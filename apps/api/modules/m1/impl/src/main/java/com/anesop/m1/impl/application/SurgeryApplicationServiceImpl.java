@@ -291,11 +291,15 @@ public class SurgeryApplicationServiceImpl implements SurgeryApplicationService 
         ImportSurgeryApplicationsResult result = new ImportSurgeryApplicationsResult();
         result.setSimulated(batch.simulated());
         result.setAdapter(ImportSurgeryApplicationsResult.AdapterEnum.fromValue(batch.adapter()));
-        result.setRequestedCount(batch.applications().size());
+        result.setRequestedCount(requested);
         result.setImportedCount(imported.size());
         result.setSkippedCount(skipped);
         result.setApplications(imported);
-        result.setMessage("本次为模拟 HIS 导入（SYNTHETIC 合成数据），重复导入按 HIS 申请号幂等跳过");
+        String message = "本次为模拟 HIS 导入（SYNTHETIC 合成数据），重复导入按 HIS 申请号幂等跳过";
+        if (batch.applications().size() < requested) {
+            message += "；HIS 本次仅提供 " + batch.applications().size() + " 条可用申请，已按可用数量返回";
+        }
+        result.setMessage(message);
         return result;
     }
 
@@ -549,6 +553,8 @@ public class SurgeryApplicationServiceImpl implements SurgeryApplicationService 
             return dto;
         }
         dto.setPatientId(patient.getId().toString());
+        // 0.3.0 兼容：patientNo 回填 hisPatientNo，标 deprecated，1.0.0 删除。
+        dto.setPatientNo(patient.getHisPatientNo());
         dto.setHisPatientNo(patient.getHisPatientNo());
         dto.setName(patient.getName());
         dto.setGender(PatientSnapshot.GenderEnum.fromValue(patient.getGender()));

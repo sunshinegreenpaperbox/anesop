@@ -17,7 +17,7 @@ db/
 │   ├── V4__m2_anes_acquisition_init.sql    # M2 采集骨架（S0-09）
 │   ├── V5__m0_data_scope.sql               # 数据范围绑定表 sys_org/sys_user_org/sys_user_room + m0:org:*（M2-M0-01）
 │   ├── V6__m0_user_phone_crypto.sql        # sys_user.phone_key_id/phone_updated_at + 一致性约束 + m0:user:*（M2-M0-02）
-│   ├── V7__m1_schedule_application.sql     # m1_sched 患者快照/手术申请/状态历史 + m1:application:*（M2-M1-01）
+│   ├── V7__m1_schedule_application.sql     # m1_sched 患者快照/手术申请/状态历史（含 append-only 触发器）+ m1:application:* / m1:patient:read（M2-M1-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -98,7 +98,8 @@ V6 属 expand 段：只新增可空列 `phone_key_id`/`phone_updated_at`、四�
 
 ### 4.2 V7（M1 手术申请）回滚说明
 
-V7 属 expand 段：只新增 `m1_sched` schema 与三张表（患者快照/手术申请/状态历史）及两个权限点，
+V7 属 expand 段：只新增 `m1_sched` schema 与三张表（患者快照/手术申请/状态历史）、
+状态历史 append-only 触发器及三个权限点（m1:application:read/write、m1:patient:read），
 不修改 V1–V6 任何表或列。回滚不影响 M0 认证、权限、审计与其他模块。
 
 - **应用回滚**：下线 `/v1/scheduling/applications*` 与 `/v1/patients*`（M1 路由/前端入口），

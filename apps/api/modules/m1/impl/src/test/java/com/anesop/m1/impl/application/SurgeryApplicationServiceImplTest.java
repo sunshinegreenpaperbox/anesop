@@ -316,6 +316,26 @@ class SurgeryApplicationServiceImplTest {
     }
 
     @Test
+    void cancelRejectsOverlongReasonAndReasonCode() {
+        PatientSnapshotEntity patient = patient(DEPT_ANES);
+        SurgeryApplicationEntity application = application(patient.getId(), "SUBMITTED", 1L);
+        when(applicationMapper.selectById(application.getId())).thenReturn(application);
+
+        CancelSurgeryApplicationRequest overlongReason = cancelRequest(1);
+        overlongReason.setReason("演".repeat(501));
+        assertThatThrownBy(() -> service.cancel(application.getId().toString(), overlongReason, CALLER, CONTEXT))
+                .isInstanceOf(SurgeryApplicationValidationException.class)
+                .hasMessageContaining("长度");
+
+        CancelSurgeryApplicationRequest overlongCode = cancelRequest(1);
+        overlongCode.setReasonCode("CODE".repeat(17));
+        assertThatThrownBy(() -> service.cancel(application.getId().toString(), overlongCode, CALLER, CONTEXT))
+                .isInstanceOf(SurgeryApplicationValidationException.class)
+                .hasMessageContaining("长度");
+        verify(applicationMapper, never()).updateById(any(SurgeryApplicationEntity.class));
+    }
+
+    @Test
     void importIsIdempotentAndMarksSimulated() {
         HisSurgeryApplicationRecord first = hisRecord("SYNTH-HIS-APP-0001", "SYNTH-P-0001");
         HisSurgeryApplicationRecord second = hisRecord("SYNTH-HIS-APP-0002", "SYNTH-P-0002");
@@ -329,8 +349,9 @@ class SurgeryApplicationServiceImplTest {
 
         assertThat(result.getSimulated()).isTrue();
         assertThat(result.getAdapter()).isEqualTo(ImportSurgeryApplicationsResult.AdapterEnum.MOCK_HIS);
-        assertThat(result.getRequestedCount()).isEqualTo(2);
+        assertThat(result.getRequestedCount()).isEqualTo(3);
         assertThat(result.getImportedCount()).isEqualTo(1);
+        assertThat(result.getMessage()).contains("仅提供 2 条");
         assertThat(result.getSkippedCount()).isEqualTo(1);
         assertThat(result.getApplications()).hasSize(1);
         verify(auditWriter).record(eq("SURGERY_APPLICATION_IMPORT"), eq("SURGERY_APPLICATION"),
@@ -376,6 +397,23 @@ class SurgeryApplicationServiceImplTest {
         assertThatThrownBy(() -> service.list(
                 new SurgeryApplicationQuery(1, 20, null, null, null), CALLER))
                 .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void importReportsRequestedAndAvailableCountWhenAdapterReturnsFewer() {
+        HisSurgeryApplicationRecord first = hisRecord("SYNTH-HIS-APP-0021", "SYNTH-P-0021");
+        HisSurgeryApplicationRecord second = hisRecord("SYNTH-HIS-APP-0022", "SYNTH-P-0022");
+        when(hisPort.pull(5, null))
+                .thenReturn(new HisSurgeryApplicationBatch(true, "MOCK_HIS", List.of(first, second)));
+        when(applicationMapper.insertIfAbsent(any())).thenReturn(1);
+
+        ImportSurgeryApplicationsRequest request = new ImportSurgeryApplicationsRequest();
+        request.setCount(5);
+        ImportSurgeryApplicationsResult result = service.importFromHis(request, CALLER, CONTEXT);
+
+        assertThat(result.getRequestedCount()).isEqualTo(5);
+        assertThat(result.getImportedCount()).isEqualTo(2);
+        assertThat(result.getMessage()).contains("仅提供 2 条");
     }
 
     @Test

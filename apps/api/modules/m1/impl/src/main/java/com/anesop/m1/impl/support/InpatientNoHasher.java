@@ -20,16 +20,19 @@ import org.springframework.stereotype.Component;
  * 住院号明文不落库、不出接口；哈希不可逆。
  *
  * <p>pepper 来自 {@code anesop.m1.inpatient-pepper.value}（{@code ANESOP_INPATIENT_PEPPER}），
- * 必须 Base64 编码且解码后至少 32 字节。缺失、非 Base64、长度不足或低熵时：
+ * 必须 Base64 编码且解码后至少 32 字节。缺失、非 Base64 或长度不足时：
  * <ul>
  *   <li>{@code anesop.m1.inpatient-pepper.allow-dev-generated=false}（默认/生产）：拒绝启动（fail-closed）；</li>
  *   <li>仅 dev/test 显式置 true 时生成进程内随机 pepper 并 WARN：重启后旧哈希无法再做一致性匹配，
  *       只允许用于 SYNTHETIC 演示/自动化测试。</li>
  * </ul>
  * 生成方式：{@code openssl rand -base64 48}。
+ *
+ * <p>类声明为 {@code final}：构造器可能抛异常（pepper 校验），禁止子类化以消除
+ * finalizer 攻击面（SpotBugs CT_CONSTRUCTOR_THROW），不改变运行时语义。
  */
 @Component
-public class InpatientNoHasher {
+public final class InpatientNoHasher {
 
     private static final Logger LOG = LoggerFactory.getLogger(InpatientNoHasher.class);
     private static final String HMAC_ALGORITHM = "HmacSHA256";

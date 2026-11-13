@@ -41,6 +41,9 @@ class DefaultProfileSecureTest {
         registry.add("anesop.security.field-key", () -> "CD1yp9wWS4C16iRZjsP4Mmec0QtAdarfGU6DuO0nXJE=");
         registry.add("anesop.security.phone-pepper",
                 () -> "DlGU1x9ipegwc7b5QYTHD1KV2CBjpukxdLf6QoXIEFOW2SFkp+oydbj7Q4bJEVSX");
+        // M1（B-2）：住院号 pepper 生产同样 fail-closed，此处注入合成值。
+        registry.add("anesop.m1.inpatient-pepper.value",
+                () -> "c3ludGhldGljLXBlcHBlci0wMTIzNDU2Nzg5LWFuZXNvcC1tMS10ZXN0");
     }
 
     @AfterAll

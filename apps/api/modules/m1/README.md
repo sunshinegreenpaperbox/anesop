@@ -29,8 +29,9 @@ source scripts/env.sh
 java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.active=dev
 ```
 
-当前为骨架，启动后没有 M1 端点；接口以契约评审结果为准。运行需 PostgreSQL 16
-（Docker 不可用，EXT-08；见 `docs/guides/troubleshooting.md`）。
+已实现 M2-M1-01 手术申请接收与校验：HIS 模拟导入、手工创建、列表/详情/取消、患者摘要查询。
+运行需 PostgreSQL 16（Docker 不可用，EXT-08；见 `docs/guides/troubleshooting.md`），并注入
+`ANESOP_INPATIENT_PEPPER`（dev/test 可显式允许进程内生成）。
 
 ## 如何测试
 
@@ -45,8 +46,9 @@ java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.ac
 
 ## 关键契约
 
-- 本域契约：`packages/contracts/openapi/scheduling.yaml`（M1 排程）；接收手术申请涉及
-  `packages/contracts/openapi/patient.yaml` 的申请端点。当前均为基线骨架，服务端未实现。
+- 本域契约：`packages/contracts/openapi/scheduling.yaml` 0.3.0（`/v1/scheduling/applications*`）
+  与 `packages/contracts/openapi/patient.yaml` 0.3.0（患者摘要、POST `/v1/patients/search`）。
+- 权限点：`m1:application:read|write`、`m1:patient:read`（V7，最小权限）。
 - 跨模块只依赖 `m1-api` 的接口、DTO、领域事件；禁止依赖其他模块 `impl` 或直连其表。
 - 契约变更顺序与门禁见 [`docs/api/README.md`](../../../../docs/api/README.md)、
   [`docs/guides/dev-workflow.md`](../../../../docs/guides/dev-workflow.md)。
@@ -55,8 +57,10 @@ java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.ac
 
 - Owner：`@anesop/m1-scheduling`（CODEOWNERS 占位团队；远端组织未建，审批暂不生效）
 - 备份：`@anesop/maintainers`
-- 状态：S0 空模块，首个业务任务随 M1 里程碑启动。
+- 状态：M2-M1-01 已实现（2026-11-13），后续由 M2-M2-01 排程冲突继续扩展。
 
 ## 状态
 
-S0-02 空模块占位（仅 `package-info.java`），不含业务代码、表结构与迁移脚本。
+已落地：`m1_sched.patient_snapshot` / `surgery_application` / `application_status_history`
+（V7）、HIS 模拟适配器、患者摘要与申请列表/详情/取消、`m1:application:*` 与 `m1:patient:read`
+权限、单测/集成/E2E。待办：真实 HIS 适配器（EXT-01）、排程冲突与工作台（M2-M2-01）。
