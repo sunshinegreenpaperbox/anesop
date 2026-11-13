@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ScheduleBoardView from '../views/ScheduleBoardView.vue'
 import { formatLocalDate } from '../utils/date'
@@ -89,6 +89,7 @@ describe('ScheduleBoardView 排程工作台', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     resetAppState()
   })
 
@@ -280,5 +281,250 @@ describe('ScheduleBoardView 排程工作台', () => {
     expect(wrapper.find('[data-testid="adjust-button"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="cancel-button"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('SYNTH-HIS-P-0001')
+  })
+
+  it('停台对话框提交原因码与版本并刷新列表', async () => {
+    const stopped = { ...schedule, status: 'CANCELLED' as const, version: 2 }
+    const queue = createFetchQueue([
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+      jsonResponse(stopped),
+      jsonResponse(roomList),
+      jsonResponse({
+        items: [stopped],
+        meta: { page: 1, size: 50, total: 1, totalPages: 1 },
+      }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await wrapper.find('[data-testid="cancel-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="stop-reason-select"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="stop-reason-input"]').setValue('演示停台说明（合成数据）')
+    await wrapper.find('[data-testid="stop-submit"]').trigger('click')
+    await flushPromises()
+
+    const stopCall = queue.calls[2]
+    expect(stopCall?.url).toBe(`/api/v1/scheduling/schedules/${schedule.scheduleId}/stop`)
+    expect(stopCall?.init?.method).toBe('POST')
+    const body = JSON.parse(String(stopCall?.init?.body)) as Record<string, unknown>
+    expect(body.reasonCode).toBe('PATIENT_CONDITION')
+    expect(body.reason).toBe('演示停台说明（合成数据）')
+    expect(body.version).toBe(1)
+    expect(wrapper.text()).toContain('已取消')
+  })
+
+  it('术中停台无审批权限时提交返回 403 并保留台次', async () => {
+    resetAppState()
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:schedule:read', 'm1:schedule:write'] }))
+    await router.push('/m1/schedule')
+    const queue = createFetchQueue([
+      jsonResponse(roomList),
+      jsonResponse({ ...schedulePage, items: [{ ...schedule, status: 'IN_PROGRESS' }] }),
+      jsonResponse(
+        {
+          code: 'AUTH_FORBIDDEN',
+          message: '无权访问该资源或数据范围不足',
+          traceId: 't403',
+          details: [],
+        },
+        403,
+      ),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    // 无 approve 权限：术中停台按钮可见（服务端双保险拒绝），点击后真实触发 403。
+    expect(wrapper.find('[data-testid="adjust-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="cancel-button"]').exists()).toBe(false)
+    const stopButton = wrapper.find('[data-testid="stop-in-progress-button"]')
+    expect(stopButton.exists()).toBe(true)
+    await stopButton.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="stop-approval-alert"]').text()).toContain(
+      'm1:schedule:approve',
+    )
+    await wrapper.find('[data-testid="stop-submit"]').trigger('click')
+    await flushPromises()
+
+    const stopCall = queue.calls[2]
+    expect(stopCall?.url).toBe(`/api/v1/scheduling/schedules/${schedule.scheduleId}/stop`)
+    expect(wrapper.text()).toContain('AUTH_FORBIDDEN')
+    expect(wrapper.findAll('[data-testid="schedule-row"]')).toHaveLength(1)
+  })
+
+  it('改台未选择原因码时不提交（Q-1 必填）', async () => {
+    const queue = createFetchQueue([jsonResponse(roomList), jsonResponse(schedulePage)])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await wrapper.find('[data-testid="adjust-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="modify-reason-select"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="adjust-submit"]').trigger('click')
+    await flushPromises()
+
+    // 仅初始 rooms/schedules 两次请求，未提交 PUT。
+    expect(queue.calls).toHaveLength(2)
+  })
+
+  it('急诊加台无冲突时返回 201 并带审批记录', async () => {
+    resetAppState()
+    seedAuthenticatedUser(
+      syntheticUser({
+        permissions: ['m1:schedule:read', 'm1:schedule:write', 'm1:schedule:approve'],
+      }),
+    )
+    await router.push('/m1/schedule')
+    const queue = createFetchQueue([
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+      jsonResponse(
+        {
+          accepted: true,
+          scheduleId: '80000000-0000-4000-8000-000000000009',
+          approvalRequired: true,
+          conflicts: [],
+          approval: {
+            changeId: '90000000-0000-4000-8000-000000000009',
+            changeType: 'EMERGENCY',
+            status: 'APPROVED',
+            requestedAt: '2026-12-02T12:55:00+08:00',
+            approvedAt: '2026-12-02T12:55:00+08:00',
+            preemptScheduleId: null,
+          },
+        },
+        201,
+      ),
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await wrapper.find('[data-testid="emergency-button"]').trigger('click')
+    await flushPromises()
+    await wrapper
+      .find('[data-testid="emergency-application-input"]')
+      .setValue('60000000-0000-4000-8000-000000000009')
+    await wrapper.find('[data-testid="emergency-submit"]').trigger('click')
+    await flushPromises()
+
+    const call = queue.calls[2]
+    expect(call?.url).toBe('/api/v1/scheduling/emergency-cases')
+    expect(call?.init?.method).toBe('POST')
+    const body = JSON.parse(String(call?.init?.body)) as Record<string, unknown>
+    expect(body.reasonCode).toBe('EMERGENCY_GREEN_CHANNEL')
+    expect(body.expectedStart).toBeTruthy()
+    expect(queue.calls).toHaveLength(5)
+  })
+
+  it('急诊冲突提示可抢占择期台次，抢占重试成功', async () => {
+    resetAppState()
+    seedAuthenticatedUser(
+      syntheticUser({
+        permissions: ['m1:schedule:read', 'm1:schedule:write', 'm1:schedule:approve'],
+      }),
+    )
+    await router.push('/m1/schedule')
+    const conflictBody = {
+      code: 'SCHEDULE_CONFLICT',
+      message: '排程冲突，操作未生效',
+      traceId: 'trace-emergency-conflict',
+      details: [{ field: 'ROOM_OVERLAP', reason: '与术间 OR-01 第 1 台时段重叠' }],
+      conflicts: [conflict],
+    }
+    const queue = createFetchQueue([
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+      jsonResponse(conflictBody, 409),
+      jsonResponse(
+        {
+          accepted: true,
+          scheduleId: '80000000-0000-4000-8000-000000000010',
+          approvalRequired: true,
+          conflicts: [],
+          approval: {
+            changeId: '90000000-0000-4000-8000-000000000010',
+            changeType: 'EMERGENCY',
+            status: 'APPROVED',
+            requestedAt: '2026-12-02T12:55:00+08:00',
+            approvedAt: '2026-12-02T12:55:00+08:00',
+            preemptScheduleId: schedule.scheduleId,
+          },
+        },
+        201,
+      ),
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await wrapper.find('[data-testid="emergency-button"]').trigger('click')
+    await flushPromises()
+    await wrapper
+      .find('[data-testid="emergency-application-input"]')
+      .setValue('60000000-0000-4000-8000-000000000010')
+    await wrapper.find('[data-testid="emergency-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="conflict-alert"]').exists()).toBe(true)
+    const preemptButton = wrapper.find('[data-testid="emergency-preempt-button"]')
+    expect(preemptButton.exists()).toBe(true)
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    await preemptButton.trigger('click')
+    await flushPromises()
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(String(confirmSpy.mock.calls[0]?.[0])).toContain(schedule.scheduleId)
+
+    const retryBody = JSON.parse(String(queue.calls[3]?.init?.body)) as Record<string, unknown>
+    expect(retryBody.preemptScheduleId).toBe(schedule.scheduleId)
+    expect(queue.calls).toHaveLength(6)
+  })
+
+  it('变更历史抽屉展示停台/急诊审批与抢占关系', async () => {
+    const queue = createFetchQueue([
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+      jsonResponse({
+        items: [
+          {
+            changeId: '90000000-0000-4000-8000-000000000001',
+            scheduleId: schedule.scheduleId,
+            applicationId: schedule.applicationId,
+            changeType: 'STOP',
+            reasonCode: 'EMERGENCY_PREEMPT',
+            reason: '急诊抢占停止',
+            status: 'APPROVED',
+            preemptScheduleId: '80000000-0000-4000-8000-000000000099',
+            requestedBy: '1000000000000000001',
+            requestedAt: '2026-12-02T09:10:00+08:00',
+            approvedBy: '1000000000000000001',
+            approvedAt: '2026-12-02T09:10:00+08:00',
+            version: 1,
+          },
+        ],
+      }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await wrapper.find('[data-testid="history-button"]').trigger('click')
+    await flushPromises()
+
+    expect(queue.calls[2]?.url).toBe(`/api/v1/scheduling/schedules/${schedule.scheduleId}/changes`)
+    expect(wrapper.findAll('[data-testid="history-item"]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('停台')
+    expect(wrapper.text()).toContain('已批准')
+    expect(wrapper.text()).toContain('EMERGENCY_PREEMPT')
+    expect(wrapper.text()).toContain('80000000-0000-4000-8000-000000000099')
   })
 })

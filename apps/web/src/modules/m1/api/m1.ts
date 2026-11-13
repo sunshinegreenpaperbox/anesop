@@ -16,7 +16,7 @@ export type CancelSurgeryApplicationRequest =
 export type ApplicationStatus = SurgeryApplication['status']
 export type ApplicationUrgency = SurgeryApplication['urgency']
 
-/** 排程工作台（scheduling.yaml 0.4.0）：术间、台次、冲突。 */
+/** 排程工作台（scheduling.yaml 0.5.0）：术间、台次、冲突、停改台、急诊与变更历史。 */
 export type OperatingRoom = schedulingComponents['schemas']['OperatingRoom']
 export type OperatingRoomList = schedulingComponents['schemas']['OperatingRoomList']
 export type OperatingRoomType = NonNullable<OperatingRoom['roomType']>
@@ -25,6 +25,12 @@ export type SchedulePage = schedulingComponents['schemas']['SchedulePage']
 export type CreateScheduleRequest = schedulingComponents['schemas']['CreateScheduleRequest']
 export type UpdateScheduleRequest = schedulingComponents['schemas']['UpdateScheduleRequest']
 export type CancelScheduleRequest = schedulingComponents['schemas']['CancelScheduleRequest']
+export type StopScheduleRequest = schedulingComponents['schemas']['StopScheduleRequest']
+export type ScheduleChange = schedulingComponents['schemas']['ScheduleChange']
+export type ScheduleChangeList = schedulingComponents['schemas']['ScheduleChangeList']
+export type EmergencyAddRequest = schedulingComponents['schemas']['EmergencyAddRequest']
+export type EmergencyAddResult = schedulingComponents['schemas']['EmergencyAddResult']
+export type EmergencyApproval = schedulingComponents['schemas']['EmergencyApproval']
 export type ConflictCheckRequest = schedulingComponents['schemas']['ConflictCheckRequest']
 export type ConflictCheckResult = schedulingComponents['schemas']['ConflictCheckResult']
 export type ScheduleConflict = ConflictCheckResult['conflicts'][number]
@@ -113,12 +119,27 @@ export function updateSchedule(
   return http.put<Schedule>(`/v1/scheduling/schedules/${scheduleId}`, payload)
 }
 
-/** 取消/停台（写原因与审计）。 */
+/** 取消/停台（0.4.0 兼容端点；新流程用 stopSchedule 以写变更记录与通知）。 */
 export function cancelSchedule(
   scheduleId: string,
   payload: CancelScheduleRequest,
 ): Promise<{ id: string }> {
   return http.post<{ id: string }>(`/v1/scheduling/schedules/${scheduleId}/cancel`, payload)
+}
+
+/** 停台（状态机 + 原因码白名单 + 变更留痕 + 通知）。 */
+export function stopSchedule(scheduleId: string, payload: StopScheduleRequest): Promise<Schedule> {
+  return http.post<Schedule>(`/v1/scheduling/schedules/${scheduleId}/stop`, payload)
+}
+
+/** 急诊加台（需 m1:schedule:approve；可抢占冲突中的择期台次）。 */
+export function addEmergencyCase(payload: EmergencyAddRequest): Promise<EmergencyAddResult> {
+  return http.post<EmergencyAddResult>('/v1/scheduling/emergency-cases', payload)
+}
+
+/** 台次变更历史（停台/改台/急诊审批）。 */
+export function listScheduleChanges(scheduleId: string): Promise<ScheduleChangeList> {
+  return http.get<ScheduleChangeList>(`/v1/scheduling/schedules/${scheduleId}/changes`)
 }
 
 /** 冲突即时预检（只读，不落库），供工作台提交前提示。 */

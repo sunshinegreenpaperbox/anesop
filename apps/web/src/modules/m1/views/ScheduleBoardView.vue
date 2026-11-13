@@ -2,15 +2,19 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  cancelSchedule,
+  addEmergencyCase,
   checkScheduleConflicts,
   createSchedule,
   listRooms,
+  listScheduleChanges,
   listSchedules,
+  stopSchedule,
   updateSchedule,
+  type EmergencyAddRequest,
   type OperatingRoom,
   type OperatingRoomType,
   type Schedule,
+  type ScheduleChange,
   type ScheduleConflict,
   type UpdateScheduleRequest,
 } from '../api/m1'
@@ -31,6 +35,26 @@ const createVisible = ref(false)
 const adjustVisible = ref(false)
 const adjusting = ref<Schedule | null>(null)
 
+const stopVisible = ref(false)
+const stopping = ref<Schedule | null>(null)
+const stopForm = ref({ reasonCode: 'PATIENT_CONDITION', reason: '' })
+
+const emergencyVisible = ref(false)
+const emergencyForm = ref({
+  applicationId: '',
+  roomId: '',
+  plannedStart: '',
+  plannedEnd: '',
+  reasonCode: 'EMERGENCY_GREEN_CHANNEL',
+  preemptScheduleId: '',
+  sequenceNo: 1,
+})
+
+const historyVisible = ref(false)
+const historyLoading = ref(false)
+const historyItems = ref<ScheduleChange[]>([])
+const historySchedule = ref<Schedule | null>(null)
+
 interface ScheduleForm {
   applicationId: string
   roomId: string
@@ -38,6 +62,7 @@ interface ScheduleForm {
   plannedEnd: string
   sequenceNo: number
   reason: string
+  reasonCode: string
 }
 
 const form = ref<ScheduleForm>({
@@ -47,9 +72,38 @@ const form = ref<ScheduleForm>({
   plannedEnd: '',
   sequenceNo: 1,
   reason: '',
+  reasonCode: '',
 })
 
 const canWrite = computed(() => auth.hasPermission('m1:schedule:write'))
+const canApprove = computed(() => auth.hasPermission('m1:schedule:approve'))
+
+/** 停台原因码白名单（与契约 0.5.0/服务端一致）。 */
+const stopReasonOptions = [
+  { value: 'PATIENT_CONDITION', label: '患者情况变化' },
+  { value: 'SURGEON_UNAVAILABLE', label: '术者不可用' },
+  { value: 'ROOM_EQUIPMENT_FAILURE', label: '术间/设备故障' },
+  { value: 'ANESTHESIA_RISK', label: '麻醉风险' },
+  { value: 'SCHEDULE_CHANGE', label: '排程调整' },
+  { value: 'OTHER', label: '其他（需说明）' },
+]
+
+/** 改台原因码白名单。 */
+const modifyReasonOptions = [
+  { value: 'SCHEDULE_ADJUST', label: '排程调整' },
+  { value: 'PATIENT_CONDITION', label: '患者情况变化' },
+  { value: 'SURGEON_UNAVAILABLE', label: '术者不可用' },
+  { value: 'ROOM_EQUIPMENT_FAILURE', label: '术间/设备故障' },
+  { value: 'ANESTHESIA_RISK', label: '麻醉风险' },
+  { value: 'OTHER', label: '其他（需说明）' },
+]
+
+/** 急诊加台原因码白名单。 */
+const emergencyReasonOptions = [
+  { value: 'EMERGENCY_GREEN_CHANNEL', label: '急诊绿色通道' },
+  { value: 'EMERGENCY_PREEMPT', label: '急诊抢占择期台次' },
+  { value: 'OTHER', label: '其他（需说明）' },
+]
 
 const roomTypeLabels: Record<OperatingRoomType, string> = {
   GENERAL: '普通',
@@ -66,12 +120,37 @@ const statusLabels: Record<Schedule['status'], string> = {
   DELAYED: '延迟',
 }
 
+const changeTypeLabels: Record<string, string> = {
+  STOP: '停台',
+  MODIFY: '改台',
+  EMERGENCY: '急诊加台',
+}
+
+const approvalLabels: Record<string, string> = {
+  PENDING: '待审批',
+  APPROVED: '已批准',
+  REJECTED: '已驳回',
+}
+
 function roomTypeLabel(type: OperatingRoomType | undefined): string {
   return type ? (roomTypeLabels[type] ?? type) : '—'
 }
 
 function statusLabel(status: Schedule['status']): string {
   return statusLabels[status] ?? status
+}
+
+function changeTypeLabel(type: string): string {
+  return changeTypeLabels[type] ?? type
+}
+
+function approvalLabel(status: string): string {
+  return approvalLabels[status] ?? status
+}
+
+function reasonCodeLabel(code: string): string {
+  const options = [...stopReasonOptions, ...modifyReasonOptions, ...emergencyReasonOptions]
+  return options.find((option) => option.value === code)?.label ?? code
 }
 
 /** 冲突类型文案（x-extensible-enum：未知值回退显示原始编码）。 */
@@ -108,6 +187,19 @@ function formatTime(value: string | null | undefined): string {
   }).format(parsed)
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed)
+}
+
 const columns = computed(() =>
   rooms.value.map((room) => ({
     room,
@@ -135,9 +227,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 兼容旧服务端只返回 details 的情形。
  */
 function conflictsFromError(apiError: ApiError): ScheduleConflict[] {
-  const conflicts = isRecord(apiError.rawBody) ? apiError.rawBody.conflicts : undefined
-  if (Array.isArray(conflicts)) {
-    return conflicts.filter(isRecord).map((item) => ({
+  const rawConflicts = isRecord(apiError.rawBody) ? apiError.rawBody.conflicts : undefined
+  if (Array.isArray(rawConflicts)) {
+    return rawConflicts.filter(isRecord).map((item) => ({
       conflictType: typeof item.conflictType === 'string' ? item.conflictType : 'UNKNOWN',
       severity: item.severity === 'WARNING' ? 'WARNING' : 'BLOCKING',
       message: typeof item.message === 'string' ? item.message : '排程冲突',
@@ -185,6 +277,7 @@ function openCreate(): void {
     plannedEnd: window.end,
     sequenceNo: 1,
     reason: '',
+    reasonCode: '',
   }
   conflicts.value = []
   error.value = null
@@ -200,10 +293,36 @@ function openAdjust(schedule: Schedule): void {
     plannedEnd: schedule.plannedEnd,
     sequenceNo: schedule.sequenceNo,
     reason: '',
+    // Q-1：改台原因码必填，不预填默认码，必须由操作人选择。
+    reasonCode: '',
   }
   conflicts.value = []
   error.value = null
   adjustVisible.value = true
+}
+
+function openStop(schedule: Schedule): void {
+  stopping.value = schedule
+  stopForm.value = { reasonCode: 'PATIENT_CONDITION', reason: '' }
+  conflicts.value = []
+  error.value = null
+  stopVisible.value = true
+}
+
+function openEmergency(): void {
+  const window = defaultWindow(date.value)
+  emergencyForm.value = {
+    applicationId: '',
+    roomId: rooms.value[0]?.roomId ?? '',
+    plannedStart: window.start,
+    plannedEnd: window.end,
+    reasonCode: 'EMERGENCY_GREEN_CHANNEL',
+    preemptScheduleId: '',
+    sequenceNo: 1,
+  }
+  conflicts.value = []
+  error.value = null
+  emergencyVisible.value = true
 }
 
 async function precheck(): Promise<boolean> {
@@ -257,6 +376,10 @@ async function submitCreate(): Promise<void> {
 async function submitAdjust(): Promise<void> {
   const current = adjusting.value
   if (!current) return
+  if (!form.value.reasonCode) {
+    ElMessage.warning('请选择改台原因码（停台改台必选原因码）')
+    return
+  }
   submitting.value = true
   conflicts.value = []
   error.value = null
@@ -268,9 +391,10 @@ async function submitAdjust(): Promise<void> {
       sequenceNo: form.value.sequenceNo,
       version: current.version,
       reason: form.value.reason || null,
+      reasonCode: form.value.reasonCode,
     }
     await updateSchedule(current.scheduleId, payload)
-    ElMessage.success('台次已调整')
+    ElMessage.success('台次已调整（已写入改台变更记录）')
     adjustVisible.value = false
     await load()
   } catch (caught) {
@@ -282,28 +406,107 @@ async function submitAdjust(): Promise<void> {
   }
 }
 
-async function handleCancel(schedule: Schedule): Promise<void> {
+async function submitStop(): Promise<void> {
+  const current = stopping.value
+  if (!current) return
+  submitting.value = true
+  conflicts.value = []
+  error.value = null
   try {
-    await ElMessageBox.confirm(
-      `确认取消 ${schedule.roomNo} 第 ${schedule.sequenceNo} 台？取消后保留审计记录。`,
-      '取消台次',
-      { type: 'warning', confirmButtonText: '确认取消', cancelButtonText: '返回' },
-    )
-  } catch {
-    return
-  }
-  try {
-    await cancelSchedule(schedule.scheduleId, {
-      reasonCode: 'SCHEDULE_CHANGE',
-      reason: '排程工作台取消（演示）',
-      version: schedule.version,
+    await stopSchedule(current.scheduleId, {
+      reasonCode: stopForm.value.reasonCode,
+      reason: stopForm.value.reason || null,
+      version: current.version,
     })
-    ElMessage.success('台次已取消')
+    ElMessage.success('台次已停台（已写入变更记录与通知）')
+    stopVisible.value = false
     await load()
   } catch (caught) {
     const apiError = toApiError(caught)
     error.value = apiError
     if (apiError.status === 409) conflicts.value = conflictsFromError(apiError)
+    if (apiError.status === 403) {
+      ElMessage.error('术中停台需审批权限（m1:schedule:approve）')
+    }
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function submitEmergency(preemptScheduleId?: string): Promise<void> {
+  submitting.value = true
+  conflicts.value = []
+  error.value = null
+  const payload: EmergencyAddRequest = {
+    applicationId: emergencyForm.value.applicationId,
+    roomId: emergencyForm.value.roomId,
+    reasonCode: emergencyForm.value.reasonCode,
+    reason: '急诊绿色通道加台',
+    expectedStart: emergencyForm.value.plannedStart,
+    expectedEnd: emergencyForm.value.plannedEnd,
+    sequenceNo: emergencyForm.value.sequenceNo,
+    preemptScheduleId: preemptScheduleId ?? (emergencyForm.value.preemptScheduleId || null),
+  }
+  try {
+    const result = await addEmergencyCase(payload)
+    ElMessage.success(
+      result.approval?.status === 'APPROVED' ? '急诊加台已批准并落台' : '急诊加台已受理',
+    )
+    emergencyVisible.value = false
+    await load()
+  } catch (caught) {
+    const apiError = toApiError(caught)
+    error.value = apiError
+    if (apiError.status === 409) {
+      conflicts.value = conflictsFromError(apiError)
+      ElMessage.warning('存在冲突：可抢占提示中的择期台次后重试')
+    }
+    if (apiError.status === 403) {
+      ElMessage.error('急诊加台需审批权限（m1:schedule:approve）')
+    }
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function preemptCandidate(conflict: ScheduleConflict): Promise<void> {
+  if (!conflict.conflictingScheduleId) return
+  const target = schedules.value.find((item) => item.scheduleId === conflict.conflictingScheduleId)
+  const targetText = target
+    ? `${target.roomNo} 第 ${target.sequenceNo} 台（${target.scheduleId}）`
+    : conflict.conflictingScheduleId
+  try {
+    await ElMessageBox.confirm(
+      `将把择期台次 ${targetText} 置为停台并留痕，然后加入急诊台次。确认抢占？`,
+      '确认抢占择期台次',
+      {
+        type: 'warning',
+        confirmButtonText: '确认抢占',
+        cancelButtonText: '取消',
+        distinguishCancelAndClose: true,
+      },
+    )
+  } catch {
+    // 取消/关闭：不提交。
+    return
+  }
+  emergencyForm.value.preemptScheduleId = conflict.conflictingScheduleId
+  await submitEmergency(conflict.conflictingScheduleId)
+}
+
+async function openHistory(schedule: Schedule): Promise<void> {
+  historySchedule.value = schedule
+  historyItems.value = []
+  historyVisible.value = true
+  historyLoading.value = true
+  error.value = null
+  try {
+    const result = await listScheduleChanges(schedule.scheduleId)
+    historyItems.value = result.items
+  } catch (caught) {
+    error.value = toApiError(caught)
+  } finally {
+    historyLoading.value = false
   }
 }
 
@@ -318,7 +521,7 @@ onMounted(() => {
       <div>
         <h1 class="board__title">排程工作台</h1>
         <p class="board__subtitle">
-          按日期与术间查看台次；创建/调整前执行冲突检测，冲突不会保存。列表受数据范围约束。
+          按日期与术间查看台次；创建/调整/停台/急诊加台均留痕。冲突不会保存，列表受数据范围约束。
         </p>
       </div>
       <div class="board__actions">
@@ -330,6 +533,15 @@ onMounted(() => {
           @change="load"
         />
         <el-button :loading="loading" @click="load">刷新</el-button>
+        <el-button
+          v-if="canApprove"
+          type="danger"
+          plain
+          data-testid="emergency-button"
+          @click="openEmergency"
+        >
+          急诊加台
+        </el-button>
         <el-button
           v-if="canWrite"
           type="primary"
@@ -411,32 +623,64 @@ onMounted(() => {
               <el-tag size="small" :type="statusType(schedule.status)" effect="plain">
                 {{ statusLabel(schedule.status) }}
               </el-tag>
+              <el-tag
+                v-if="schedule.priority === 'EMERGENCY'"
+                size="small"
+                type="danger"
+                effect="dark"
+              >
+                急诊
+              </el-tag>
             </div>
             <div class="board__item-meta">
               <span>第 {{ schedule.sequenceNo }} 台</span>
               <span>{{ schedule.patientName }}</span>
               <span class="board__mono">{{ schedule.patientNo }}</span>
             </div>
-            <div
-              v-if="canWrite && (schedule.status === 'PLANNED' || schedule.status === 'PUBLISHED')"
-              class="board__item-actions"
-            >
+            <div class="board__item-actions">
               <el-button
                 size="small"
                 text
-                data-testid="adjust-button"
-                @click="openAdjust(schedule)"
+                data-testid="history-button"
+                @click="openHistory(schedule)"
               >
-                调整
+                变更历史
               </el-button>
+              <template
+                v-if="
+                  canWrite &&
+                  (schedule.status === 'PLANNED' ||
+                    schedule.status === 'PUBLISHED' ||
+                    schedule.status === 'DELAYED')
+                "
+              >
+                <el-button
+                  size="small"
+                  text
+                  data-testid="adjust-button"
+                  @click="openAdjust(schedule)"
+                >
+                  调整
+                </el-button>
+                <el-button
+                  size="small"
+                  text
+                  type="danger"
+                  data-testid="cancel-button"
+                  @click="openStop(schedule)"
+                >
+                  停台
+                </el-button>
+              </template>
               <el-button
+                v-else-if="canWrite && schedule.status === 'IN_PROGRESS'"
                 size="small"
                 text
                 type="danger"
-                data-testid="cancel-button"
-                @click="handleCancel(schedule)"
+                data-testid="stop-in-progress-button"
+                @click="openStop(schedule)"
               >
-                取消
+                术中停台（{{ canApprove ? '审批' : '需审批权限' }}）
               </el-button>
             </div>
           </li>
@@ -496,7 +740,7 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="adjustVisible" title="调整台次" width="520px">
+    <el-dialog v-model="adjustVisible" title="调整台次（改台）" width="520px">
       <el-form label-width="96px">
         <el-form-item label="术间">
           <el-select v-model="form.roomId" data-testid="adjust-room-select">
@@ -525,6 +769,20 @@ onMounted(() => {
         <el-form-item label="台次序号">
           <el-input-number v-model="form.sequenceNo" :min="1" />
         </el-form-item>
+        <el-form-item label="改台原因码">
+          <el-select
+            v-model="form.reasonCode"
+            data-testid="modify-reason-select"
+            placeholder="必选：改台原因码"
+          >
+            <el-option
+              v-for="option in modifyReasonOptions"
+              :key="option.value"
+              :label="`${option.label}（${option.value}）`"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="调整原因">
           <el-input v-model="form.reason" maxlength="500" />
         </el-form-item>
@@ -540,6 +798,210 @@ onMounted(() => {
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="stopVisible" title="停台" width="520px">
+      <el-alert
+        v-if="stopping?.status === 'IN_PROGRESS'"
+        class="board__alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="术中停台需审批"
+        data-testid="stop-approval-alert"
+      >
+        该台次已开始，提交后将记录审批人（需 m1:schedule:approve）。
+        <template v-if="!canApprove">
+          <br />
+          当前账号缺少 m1:schedule:approve，提交将被服务端拒绝（403）。
+        </template>
+      </el-alert>
+      <el-form label-width="96px">
+        <el-form-item label="原因码">
+          <el-select v-model="stopForm.reasonCode" data-testid="stop-reason-select">
+            <el-option
+              v-for="option in stopReasonOptions"
+              :key="option.value"
+              :label="`${option.label}（${option.value}）`"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原因说明">
+          <el-input
+            v-model="stopForm.reason"
+            maxlength="500"
+            data-testid="stop-reason-input"
+            placeholder="可选（不含患者标识）"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button
+          :loading="submitting"
+          type="danger"
+          data-testid="stop-submit"
+          @click="submitStop"
+        >
+          确认停台
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="emergencyVisible" title="急诊加台（需审批）" width="560px">
+      <el-alert class="board__alert" type="info" :closable="false" show-icon title="急诊优先于择期">
+        提交后写入急诊审批记录；如与择期台次冲突，可按提示抢占该择期台次（原台次置停台并留痕）。
+      </el-alert>
+      <el-form label-width="110px">
+        <el-form-item label="申请标识">
+          <el-input
+            v-model="emergencyForm.applicationId"
+            data-testid="emergency-application-input"
+            placeholder="急诊手术申请 ID（UUID）"
+          />
+        </el-form-item>
+        <el-form-item label="目标术间">
+          <el-select v-model="emergencyForm.roomId" data-testid="emergency-room-select">
+            <el-option
+              v-for="room in rooms"
+              :key="room.roomId"
+              :label="`${room.roomNo} ${room.roomName}`"
+              :value="room.roomId"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="急诊开始">
+          <el-date-picker
+            v-model="emergencyForm.plannedStart"
+            type="datetime"
+            value-format="YYYY-MM-DDTHH:mm:ssZ"
+            data-testid="emergency-start-input"
+          />
+        </el-form-item>
+        <el-form-item label="急诊结束">
+          <el-date-picker
+            v-model="emergencyForm.plannedEnd"
+            type="datetime"
+            value-format="YYYY-MM-DDTHH:mm:ssZ"
+          />
+        </el-form-item>
+        <el-form-item label="台次序号">
+          <el-input-number v-model="emergencyForm.sequenceNo" :min="1" />
+        </el-form-item>
+        <el-form-item label="原因码">
+          <el-select v-model="emergencyForm.reasonCode" data-testid="emergency-reason-select">
+            <el-option
+              v-for="option in emergencyReasonOptions"
+              :key="option.value"
+              :label="`${option.label}（${option.value}）`"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="抢占台次">
+          <el-input
+            v-model="emergencyForm.preemptScheduleId"
+            data-testid="preempt-input"
+            placeholder="可选：冲突择期台次 ID"
+          />
+        </el-form-item>
+      </el-form>
+      <div
+        v-if="conflicts.length > 0"
+        class="board__emergency-conflicts"
+        data-testid="emergency-conflicts"
+      >
+        <p class="board__subtitle">
+          当前时段存在冲突：未指定抢占将返回 409；可抢占下列择期台次（原台次将停台并留痕）。
+        </p>
+        <ul class="board__conflicts">
+          <li
+            v-for="(conflict, index) in conflicts"
+            :key="`emergency-${conflict.conflictType}-${index}`"
+            class="board__conflict"
+          >
+            <el-tag type="danger" effect="plain">{{ conflict.conflictType }}</el-tag>
+            <span>{{ conflictTypeLabel(conflict.conflictType) }}</span>
+            <span>{{ conflict.message }}</span>
+            <span v-if="conflict.conflictingScheduleId" class="board__mono">
+              冲突台次：{{ conflict.conflictingScheduleId }}
+            </span>
+            <el-button
+              v-if="conflict.conflictingScheduleId"
+              size="small"
+              type="danger"
+              text
+              data-testid="emergency-preempt-button"
+              @click="preemptCandidate(conflict)"
+            >
+              抢占该择期台次（需审批）
+            </el-button>
+          </li>
+        </ul>
+      </div>
+      <template #footer>
+        <el-button
+          :loading="submitting"
+          type="danger"
+          data-testid="emergency-submit"
+          @click="submitEmergency()"
+        >
+          提交急诊加台
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-drawer
+      v-model="historyVisible"
+      title="台次变更历史（停台/改台/急诊审批）"
+      size="520px"
+      data-testid="history-drawer"
+    >
+      <p v-if="historySchedule" class="board__subtitle">
+        {{ historySchedule.roomNo }} 第 {{ historySchedule.sequenceNo }} 台 ·
+        {{ historySchedule.patientName }}
+      </p>
+      <div v-loading="historyLoading">
+        <p v-if="!historyLoading && historyItems.length === 0" class="board__empty">暂无变更记录</p>
+        <el-timeline v-else>
+          <el-timeline-item
+            v-for="change in historyItems"
+            :key="change.changeId"
+            :timestamp="formatDateTime(change.requestedAt)"
+            data-testid="history-item"
+          >
+            <div class="board__history-item">
+              <el-tag
+                :type="change.changeType === 'EMERGENCY' ? 'danger' : 'warning'"
+                size="small"
+                effect="plain"
+              >
+                {{ changeTypeLabel(change.changeType) }}
+              </el-tag>
+              <el-tag
+                :type="change.status === 'APPROVED' ? 'success' : 'info'"
+                size="small"
+                effect="plain"
+              >
+                {{ approvalLabel(change.status) }}
+              </el-tag>
+              <span class="board__mono">{{ change.reasonCode }}</span>
+              <span>{{ reasonCodeLabel(change.reasonCode) }}</span>
+            </div>
+            <p v-if="change.reason" class="board__history-reason">{{ change.reason }}</p>
+            <p class="board__history-meta">
+              申请/执行：{{ change.requestedBy ?? '—' }}
+              <template v-if="change.approvedBy"> · 审批：{{ change.approvedBy }}</template>
+              <template v-if="change.approvedAt">
+                · {{ formatDateTime(change.approvedAt) }}
+              </template>
+            </p>
+            <p v-if="change.preemptScheduleId" class="board__history-meta board__mono">
+              抢占关系：{{ change.preemptScheduleId }}
+            </p>
+          </el-timeline-item>
+        </el-timeline>
+      </div>
+    </el-drawer>
   </section>
 </template>
 
@@ -661,7 +1123,34 @@ onMounted(() => {
 
 .board__item-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   margin-top: 4px;
+}
+
+.board__emergency-conflicts {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+
+.board__history-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.board__history-reason {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.board__history-meta {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>
