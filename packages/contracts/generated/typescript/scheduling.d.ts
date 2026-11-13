@@ -16,6 +16,8 @@ export interface paths {
     /**
      * 查询术间列表
      * @description 返回术间静态配置与当前状态，供排程工作台与驾驶舱使用；术间编号院内唯一。
+     *     术间类型 `roomType` 用于排程规则匹配：GENERAL=普通手术间、HYBRID=杂交手术间、
+     *     INTERVENTION=介入手术间。结果受当前用户数据范围约束（DEPT 本科室 / ROOM 绑定术间）。
      */
     get: operations['listOperatingRooms']
     put?: never
@@ -51,6 +53,28 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/scheduling/schedules/conflicts': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 排程冲突即时检测（工作台预检）
+     * @description 对候选术间/时段/申请执行规则引擎检测，返回结构化冲突（类型、说明、冲突台次），
+     *     仅返回结果不落库；供排程工作台在提交前即时提示。创建/调整排程时服务端仍在事务内复核，
+     *     冲突返回 409（`Error.conflicts` 携带同一结构）。
+     */
+    post: operations['detectScheduleConflicts']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/v1/scheduling/schedules/{scheduleId}': {
     parameters: {
       query?: never
@@ -63,7 +87,13 @@ export interface paths {
      * @description 按排程标识返回台次详情，供麻醉记录单起单与术前准备联动。
      */
     get: operations['getSchedule']
-    put?: never
+    /**
+     * 调整排程（改时间/改术间）
+     * @description 调整既有台次的术间与计划时段。服务端先锁定目标术间行（`SELECT ... FOR UPDATE`），
+     *     再在事务内复检冲突；冲突返回 409，`Error.conflicts` 列出冲突类型与冲突台次。
+     *     必须回传 `version`，版本过期返回 409，不静默覆盖。
+     */
+    put: operations['rescheduleSchedule']
     post?: never
     delete?: never
     options?: never
@@ -81,8 +111,11 @@ export interface paths {
     get?: never
     put?: never
     /**
-     * 检测排程冲突
-     * @description 对候选术间与时段执行冲突检测，覆盖术间时段重叠、人员排班、设备依赖与隔离要求。
+     * 检测排程冲突（已弃用，改用 POST /v1/scheduling/schedules/conflicts）
+     * @deprecated
+     * @description 已弃用：由 `POST /v1/scheduling/schedules/conflicts`（operationId=detectScheduleConflicts）
+     *     取代，计划 1.0.0 删除。保留路径仅为兼容 0.3.0 调用方，语义与响应结构不变。
+     *     对候选术间与时段执行冲突检测，覆盖术间时段重叠、人员排班、设备依赖与隔离要求。
      *     仅返回检测结果，不落库；创建/调整排程时服务端仍会复核。
      */
     post: operations['checkScheduleConflict']
@@ -244,6 +277,8 @@ export interface components {
       traceId: string
       /** @description 字段级或范围级错误明细；无明细时为空数组。 */
       details: components['schemas']['ErrorDetail'][]
+      /** @description 排程冲突明细（仅 409 `SCHEDULE_CONFLICT` 返回；其他错误省略）。 */
+      conflicts?: components['schemas']['Conflict'][]
     }
     /** @description 分页元数据；页码从 1 开始，size 上限由服务端限制。 */
     PageMeta: {
@@ -291,6 +326,11 @@ export interface components {
       roomNo: string
       /** @description 术间名称。 */
       roomName: string
+      /**
+       * @description 术间类型；排程规则按申请要求的术间类型匹配。
+       * @enum {string}
+       */
+      roomType?: 'GENERAL' | 'HYBRID' | 'INTERVENTION'
       /** @description 院区标识。 */
       siteId: string
       /**
@@ -387,15 +427,38 @@ export interface components {
       /** @description 台次序号。 */
       sequenceNo: number
       /**
-       * @description 优先级。
+       * @description 优先级；持久化到 `schedule.priority` 并在响应回显（0=ELECTIVE/1=URGENT/2=EMERGENCY）。
        * @enum {string}
        */
       priority: 'ELECTIVE' | 'URGENT' | 'EMERGENCY'
+    }
+    /** @description 调整排程请求；服务端锁定术间并在事务内复检冲突。 */
+    UpdateScheduleRequest: {
+      /** @description 目标术间标识；为 null 时保持原术间不变。 */
+      roomId?: string | null
+      /**
+       * Format: date-time
+       * @description 调整后的计划开始时间。
+       */
+      plannedStart: string
+      /**
+       * Format: date-time
+       * @description 调整后的计划结束时间，必须晚于开始时间。
+       */
+      plannedEnd: string
+      /** @description 调整后的台次序号。 */
+      sequenceNo: number
+      /** @description 排程当前版本号，用于乐观锁；过期返回 409。 */
+      version: number
+      /** @description 调整原因（演示文本，≤500 字符），写入台次 changeReason 与审计。 */
+      reason?: string | null
     }
     /** @description 排程冲突检测请求；只读预检，不落库。 */
     ConflictCheckRequest: {
       /** @description 候选术间标识。 */
       roomId: string
+      /** @description 候选手术申请标识；传入后按申请的术者/患者/术间类型要求做冲突检测。 */
+      applicationId?: string | null
       /**
        * Format: date-time
        * @description 候选开始时间。
@@ -408,23 +471,29 @@ export interface components {
       plannedEnd: string
       /** @description 调整既有排程时排除自身，避免误报。 */
       excludeScheduleId?: string | null
-      /** @description 候选人员标识，用于排班与资质冲突校验。 */
+      /**
+       * @description 候选人员标识，用于排班与资质冲突校验。**延后实现**：M2-M2-02/M3 人员资质模块
+       *     （`x-deferred: true`）；当前服务端忽略该字段，不影响其他规则的判定。
+       */
       staffIds?: string[]
-      /** @description 候选设备标签。 */
+      /**
+       * @description 候选设备标签。**延后实现**：M2-M2-02/M3 设备与资质模块（`x-deferred: true`）；
+       *     当前服务端忽略该字段。
+       */
       equipmentTags?: string[]
     }
     /** @description 单条冲突明细。 */
     Conflict: {
       /**
-       * @description 冲突类型。
-       * @enum {string}
+       * @description 冲突类型。开放枚举（`x-extensible-enum`）：已登记值见列表，服务端可新增规则类型，
+       *     客户端必须容忍未知值并按字符串分支。当前规则：ROOM_OVERLAP=术间时段重叠、
+       *     STAFF_CONFLICT=术者冲突、PATIENT_CONFLICT=患者台次冲突、ROOM_TYPE_MISMATCH=术间类型不匹配、
+       *     APPLICATION_ALREADY_SCHEDULED=申请已有生效台次、VERSION_CONFLICT=乐观锁版本过期、
+       *     STATE_CONFLICT=台次状态不允许该操作；TIME_WINDOW_INVALID 保留给内部规则防御
+       *     （API 边界的时间窗非法统一 400，不再以 409 返回）。EQUIPMENT_CONFLICT/
+       *     ISOLATION_CONFLICT/QUALIFICATION_MISMATCH 为后续设备、隔离与资质规则预留。
        */
-      conflictType:
-        | 'ROOM_OVERLAP'
-        | 'STAFF_CONFLICT'
-        | 'EQUIPMENT_CONFLICT'
-        | 'ISOLATION_CONFLICT'
-        | 'QUALIFICATION_MISMATCH'
+      conflictType: string
       /**
        * @description 阻断或告警；BLOCKING 不得保存。
        * @enum {string}
@@ -471,7 +540,11 @@ export interface components {
     }
     /** @description 停台/取消排程请求；原因码必填并进入统计。 */
     CancelScheduleRequest: {
-      /** @description 停台原因码，来自字典；区分计划停台与非计划停台。 */
+      /**
+       * @description 停台原因码，来自字典；服务端按 `^[A-Z_]{2,32}$`（大写字母/下划线，2–32 位）校验，
+       *     非法格式返回 400 `PARAM_INVALID`（`details[].field=reasonCode`）。契约不加
+       *     `pattern` 以免对既有调用方构成破坏性收紧（ADR-0011）。区分计划停台与非计划停台。
+       */
       reasonCode: string
       /** @description 原因说明。 */
       reason: string
@@ -556,6 +629,12 @@ export interface components {
       patient: components['schemas']['PatientSnapshot']
       /** @description 拟施术式。 */
       surgeryName: string
+      /**
+       * @description 申请要求的术间类型（可选）：GENERAL/HYBRID/INTERVENTION；为 null 表示不限。
+       *     排程规则在候选术间类型不匹配时返回 ROOM_TYPE_MISMATCH（BLOCKING）。
+       * @enum {string|null}
+       */
+      requiredRoomType?: 'GENERAL' | 'HYBRID' | 'INTERVENTION' | null
       /** @description 术式编码（字典/院内编码）。 */
       surgeryCode?: string
       /**
@@ -605,6 +684,11 @@ export interface components {
       patientId: string
       /** @description 拟施术式。 */
       surgeryName: string
+      /**
+       * @description 申请要求的术间类型（可选）；为 null 表示不限。
+       * @enum {string|null}
+       */
+      requiredRoomType?: 'GENERAL' | 'HYBRID' | 'INTERVENTION' | null
       /** @description 术式编码。 */
       surgeryCode?: string
       /**
@@ -753,6 +837,14 @@ export interface components {
          *           "field": "plannedStart",
          *           "reason": "与已发布台次时段重叠"
          *         }
+         *       ],
+         *       "conflicts": [
+         *         {
+         *           "conflictType": "ROOM_OVERLAP",
+         *           "severity": "BLOCKING",
+         *           "message": "与术间 OR-01 第 1 台时段重叠",
+         *           "conflictingScheduleId": "8000000000000000001"
+         *         }
          *       ]
          *     }
          */
@@ -816,6 +908,7 @@ export interface operations {
            *           "roomId": "7000000000000000001",
            *           "roomNo": "OR-01",
            *           "roomName": "演示 1 号手术间",
+           *           "roomType": "GENERAL",
            *           "siteId": "3000000000000000001",
            *           "status": "IDLE",
            *           "isolationRequired": false,
@@ -969,6 +1062,56 @@ export interface operations {
       422: components['responses']['UnprocessableEntity']
     }
   }
+  detectScheduleConflicts: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "roomId": "7000000000000000001",
+         *       "applicationId": "6000000000000000001",
+         *       "plannedStart": "2026-12-01T10:30:00+08:00",
+         *       "plannedEnd": "2026-12-01T12:30:00+08:00",
+         *       "excludeScheduleId": "8000000000000000001"
+         *     }
+         */
+        'application/json': components['schemas']['ConflictCheckRequest']
+      }
+    }
+    responses: {
+      /** @description 冲突检测结果。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "hasConflict": true,
+           *       "conflicts": [
+           *         {
+           *           "conflictType": "ROOM_OVERLAP",
+           *           "severity": "BLOCKING",
+           *           "message": "与术间 OR-01 第 1 台（SYNTH-P-0001）时段重叠",
+           *           "conflictingScheduleId": "8000000000000000001"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['ConflictCheckResult']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
   getSchedule: {
     parameters: {
       query?: never
@@ -1017,6 +1160,72 @@ export interface operations {
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
+    }
+  }
+  rescheduleSchedule: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 排程标识（雪花 ID 字符串）。 */
+        scheduleId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "roomId": "7000000000000000002",
+         *       "plannedStart": "2026-12-01T13:00:00+08:00",
+         *       "plannedEnd": "2026-12-01T15:30:00+08:00",
+         *       "sequenceNo": 2,
+         *       "version": 1
+         *     }
+         */
+        'application/json': components['schemas']['UpdateScheduleRequest']
+      }
+    }
+    responses: {
+      /** @description 调整成功，返回更新后的台次。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "scheduleId": "8000000000000000001",
+           *       "applicationId": "6000000000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "patientNo": "SYNTH-P-0001",
+           *       "patientName": "演示患者",
+           *       "roomId": "7000000000000000002",
+           *       "roomNo": "OR-02",
+           *       "sequenceNo": 2,
+           *       "plannedStart": "2026-12-01T13:00:00+08:00",
+           *       "plannedEnd": "2026-12-01T15:30:00+08:00",
+           *       "actualStart": null,
+           *       "actualEnd": null,
+           *       "status": "PLANNED",
+           *       "priority": "ELECTIVE",
+           *       "changeReason": "术间调整（演示）",
+           *       "createdAt": "2026-11-09T11:20:00+08:00",
+           *       "createdBy": "1000000000000000001",
+           *       "updatedAt": "2026-11-12T16:00:00+08:00",
+           *       "updatedBy": "1000000000000000001",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['Schedule']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
     }
   }
   checkScheduleConflict: {

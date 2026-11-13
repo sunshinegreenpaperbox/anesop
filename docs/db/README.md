@@ -1,7 +1,8 @@
 # 数据库迁移与 schema 规范（db）
 
 > 状态：S0-06 基线 + V3（认证令牌）+ V4（M2 采集骨架）+ V5（数据范围绑定，M2-M0-01）
-> + V6（手机号加解密与用户管理，M2-M0-02）+ V7（M1 手术申请接收，M2-M1-01）；
+> + V6（手机号加解密与用户管理，M2-M0-02）+ V7（M1 手术申请接收，M2-M1-01）
+> + V8（M1 术间与排程台次，M2-M2-01）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -18,6 +19,7 @@ db/
 │   ├── V5__m0_data_scope.sql               # 数据范围绑定表 sys_org/sys_user_org/sys_user_room + m0:org:*（M2-M0-01）
 │   ├── V6__m0_user_phone_crypto.sql        # sys_user.phone_key_id/phone_updated_at + 一致性约束 + m0:user:*（M2-M0-02）
 │   ├── V7__m1_schedule_application.sql     # m1_sched 患者快照/手术申请/状态历史（含 append-only 触发器）+ m1:application:* / m1:patient:read（M2-M1-01）
+│   ├── V8__m1_schedule_room_plan.sql       # m1_sched 术间/排程台次 + surgery_application.required_room_type + m1:schedule:*（M2-M2-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -117,6 +119,27 @@ V7 属 expand 段：只新增 `m1_sched` schema 与三张表（患者快照/手�
 - **重放**：修复后重新执行 V7 会重建空表；已导出数据不得直接回灌（会与 Flyway 版本/唯一键冲突），
   须走受控数据修复流程并记录操作人与时间。
 
+### 4.3 V8（M1 术间与排程台次）回滚说明
+
+V8 属 expand 段：新增 `m1_sched.operating_room` / `m1_sched.schedule` 两表、索引与两个权限点
+（`m1:schedule:read|write`；read 授 SYS_ADMIN/SYS_OR_MANAGER/SYS_SURGEON，write 仅授
+SYS_ADMIN/SYS_OR_MANAGER），`schedule.priority smallint NOT NULL DEFAULT 0`（0=ELECTIVE/
+1=URGENT/2=EMERGENCY，`ck_schedule_priority`），并给 `surgery_application` 增加**可空**列
+`required_room_type`；不修改 V1–V7 已执行脚本，也不改写既有列与数据。跨术间术者/患者并发由
+应用层事务级 advisory lock（`pg_advisory_xact_lock`，确定性排序）串行化。
+
+- **应用回滚**：下线排程工作台路由（`/m1/schedule` 与 `/v1/scheduling/{rooms,schedules*}`），
+  停止读写 `m1_sched.schedule`/`operating_room`；申请/患者/麻醉记录能力不受影响。
+- **库层回滚**（前向修复脚本，需 DBA 审批 + 备份；顺序不可颠倒）：
+  `DROP TABLE m1_sched.schedule` → `DROP TABLE m1_sched.operating_room` →
+  `ALTER TABLE m1_sched.surgery_application DROP COLUMN required_room_type` →
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN ('...27','...28')` →
+  `DELETE FROM m0_platform.sys_permission WHERE code IN ('m1:schedule:read','m1:schedule:write')`。
+- **数据保全**：回滚前导出 `schedule`/`operating_room` 并校验行数；台次取消保留原因，不物理删除。
+- **种子**：V8 内置 5 个 SYNTHETIC 术间（含 1 HYBRID、1 INTERVENTION），回滚后需重建；
+  真实术间主数据不得由种子代替，须走院方主数据维护流程。
+- **重放**：修复后重新执行 V8 会重建空表并重新灌入 5 个合成术间；已导出排程数据不得直接回灌。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）
@@ -132,7 +155,7 @@ source scripts/env.sh
 
 测试断言分两条路径：
 
-- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 7 条（V1–V7）、
+- **生产路径**（locations 只含 `db/migration`）：空库 `migrate()` 成功、Flyway history 8 条（V1–V8）、
   二次 `migrate()` 执行 0 条、V1→V2 升级成功、约束/索引/注释存在、平台预置种子正确、
   `sys_user=0` 且无 `demo_admin`、审计表 UPDATE/DELETE/TRUNCATE 被数据库拒绝；
 - **演示路径**（追加 `db/seed/demo`）：V100 后 `demo_admin`（ALL）、`demo_dept`（DEPT，绑定麻醉科）、

@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请（`auth 0.5.0`、`patient/scheduling 0.3.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.4.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -24,9 +24,9 @@ packages/contracts/
 |---|---:|---:|---|---|
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
-| `scheduling.yaml` | 10 | 12 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情、冲突检测、急诊加台、停台 | §2.4.2、§2.3.2、§3.4.2 |
+| `scheduling.yaml` | 11 | 14 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台、停台 | §2.4.2、§2.3.2、§3.4.2 |
 | `anesthesia.yaml` | 6 | 10 | 术前访视读写、记录单读写、锁单、三方核查读写、随访创建/查询/列表 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **33** | **41** | 4 个限界上下文骨架 | — |
+| **合计** | **34** | **43** | 4 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -72,6 +72,30 @@ packages/contracts/
 - 创建/导入无资源路径参数，未知患者按语义返回 **422**；单对象查询（患者/申请详情）仍返回 404；
   导入接口不声明不可达的 422，保留 400/403/409。
 - 历史 `/v1/surgery-applications*` 端点标记 `deprecated`，由 scheduling 同名能力取代，计划 1.0.0 下线。
+
+### 3.2 排程工作台与冲突检测（M2-M2-01，scheduling 0.4.0 additive）
+
+- 新增/启用 `GET /v1/scheduling/rooms`、`GET/POST /v1/scheduling/schedules`、
+  `GET/PUT /v1/scheduling/schedules/{scheduleId}`、`POST /v1/scheduling/schedules/{scheduleId}/cancel`、
+  `POST /v1/scheduling/schedules/conflicts`；权限点 `m1:schedule:read|write`（V8 仅授
+  SYS_ADMIN/SYS_OR_MANAGER，最小权限）。
+- `OperatingRoom` 新增可选 `roomType`（GENERAL/HYBRID/INTERVENTION）；`SurgeryApplication` 与
+  创建请求新增可选 `requiredRoomType`（NULL=不限），供术间类型匹配规则使用。
+- 冲突：创建/调整在事务内复检，409 `Error.conflicts[]` 返回
+  `conflictType/severity/message/conflictingScheduleId`；`details[]` 同步便于前端直接展示。
+  `Conflict.conflictType` 改为 **`x-extensible-enum` 开放枚举**（新增值不破坏客户端，客户端必须
+  容忍未知值），已登记 ROOM_OVERLAP/STAFF_CONFLICT/PATIENT_CONFLICT/ROOM_TYPE_MISMATCH/
+  TIME_WINDOW_INVALID/APPLICATION_ALREADY_SCHEDULED/VERSION_CONFLICT/STATE_CONFLICT 及后续
+  设备/隔离/资质预留值。**注意**：enum→x-extensible-enum 属"非严格 additive"（JSON 不变，
+  TS 生成类型由字面量联合放宽为 `string`），已在 ADR-0011 增补登记；契约强类型诉求记为 Q，
+  1.0.0 前保持可扩展枚举，前端按字符串分支。
+- 服务级冲突类型不再复用规则类型：申请已有生效台次=`APPLICATION_ALREADY_SCHEDULED`、乐观锁
+  过期=`VERSION_CONFLICT`、状态不允许=`STATE_CONFLICT`；时间窗非法在 API 边界统一 400，
+  `TIME_WINDOW_INVALID` 仅保留内部规则防御。`CreateScheduleRequest.priority` 落库并在响应回显；
+  `ConflictCheckRequest.staffIds/equipmentTags` 标 `x-deferred: true`（M2-M2-02/M3 实现）。
+- 旧 `POST /v1/scheduling/conflicts/check` 标记 `deprecated`（由 `schedules/conflicts` 取代，
+  计划 1.0.0 删除）；0.4.0 仍映射同一服务方法（响应一致），不删除任何既有字段/端点。
+- `GET /v1/scheduling/rooms` 按契约实现 `siteId`/`status` 查询参数过滤，非法值 400。
 
 ## 4. 错误模型
 
@@ -137,7 +161,9 @@ packages/contracts/
 - **契约兼容性：0.3.0 为 additive（仅新增端点/字段；删除类变更推迟到 1.0.0 并走 major+ADR）。**
   已删除的安全字段以 `deprecated: true` 兼容占位恢复，实现不返回真实值；历史端点同样只标
   `deprecated` 不物理删除。任何删除/改类型必须先完成 1.0.0 major 评审与 ADR，禁止在 0.x 内私删。
-- `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient/scheduling 0.3.0`（M2-M1-01：新增手术申请与患者摘要端点，compatible additive）。路径主版本为 `/v1`。
+- `info.version` 采用语义化版本；当前 `auth 0.5.0`、`patient 0.3.0`、`scheduling 0.4.0`
+  （M2-M2-01：新增排程工作台/冲突检测端点与可选字段，compatible additive；旧冲突检测端点仅
+  标 `deprecated`）。路径主版本为 `/v1`。
 - **兼容变更**（只增不删）：新增可选字段、新增接口、新增响应字段、新增枚举值（调用方需容忍未知值）；更新 `minor`/`patch`，评审通过后同步 baseline。
 - **阻断性变更**（oasdiff `--fail-on WARN` 即失败）：删除路径或 operation；请求体新增必填字段；请求字段类型变更；响应必填字段删除；响应字段类型变更。删除/收紧枚举值、改变字段语义同样按破坏性变更处理。
 - **兼容例外（M2 契约冻结前）**：响应新增必填字段按 warning 处理、不阻断，但必须在 PR 说明调用方兼容方案，并在下表登记；M2 契约冻结前清零。
@@ -189,5 +215,6 @@ pnpm -C packages/contracts check:breaking   # 仅 breaking
 - CA 签名与时间戳的厂商、接口与验签方式（§3.9.4，标【待确认】）；当前契约只保留 `signatureStatus`，不写外部 CA 接口。
 - DASI 取值范围按院方口径配置（通行 DASI 0–58.2，待临床确认），契约不设上限。
 - 会话与刷新令牌的最终时效、是否强制双因素，需安全评审确认（当前示例 1800 秒 / 30 分钟）。
-- 排程冲突的“人员资质/设备依赖”校验字段与字典编码，待 M1 规则引擎评审后补充。
+- 排程冲突已落地时间重叠/术者/患者/术间类型/时间窗五类规则；设备依赖、隔离与人员资质的
+  字段与字典编码在 M2-M2-02/M3 资质模块评审后补充（枚举值已预留）。
 - 生命体征高频序列与波形查询接口不在本基线，按 §3.4.4 的分区/归档方案在 M2 细化。

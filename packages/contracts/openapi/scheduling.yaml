@@ -6,7 +6,10 @@ info:
     ANESOP 手术排程域契约，对应方案书 §2.4.2（M1 手术排程管理）与 §3.4.2（排程/台次实体）。
     硬规则：同术间时段不重叠、冲突不得强行保存、急诊加台优先于择期、停台改台必选原因码。
     所有示例均为 SYNTHETIC 合成数据。
-  version: 0.3.0
+    兼容性说明（ADR-0011 增补）：0.4.0 将 `Conflict.conflictType` 由 `enum` 放宽为
+    `x-extensible-enum`，属**非严格 additive**（类型放宽，TS 侧由字面量联合变为 `string`），
+    不破坏 JSON 结构；客户端须按字符串分支并容忍未知值。
+  version: 0.4.0
   contact:
     name: ANESOP 项目组
   license:
@@ -26,7 +29,10 @@ paths:
       tags:
         - 手术排程
       summary: 查询术间列表
-      description: 返回术间静态配置与当前状态，供排程工作台与驾驶舱使用；术间编号院内唯一。
+      description: |
+        返回术间静态配置与当前状态，供排程工作台与驾驶舱使用；术间编号院内唯一。
+        术间类型 `roomType` 用于排程规则匹配：GENERAL=普通手术间、HYBRID=杂交手术间、
+        INTERVENTION=介入手术间。结果受当前用户数据范围约束（DEPT 本科室 / ROOM 绑定术间）。
       parameters:
         - name: siteId
           in: query
@@ -59,6 +65,7 @@ paths:
                   - roomId: '7000000000000000001'
                     roomNo: OR-01
                     roomName: 演示 1 号手术间
+                    roomType: GENERAL
                     siteId: '3000000000000000001'
                     status: IDLE
                     isolationRequired: false
@@ -222,6 +229,50 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+  /v1/scheduling/schedules/conflicts:
+    post:
+      operationId: detectScheduleConflicts
+      tags:
+        - 手术排程
+      summary: 排程冲突即时检测（工作台预检）
+      description: |
+        对候选术间/时段/申请执行规则引擎检测，返回结构化冲突（类型、说明、冲突台次），
+        仅返回结果不落库；供排程工作台在提交前即时提示。创建/调整排程时服务端仍在事务内复核，
+        冲突返回 409（`Error.conflicts` 携带同一结构）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConflictCheckRequest'
+            example:
+              roomId: '7000000000000000001'
+              applicationId: '6000000000000000001'
+              plannedStart: '2026-12-01T10:30:00+08:00'
+              plannedEnd: '2026-12-01T12:30:00+08:00'
+              excludeScheduleId: '8000000000000000001'
+      responses:
+        '200':
+          description: 冲突检测结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictCheckResult'
+              example:
+                hasConflict: true
+                conflicts:
+                  - conflictType: ROOM_OVERLAP
+                    severity: BLOCKING
+                    message: 与术间 OR-01 第 1 台（SYNTH-P-0001）时段重叠
+                    conflictingScheduleId: '8000000000000000001'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
   /v1/scheduling/schedules/{scheduleId}:
     get:
       operationId: getSchedule
@@ -270,13 +321,84 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+    put:
+      operationId: rescheduleSchedule
+      tags:
+        - 手术排程
+      summary: 调整排程（改时间/改术间）
+      description: |
+        调整既有台次的术间与计划时段。服务端先锁定目标术间行（`SELECT ... FOR UPDATE`），
+        再在事务内复检冲突；冲突返回 409，`Error.conflicts` 列出冲突类型与冲突台次。
+        必须回传 `version`，版本过期返回 409，不静默覆盖。
+      parameters:
+        - name: scheduleId
+          in: path
+          description: 排程标识（雪花 ID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateScheduleRequest'
+            example:
+              roomId: '7000000000000000002'
+              plannedStart: '2026-12-01T13:00:00+08:00'
+              plannedEnd: '2026-12-01T15:30:00+08:00'
+              sequenceNo: 2
+              version: 1
+      responses:
+        '200':
+          description: 调整成功，返回更新后的台次。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+              example:
+                scheduleId: '8000000000000000001'
+                applicationId: '6000000000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                patientNo: SYNTH-P-0001
+                patientName: 演示患者
+                roomId: '7000000000000000002'
+                roomNo: OR-02
+                sequenceNo: 2
+                plannedStart: '2026-12-01T13:00:00+08:00'
+                plannedEnd: '2026-12-01T15:30:00+08:00'
+                actualStart: null
+                actualEnd: null
+                status: PLANNED
+                priority: ELECTIVE
+                changeReason: 术间调整（演示）
+                createdAt: '2026-11-09T11:20:00+08:00'
+                createdBy: '1000000000000000001'
+                updatedAt: '2026-11-12T16:00:00+08:00'
+                updatedBy: '1000000000000000001'
+                version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
   /v1/scheduling/conflicts/check:
     post:
       operationId: checkScheduleConflict
+      deprecated: true
       tags:
         - 手术排程
-      summary: 检测排程冲突
+      summary: 检测排程冲突（已弃用，改用 POST /v1/scheduling/schedules/conflicts）
       description: |
+        已弃用：由 `POST /v1/scheduling/schedules/conflicts`（operationId=detectScheduleConflicts）
+        取代，计划 1.0.0 删除。保留路径仅为兼容 0.3.0 调用方，语义与响应结构不变。
         对候选术间与时段执行冲突检测，覆盖术间时段重叠、人员排班、设备依赖与隔离要求。
         仅返回检测结果，不落库；创建/调整排程时服务端仍会复核。
       requestBody:
@@ -816,6 +938,11 @@ components:
             details:
               - field: plannedStart
                 reason: 与已发布台次时段重叠
+            conflicts:
+              - conflictType: ROOM_OVERLAP
+                severity: BLOCKING
+                message: 与术间 OR-01 第 1 台时段重叠
+                conflictingScheduleId: '8000000000000000001'
     UnprocessableEntity:
       description: 请求语义不合法：字段格式正确但业务规则拒绝，details 说明原因。
       content:
@@ -866,6 +993,11 @@ components:
           description: 字段级或范围级错误明细；无明细时为空数组。
           items:
             $ref: '#/components/schemas/ErrorDetail'
+        conflicts:
+          type: array
+          description: 排程冲突明细（仅 409 `SCHEDULE_CONFLICT` 返回；其他错误省略）。
+          items:
+            $ref: '#/components/schemas/Conflict'
     PageMeta:
       type: object
       description: 分页元数据；页码从 1 开始，size 上限由服务端限制。
@@ -955,6 +1087,13 @@ components:
             roomName:
               type: string
               description: 术间名称。
+            roomType:
+              type: string
+              description: 术间类型；排程规则按申请要求的术间类型匹配。
+              enum:
+                - GENERAL
+                - HYBRID
+                - INTERVENTION
             siteId:
               type: string
               description: 院区标识。
@@ -1121,11 +1260,43 @@ components:
           minimum: 1
         priority:
           type: string
-          description: 优先级。
+          description: 优先级；持久化到 `schedule.priority` 并在响应回显（0=ELECTIVE/1=URGENT/2=EMERGENCY）。
           enum:
             - ELECTIVE
             - URGENT
             - EMERGENCY
+    UpdateScheduleRequest:
+      type: object
+      description: 调整排程请求；服务端锁定术间并在事务内复检冲突。
+      required:
+        - plannedStart
+        - plannedEnd
+        - sequenceNo
+        - version
+      properties:
+        roomId:
+          type: [string, 'null']
+          description: 目标术间标识；为 null 时保持原术间不变。
+        plannedStart:
+          type: string
+          format: date-time
+          description: 调整后的计划开始时间。
+        plannedEnd:
+          type: string
+          format: date-time
+          description: 调整后的计划结束时间，必须晚于开始时间。
+        sequenceNo:
+          type: integer
+          description: 调整后的台次序号。
+          minimum: 1
+        version:
+          type: integer
+          description: 排程当前版本号，用于乐观锁；过期返回 409。
+          minimum: 1
+        reason:
+          type: [string, 'null']
+          description: 调整原因（演示文本，≤500 字符），写入台次 changeReason 与审计。
+          maxLength: 500
     ConflictCheckRequest:
       type: object
       description: 排程冲突检测请求；只读预检，不落库。
@@ -1137,6 +1308,9 @@ components:
         roomId:
           type: string
           description: 候选术间标识。
+        applicationId:
+          type: [string, 'null']
+          description: 候选手术申请标识；传入后按申请的术者/患者/术间类型要求做冲突检测。
         plannedStart:
           type: string
           format: date-time
@@ -1150,12 +1324,18 @@ components:
           description: 调整既有排程时排除自身，避免误报。
         staffIds:
           type: array
-          description: 候选人员标识，用于排班与资质冲突校验。
+          x-deferred: true
+          description: |
+            候选人员标识，用于排班与资质冲突校验。**延后实现**：M2-M2-02/M3 人员资质模块
+            （`x-deferred: true`）；当前服务端忽略该字段，不影响其他规则的判定。
           items:
             type: string
         equipmentTags:
           type: array
-          description: 候选设备标签。
+          x-deferred: true
+          description: |
+            候选设备标签。**延后实现**：M2-M2-02/M3 设备与资质模块（`x-deferred: true`）；
+            当前服务端忽略该字段。
           items:
             type: string
     Conflict:
@@ -1168,13 +1348,26 @@ components:
       properties:
         conflictType:
           type: string
-          description: 冲突类型。
-          enum:
+          x-extensible-enum:
             - ROOM_OVERLAP
             - STAFF_CONFLICT
+            - PATIENT_CONFLICT
             - EQUIPMENT_CONFLICT
             - ISOLATION_CONFLICT
             - QUALIFICATION_MISMATCH
+            - ROOM_TYPE_MISMATCH
+            - TIME_WINDOW_INVALID
+            - APPLICATION_ALREADY_SCHEDULED
+            - VERSION_CONFLICT
+            - STATE_CONFLICT
+          description: |
+            冲突类型。开放枚举（`x-extensible-enum`）：已登记值见列表，服务端可新增规则类型，
+            客户端必须容忍未知值并按字符串分支。当前规则：ROOM_OVERLAP=术间时段重叠、
+            STAFF_CONFLICT=术者冲突、PATIENT_CONFLICT=患者台次冲突、ROOM_TYPE_MISMATCH=术间类型不匹配、
+            APPLICATION_ALREADY_SCHEDULED=申请已有生效台次、VERSION_CONFLICT=乐观锁版本过期、
+            STATE_CONFLICT=台次状态不允许该操作；TIME_WINDOW_INVALID 保留给内部规则防御
+            （API 边界的时间窗非法统一 400，不再以 409 返回）。EQUIPMENT_CONFLICT/
+            ISOLATION_CONFLICT/QUALIFICATION_MISMATCH 为后续设备、隔离与资质规则预留。
         severity:
           type: string
           description: 阻断或告警；BLOCKING 不得保存。
@@ -1258,7 +1451,10 @@ components:
       properties:
         reasonCode:
           type: string
-          description: 停台原因码，来自字典；区分计划停台与非计划停台。
+          description: |
+            停台原因码，来自字典；服务端按 `^[A-Z_]{2,32}$`（大写字母/下划线，2–32 位）校验，
+            非法格式返回 400 `PARAM_INVALID`（`details[].field=reasonCode`）。契约不加
+            `pattern` 以免对既有调用方构成破坏性收紧（ADR-0011）。区分计划停台与非计划停台。
         reason:
           type: string
           description: 原因说明。
@@ -1407,6 +1603,16 @@ components:
             surgeryName:
               type: string
               description: 拟施术式。
+            requiredRoomType:
+              type: [string, 'null']
+              description: |
+                申请要求的术间类型（可选）：GENERAL/HYBRID/INTERVENTION；为 null 表示不限。
+                排程规则在候选术间类型不匹配时返回 ROOM_TYPE_MISMATCH（BLOCKING）。
+              enum:
+                - GENERAL
+                - HYBRID
+                - INTERVENTION
+                - null
             surgeryCode:
               type: string
               description: 术式编码（字典/院内编码）。
@@ -1494,6 +1700,14 @@ components:
           description: 拟施术式。
           minLength: 1
           maxLength: 200
+        requiredRoomType:
+          type: [string, 'null']
+          description: 申请要求的术间类型（可选）；为 null 表示不限。
+          enum:
+            - GENERAL
+            - HYBRID
+            - INTERVENTION
+            - null
         surgeryCode:
           type: string
           description: 术式编码。
