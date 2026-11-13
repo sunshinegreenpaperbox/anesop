@@ -1,28 +1,44 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ApiError } from '../../../api/http'
 import { useAuthStore } from '../../../stores/auth'
 import {
+  acknowledgeAlert,
+  alertMetricLabels,
+  alertSeverityLabels,
+  alertStatusLabels,
   appendRecordEvent,
   createAnesthesiaRecord,
+  createResuscitation,
+  evaluateRecordAlerts,
   getIntakeOutputSummary,
   listAnesthesiaRecords,
   listDrugAdministrations,
   listFluidRecords,
+  listRecordAlerts,
   listRecordEvents,
+  listResuscitations,
   recordDrugAdministration,
   recordFluidRecord,
   recordEventLabels,
+  resusOutcomeLabels,
+  resusTypeLabels,
+  type Alert,
   type AnesthesiaRecordDetail,
   type CreateRecordEventRequest,
+  type CreateResuscitationRequest,
   type DrugAdministration,
   type FluidDirection,
   type FluidRecord,
   type IntakeOutputSummary,
   type RecordEvent,
   type RecordEventType,
+  type ResuscitationDrug,
+  type ResuscitationRecord,
+  type ResusOutcome,
+  type ResusType,
 } from '../api/m2'
 
 function nowWithOffset(): string {
@@ -69,9 +85,47 @@ const events = ref<RecordEvent[]>([])
 const drugs = ref<DrugAdministration[]>([])
 const fluids = ref<FluidRecord[]>([])
 const summary = ref<IntakeOutputSummary | null>(null)
+const alerts = ref<Alert[]>([])
+const resuscitations = ref<ResuscitationRecord[]>([])
+
+/** 告警确认/忽略：先收集原因再提交（reason 必填，服务端审计不记录原文）。 */
+const ackDialog = reactive({
+  visible: false,
+  alertId: '',
+  decision: 'CONFIRMED' as 'CONFIRMED' | 'IGNORED',
+  reason: '',
+})
+
+const resusForm = reactive({
+  resusType: 'CPR' as ResusType,
+  startedAt: nowWithOffset(),
+  endedAt: nowWithOffset(),
+  summary: '',
+  interventions: '',
+  // 人员留痕（V16/B-4）：负责人必填，参与人员至少 1 人；默认带出当前登录人。
+  leaderName: auth.displayName,
+  leaderUserId: auth.user?.userId ?? '',
+  rescuers: '',
+  outcome: 'SUCCESS' as ResusOutcome,
+})
+
+const resusDrugs = ref<ResuscitationDrug[]>([])
+const resusDrugForm = reactive({
+  drugName: '',
+  dose: 1,
+  unit: 'mg',
+  route: 'IV',
+})
 const loading = ref(false)
 const saving = ref(false)
+const evaluating = ref(false)
+const alertUnavailable = ref(false)
+const resusUnavailable = ref(false)
 const error = ref<ApiError | null>(null)
+
+/** 告警轮询间隔（评审 B-1：5–10s；实时触发为主，轮询仅兜底）。 */
+const ALERT_POLL_INTERVAL_MS = 8000
+let alertTimer: number | null = null
 
 const createForm = reactive({
   anesthesiaType: 'GENERAL' as (typeof ANESTHESIA_TYPES)[number]['value'],
@@ -105,6 +159,14 @@ const fluidForm = reactive({
 })
 
 const canWrite = computed(() => auth.hasPermission('m2:record:write'))
+const canAck = computed(() => auth.hasPermission('m2:alert:ack'))
+const canRescue = computed(() => auth.hasPermission('m2:rescue:write'))
+/** 权限隔离（S-3）：缺 alert:read / rescue 权限时跳过对应请求，不影响时间轴/用药/出入量。 */
+const canAlertRead = computed(() => auth.hasPermission('m2:alert:read'))
+const canRescueView = computed(() => canRescue.value || auth.hasPermission('m2:record:write'))
+const pendingAlertCount = computed(
+  () => alerts.value.filter((item) => item.status === 'TRIGGERED').length,
+)
 const editable = computed(() => canWrite.value && record.value !== null)
 const busy = computed(() => loading.value || saving.value)
 const statusLabel = computed(() =>
@@ -144,6 +206,8 @@ async function load(): Promise<void> {
       drugs.value = []
       fluids.value = []
       summary.value = null
+      alerts.value = []
+      resuscitations.value = []
       return
     }
   } catch (cause) {
@@ -162,16 +226,84 @@ async function load(): Promise<void> {
 }
 
 async function loadRecordDetail(recordId: string): Promise<void> {
-  const [eventList, drugList, fluidList, ioSummary] = await Promise.all([
+  // 权限隔离（S-3）：告警/抢救请求按权限跳过；任一侧失败不阻断时间轴/用药/出入量。
+  // 注意：任务在数组内按固定顺序创建，保证请求时序稳定（时间轴→用药→出入量→告警→抢救）。
+  const [eventR, drugR, fluidR, ioR, alertR, resusR] = await Promise.allSettled([
     listRecordEvents(recordId),
     listDrugAdministrations(recordId),
     listFluidRecords(recordId),
     getIntakeOutputSummary(recordId),
+    canAlertRead.value ? listRecordAlerts(recordId) : Promise.resolve(null),
+    canRescueView.value ? listResuscitations(recordId) : Promise.resolve(null),
   ])
-  events.value = eventList.items
-  drugs.value = drugList.items
-  fluids.value = fluidList.items
-  summary.value = ioSummary
+  if (eventR.status === 'fulfilled') events.value = eventR.value.items
+  if (drugR.status === 'fulfilled') drugs.value = drugR.value.items
+  if (fluidR.status === 'fulfilled') fluids.value = fluidR.value.items
+  if (ioR.status === 'fulfilled') summary.value = ioR.value
+  if (alertR.status === 'fulfilled') {
+    alerts.value = alertR.value?.items ?? []
+    alertUnavailable.value = false
+  } else {
+    alerts.value = []
+    alertUnavailable.value = true
+  }
+  if (resusR.status === 'fulfilled') {
+    resuscitations.value = resusR.value?.items ?? []
+    resusUnavailable.value = false
+  } else {
+    resuscitations.value = []
+    resusUnavailable.value = true
+  }
+  const coreFailure = [eventR, drugR, fluidR, ioR].find((item) => item.status === 'rejected') as
+    PromiseRejectedResult | undefined
+  if (coreFailure) {
+    throw coreFailure.reason
+  }
+}
+
+/** 仅刷新告警（轮询兜底；不重取时间轴/用药/出入量）。 */
+async function refreshAlerts(): Promise<void> {
+  if (!record.value || !canAlertRead.value) return
+  try {
+    const list = await listRecordAlerts(record.value.recordId)
+    alerts.value = list.items
+    alertUnavailable.value = false
+  } catch {
+    // 轮询失败不打断页面（保留已加载告警，仅标记不可用）。
+    alertUnavailable.value = true
+  }
+}
+
+function stopAlertPolling(): void {
+  if (alertTimer !== null) {
+    window.clearInterval(alertTimer)
+    alertTimer = null
+  }
+}
+
+function startAlertPolling(): void {
+  stopAlertPolling()
+  if (!canAlertRead.value) return
+  alertTimer = window.setInterval(() => {
+    void refreshAlerts()
+  }, ALERT_POLL_INTERVAL_MS)
+}
+
+/** 手动评估（调试/补偿）：服务端按水位只处理新采样，不重评历史窗口。 */
+async function evaluateAlerts(): Promise<void> {
+  if (!record.value) return
+  evaluating.value = true
+  try {
+    const result = await evaluateRecordAlerts(record.value.recordId)
+    ElMessage.success(
+      `评估完成：规则 ${result.evaluatedRules} 条、采样 ${result.sampledFrames} 帧、新增告警 ${result.createdAlerts} 条`,
+    )
+    await refreshAlerts()
+  } catch (cause) {
+    handleError(cause)
+  } finally {
+    evaluating.value = false
+  }
 }
 
 /** 追加事件会改变记录单状态/开始结束时间，刷新必须同时重取记录单本身。 */
@@ -191,6 +323,8 @@ async function createRecord(): Promise<void> {
     events.value = []
     drugs.value = []
     fluids.value = []
+    alerts.value = []
+    resuscitations.value = []
     summary.value = {
       recordId: created.recordId,
       intakeMl: 0,
@@ -314,6 +448,119 @@ async function submitFluid(): Promise<void> {
   }
 }
 
+function openAck(alert: Alert, decision: 'CONFIRMED' | 'IGNORED'): void {
+  ackDialog.alertId = alert.alertId
+  ackDialog.decision = decision
+  ackDialog.reason = ''
+  ackDialog.visible = true
+}
+
+async function submitAck(): Promise<void> {
+  if (!ackDialog.reason.trim()) {
+    ElMessage.warning('请填写处理原因（确认/忽略均需留痕）')
+    return
+  }
+  saving.value = true
+  try {
+    await acknowledgeAlert(ackDialog.alertId, {
+      decision: ackDialog.decision,
+      reason: ackDialog.reason.trim(),
+      version: alerts.value.find((item) => item.alertId === ackDialog.alertId)?.version ?? 1,
+    })
+    ElMessage.success(ackDialog.decision === 'CONFIRMED' ? '告警已确认' : '告警已忽略')
+    ackDialog.visible = false
+    await refresh()
+  } catch (cause) {
+    handleError(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
+function severityTagType(severity: string): 'info' | 'warning' | 'danger' {
+  if (severity === 'CRITICAL') return 'danger'
+  if (severity === 'WARN') return 'warning'
+  return 'info'
+}
+
+function addResusDrug(): void {
+  if (!resusDrugForm.drugName.trim()) {
+    ElMessage.warning('请填写抢救用药名称')
+    return
+  }
+  if (!Number.isFinite(resusDrugForm.dose) || resusDrugForm.dose <= 0) {
+    ElMessage.warning('剂量必须大于 0')
+    return
+  }
+  resusDrugs.value.push({
+    drugName: resusDrugForm.drugName.trim(),
+    dose: resusDrugForm.dose,
+    unit: resusDrugForm.unit.trim() || 'mg',
+    route: resusDrugForm.route.trim() || undefined,
+  })
+  resusDrugForm.drugName = ''
+}
+
+function removeResusDrug(index: number): void {
+  resusDrugs.value.splice(index, 1)
+}
+
+async function submitResuscitation(): Promise<void> {
+  if (!record.value) return
+  if (!resusForm.summary.trim()) {
+    ElMessage.warning('请填写事件经过摘要')
+    return
+  }
+  const leaderName = resusForm.leaderName.trim()
+  if (!leaderName) {
+    ElMessage.warning('请填写抢救负责人（必填）')
+    return
+  }
+  const rescuerNames = resusForm.rescuers
+    .split(/[，,]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+  if (rescuerNames.length === 0) {
+    ElMessage.warning('请填写至少 1 名抢救参与人员')
+    return
+  }
+  const interventions = resusForm.interventions
+    .split(/[，,]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+  const leaderUserId = resusForm.leaderUserId.trim()
+  const payload: CreateResuscitationRequest = {
+    resusType: resusForm.resusType,
+    startedAt: resusForm.startedAt,
+    endedAt: resusForm.endedAt,
+    leader: {
+      name: leaderName,
+      ...(leaderUserId ? { userId: leaderUserId } : {}),
+    },
+    rescuers: rescuerNames.map((name) => ({ name })),
+    eventSummary: {
+      summary: resusForm.summary.trim(),
+      ...(interventions.length > 0 ? { interventions } : {}),
+    },
+    outcome: resusForm.outcome,
+    ...(resusDrugs.value.length > 0 ? { drugs: [...resusDrugs.value] } : {}),
+  }
+  saving.value = true
+  try {
+    await createResuscitation(record.value.recordId, payload)
+    ElMessage.success('抢救记录已保存（append-only）')
+    resusForm.summary = ''
+    resusForm.interventions = ''
+    resusForm.rescuers = ''
+    resusDrugs.value = []
+    await refresh()
+  } catch (cause) {
+    handleError(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
 function directionLabel(direction: string): string {
   return direction === 'INTAKE' ? '入量' : '出量'
 }
@@ -322,7 +569,12 @@ function formatDose(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(3)
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  startAlertPolling()
+})
+
+onUnmounted(stopAlertPolling)
 </script>
 
 <template>
@@ -412,6 +664,99 @@ onMounted(load)
           </span>
         </el-descriptions-item>
       </el-descriptions>
+
+      <!-- 术中告警（权限隔离：无 alert:read 时不请求、不渲染） -->
+      <section v-if="canAlertRead" class="record__panel" data-testid="alert-panel">
+        <h2 class="record__panel-title">
+          术中告警（实时评估）
+          <el-tag v-if="pendingAlertCount > 0" type="danger" size="small">
+            {{ pendingAlertCount }} 条待处理
+          </el-tag>
+          <el-button
+            class="record__panel-action"
+            size="small"
+            data-testid="alert-evaluate"
+            :loading="evaluating"
+            :disabled="!canWrite"
+            @click="evaluateAlerts"
+          >
+            手动评估（调试）
+          </el-button>
+        </h2>
+        <p class="record__hint">
+          采集落库后按启用规则实时评估（仅进行中记录；按记录单创建时快照的术间匹配设备）， 本页每 8
+          秒轮询兜底。手动评估仅用于调试/采集补偿，按已评估水位只处理新采样，
+          不重评历史窗口。阈值口径【待确认】，以临床顾问确认为准；告警只做提示，不替代临床判断。
+        </p>
+        <el-alert
+          v-if="record.status === 'DRAFT'"
+          data-testid="alert-draft-hint"
+          type="info"
+          :closable="false"
+          show-icon
+          title="草稿记录不评估：麻醉开始（记录状态变为进行中）后才产生告警"
+        />
+        <el-alert
+          v-if="alertUnavailable"
+          data-testid="alert-unavailable"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="告警加载失败（不影响时间轴/用药/出入量），可稍后刷新"
+        />
+        <el-table :data="alerts" data-testid="alert-list" size="small" border>
+          <el-table-column label="严重度" width="100">
+            <template #default="{ row }">
+              <el-tag :type="severityTagType(row.severity)" size="small">
+                {{ alertSeverityLabels[row.severity] ?? row.severity }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="规则" width="150">
+            <template #default="{ row }"> {{ row.ruleCode }} v{{ row.ruleVersion }} </template>
+          </el-table-column>
+          <el-table-column label="指标" width="150">
+            <template #default="{ row }">
+              {{ alertMetricLabels[row.metric] ?? row.metric }}
+            </template>
+          </el-table-column>
+          <el-table-column label="实测值" width="110">
+            <template #default="{ row }">{{ row.value }} {{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="触发时间" prop="triggeredAt" width="220" />
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'TRIGGERED' ? 'warning' : 'info'" size="small">
+                {{ alertStatusLabels[row.status] ?? row.status }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="处理" width="170">
+            <template #default="{ row }">
+              <template v-if="row.status === 'TRIGGERED' && canAck">
+                <el-button
+                  link
+                  type="primary"
+                  :data-testid="`alert-confirm-${row.alertId}`"
+                  @click="openAck(row, 'CONFIRMED')"
+                >
+                  确认
+                </el-button>
+                <el-button
+                  link
+                  type="warning"
+                  :data-testid="`alert-ignore-${row.alertId}`"
+                  @click="openAck(row, 'IGNORED')"
+                >
+                  忽略
+                </el-button>
+              </template>
+              <span v-else-if="row.acknowledgeReason">{{ row.acknowledgeReason }}</span>
+              <span v-else class="record__hint">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
 
       <!-- 出入量汇总 -->
       <section class="record__panel" data-testid="io-summary">
@@ -627,7 +972,184 @@ onMounted(load)
           </el-form-item>
         </el-form>
       </section>
+      <!-- 抢救记录（权限隔离：无 rescue 权限时不请求、不渲染） -->
+      <section v-if="canRescueView" class="record__panel" data-testid="resuscitation-panel">
+        <h2 class="record__panel-title">抢救记录（append-only）</h2>
+        <el-alert
+          v-if="resusUnavailable"
+          data-testid="resus-unavailable"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="抢救记录加载失败（不影响时间轴/用药/出入量），可稍后刷新"
+        />
+        <el-table :data="resuscitations" data-testid="resuscitation-list" size="small" border>
+          <el-table-column label="类型" width="140">
+            <template #default="{ row }">
+              {{ resusTypeLabels[row.resusType] ?? row.resusType }}
+            </template>
+          </el-table-column>
+          <el-table-column label="负责人" width="140">
+            <template #default="{ row }">{{ row.leader?.name ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="参与人员" width="110">
+            <template #default="{ row }">{{ row.rescuers?.length ?? 0 }} 人</template>
+          </el-table-column>
+          <el-table-column label="开始" prop="startedAt" width="220" />
+          <el-table-column label="结束" prop="endedAt" width="220" />
+          <el-table-column label="经过摘要">
+            <template #default="{ row }">{{ row.eventSummary?.summary }}</template>
+          </el-table-column>
+          <el-table-column label="用药" width="100">
+            <template #default="{ row }">{{ row.drugs?.length ?? 0 }} 条</template>
+          </el-table-column>
+          <el-table-column label="转归" width="120">
+            <template #default="{ row }">
+              {{ resusOutcomeLabels[row.outcome] ?? row.outcome }}
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-form v-if="canRescue" class="record__form" label-width="110px" @submit.prevent>
+          <el-form-item label="抢救类型">
+            <el-select v-model="resusForm.resusType" data-testid="resus-type">
+              <el-option
+                v-for="(label, value) in resusTypeLabels"
+                :key="value"
+                :label="label"
+                :value="value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="负责人">
+            <el-input
+              v-model="resusForm.leaderName"
+              data-testid="resus-leader"
+              maxlength="100"
+              placeholder="抢救负责人姓名（必填）"
+            />
+          </el-form-item>
+          <el-form-item label="负责人账号">
+            <el-input
+              v-model="resusForm.leaderUserId"
+              data-testid="resus-leader-id"
+              maxlength="64"
+              placeholder="可选：人员账号标识（UUID）"
+            />
+          </el-form-item>
+          <el-form-item label="参与人员">
+            <el-input
+              v-model="resusForm.rescuers"
+              data-testid="resus-rescuers"
+              placeholder="至少 1 人，逗号分隔姓名"
+            />
+          </el-form-item>
+          <el-form-item label="开始时间">
+            <el-date-picker
+              v-model="resusForm.startedAt"
+              data-testid="resus-started-at"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ssZ"
+            />
+          </el-form-item>
+          <el-form-item label="结束时间">
+            <el-date-picker
+              v-model="resusForm.endedAt"
+              data-testid="resus-ended-at"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ssZ"
+            />
+          </el-form-item>
+          <el-form-item label="经过摘要">
+            <el-input
+              v-model="resusForm.summary"
+              data-testid="resus-summary"
+              type="textarea"
+              :rows="2"
+              maxlength="2000"
+              placeholder="不得写入姓名/证件号/住院号等直接标识"
+            />
+          </el-form-item>
+          <el-form-item label="关键干预">
+            <el-input
+              v-model="resusForm.interventions"
+              data-testid="resus-interventions"
+              placeholder="逗号分隔，如：胸外按压,肾上腺素"
+            />
+          </el-form-item>
+          <el-form-item label="抢救用药">
+            <div class="record__drug-row">
+              <el-input
+                v-model="resusDrugForm.drugName"
+                data-testid="resus-drug-name"
+                placeholder="药品名称"
+                maxlength="200"
+              />
+              <el-input-number
+                v-model="resusDrugForm.dose"
+                data-testid="resus-drug-dose"
+                :min="0.001"
+                :step="1"
+              />
+              <el-input
+                v-model="resusDrugForm.unit"
+                data-testid="resus-drug-unit"
+                class="record__short"
+                maxlength="16"
+              />
+              <el-button data-testid="resus-add-drug" @click="addResusDrug">添加</el-button>
+            </div>
+            <ul v-if="resusDrugs.length > 0" class="record__drug-list">
+              <li v-for="(item, index) in resusDrugs" :key="`${item.drugName}-${index}`">
+                {{ item.drugName }} {{ item.dose }} {{ item.unit }}
+                <el-button link type="danger" @click="removeResusDrug(index)">移除</el-button>
+              </li>
+            </ul>
+          </el-form-item>
+          <el-form-item label="转归">
+            <el-select v-model="resusForm.outcome" data-testid="resus-outcome">
+              <el-option
+                v-for="(label, value) in resusOutcomeLabels"
+                :key="value"
+                :label="label"
+                :value="value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
+            <el-button
+              type="primary"
+              data-testid="submit-resuscitation"
+              :loading="saving"
+              :disabled="busy"
+              @click="submitResuscitation"
+            >
+              保存抢救记录
+            </el-button>
+          </el-form-item>
+        </el-form>
+      </section>
     </template>
+
+    <el-dialog v-model="ackDialog.visible" title="处理告警" width="480px">
+      <p class="record__hint">
+        {{ ackDialog.decision === 'CONFIRMED' ? '确认告警有效并已处置' : '忽略告警并说明理由' }}
+      </p>
+      <el-input
+        v-model="ackDialog.reason"
+        data-testid="ack-reason"
+        type="textarea"
+        :rows="3"
+        maxlength="500"
+        placeholder="处理原因（必填；审计不记录原文）"
+      />
+      <template #footer>
+        <el-button data-testid="ack-cancel" @click="ackDialog.visible = false">取消</el-button>
+        <el-button type="primary" data-testid="ack-submit" :loading="saving" @click="submitAck">
+          提交
+        </el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -711,5 +1233,18 @@ onMounted(load)
 .record__create {
   display: flex;
   gap: 12px;
+}
+
+.record__drug-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.record__drug-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 </style>

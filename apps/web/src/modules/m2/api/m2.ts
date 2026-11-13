@@ -256,3 +256,122 @@ export function recordFluidRecord(
 export function getIntakeOutputSummary(recordId: string): Promise<IntakeOutputSummary> {
   return http.get<IntakeOutputSummary>(`/v1/anesthesia/records/${recordId}/io-summary`)
 }
+
+/* ---------------------------------------------------------------------------
+ * 术中预警与抢救记录（anesthesia.yaml 0.7.0，M3-M2-02）
+ * 规则版本化（保存=新版本）；告警由采集落库事件实时评估、前端 5–10s 轮询兜底，
+ * 手动 evaluate 仅调试/补偿；抢救记录 append-only 并留痕负责人/参与人员。
+ * 临床阈值默认值标【待确认】，以临床顾问确认为准。
+ * ------------------------------------------------------------------------- */
+
+export type AlertRule = anesthesiaComponents['schemas']['AlertRule']
+export type AlertRuleList = anesthesiaComponents['schemas']['AlertRuleList']
+export type UpdateAlertRuleRequest = anesthesiaComponents['schemas']['UpdateAlertRuleRequest']
+export type Alert = anesthesiaComponents['schemas']['Alert']
+export type AlertList = anesthesiaComponents['schemas']['AlertList']
+export type AcknowledgeAlertRequest = anesthesiaComponents['schemas']['AcknowledgeAlertRequest']
+export type AlertEvaluationResult = anesthesiaComponents['schemas']['AlertEvaluationResult']
+export type ResuscitationRecord = anesthesiaComponents['schemas']['ResuscitationRecord']
+export type ResuscitationRecordList = anesthesiaComponents['schemas']['ResuscitationRecordList']
+export type CreateResuscitationRequest =
+  anesthesiaComponents['schemas']['CreateResuscitationRequest']
+export type ResuscitationDrug = anesthesiaComponents['schemas']['ResuscitationDrug']
+export type ResuscitationParticipant = anesthesiaComponents['schemas']['ResuscitationParticipant']
+export type ResuscitationEventSummary = anesthesiaComponents['schemas']['ResuscitationEventSummary']
+export type AlertSeverity = Alert['severity']
+export type AlertStatus = Alert['status']
+export type AlertMetric = Alert['metric']
+export type ResusType = ResuscitationRecord['resusType']
+export type ResusOutcome = ResuscitationRecord['outcome']
+
+/** 指标中文标签（单位由服务端返回的 unit 展示）。 */
+export const alertMetricLabels: Record<string, string> = {
+  HR: '心率',
+  SPO2: '血氧饱和度',
+  MAP: '平均动脉压',
+  ETCO2: '呼气末二氧化碳',
+  TEMP: '体温',
+}
+
+/** 严重度中文标签。 */
+export const alertSeverityLabels: Record<string, string> = {
+  INFO: '提示',
+  WARN: '警告',
+  CRITICAL: '严重',
+}
+
+/** 处理状态中文标签。 */
+export const alertStatusLabels: Record<string, string> = {
+  TRIGGERED: '待处理',
+  ACKNOWLEDGED: '已确认',
+  IGNORED: '已忽略',
+}
+
+/** 抢救类型中文标签（枚举口径【待确认】）。 */
+export const resusTypeLabels: Record<string, string> = {
+  CPR: '心肺复苏',
+  AIRWAY: '气道干预',
+  VASOPRESSOR: '血管活性药支持',
+  DEFIBRILLATION: '电除颤',
+  OTHER: '其他',
+}
+
+/** 抢救转归中文标签（【待确认】）。 */
+export const resusOutcomeLabels: Record<string, string> = {
+  SUCCESS: '复苏成功',
+  PARTIAL: '部分改善',
+  FAILED: '未成功',
+  UNKNOWN: '未记录',
+}
+
+/** 规则列表：每个规则编码返回当前版本（含启用状态）。 */
+export function listAlertRules(): Promise<AlertRuleList> {
+  return http.get<AlertRuleList>('/v1/anesthesia/alert-rules')
+}
+
+/** 规则历史版本（version 倒序，用于告警 ruleVersion 追溯）。 */
+export function listAlertRuleVersions(ruleId: string): Promise<AlertRuleList> {
+  return http.get<AlertRuleList>(`/v1/anesthesia/alert-rules/${ruleId}/versions`)
+}
+
+/** 保存规则：生成新版本并停用旧版本；必须回传当前 version（过期 409）。 */
+export function updateAlertRule(
+  ruleId: string,
+  payload: UpdateAlertRuleRequest,
+): Promise<AlertRule> {
+  return http.put<AlertRule>(`/v1/anesthesia/alert-rules/${ruleId}`, payload)
+}
+
+/** 记录单告警列表（只读；实时告警由采集落库事件评估产生）。 */
+export function listRecordAlerts(recordId: string): Promise<AlertList> {
+  return http.get<AlertList>(`/v1/anesthesia/records/${recordId}/alerts`)
+}
+
+/** 手动评估（调试/采集补偿）：按水位只处理新采样，不重评历史窗口。 */
+export function evaluateRecordAlerts(recordId: string): Promise<AlertEvaluationResult> {
+  return http.post<AlertEvaluationResult>(`/v1/anesthesia/records/${recordId}/alerts/evaluate`)
+}
+
+/** 确认/忽略告警：只允许一次流转，重复处理 409；reason 必填。 */
+export function acknowledgeAlert(
+  alertId: string,
+  payload: AcknowledgeAlertRequest,
+): Promise<Alert> {
+  return http.post<Alert>(`/v1/anesthesia/alerts/${alertId}/acknowledge`, payload)
+}
+
+/** 抢救记录列表（按开始时间倒序）。 */
+export function listResuscitations(recordId: string): Promise<ResuscitationRecordList> {
+  return http.get<ResuscitationRecordList>(`/v1/anesthesia/records/${recordId}/resuscitations`)
+}
+
+/** 新增抢救记录（append-only；时间窗必须落在记录单时间窗内）。 */
+export function createResuscitation(
+  recordId: string,
+  payload: CreateResuscitationRequest,
+): Promise<ResuscitationRecord> {
+  return http.post<ResuscitationRecord>(
+    `/v1/anesthesia/records/${recordId}/resuscitations`,
+    payload,
+  )
+}

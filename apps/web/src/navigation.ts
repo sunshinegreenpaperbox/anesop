@@ -63,6 +63,12 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m2:record:read'],
   },
   {
+    path: '/m2/alert-rules',
+    title: '预警规则',
+    icon: 'lock',
+    permissions: ['m2:alert:configure'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',

@@ -15,6 +15,7 @@ import ThreeWayCheckEntryView from '../modules/m2/views/ThreeWayCheckEntryView.v
 import ThreeWayCheckView from '../modules/m2/views/ThreeWayCheckView.vue'
 import RecordEntryView from '../modules/m2/views/RecordEntryView.vue'
 import RecordView from '../modules/m2/views/RecordView.vue'
+import AlertRuleConfigView from '../modules/m2/views/AlertRuleConfigView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -146,6 +147,12 @@ export const routes: RouteRecordRaw[] = [
           permissions: ['m2:record:read'],
           menu: false,
         },
+      },
+      {
+        path: 'm2/alert-rules',
+        name: 'm2-alert-rules',
+        component: AlertRuleConfigView,
+        meta: menuMeta('/m2/alert-rules'),
       },
       {
         path: 'm0/sessions',
