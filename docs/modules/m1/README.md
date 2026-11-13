@@ -1,7 +1,7 @@
 # M1 手术排程管理（模块说明）
 
-> 状态：M2-M1-01「手术申请接收与校验」+ M2-M2-01「排程工作台与冲突检测」落地版（2026-11-13）。
-> 契约：`packages/contracts/openapi/scheduling.yaml` 0.4.0、`patient.yaml` 0.3.0；
+> 状态：M2-M1-01「手术申请接收与校验」+ M2-M2-01「排程工作台与冲突检测」+ M2-M2-02「停改台与急诊加台」落地版（2026-11-13）。
+> 契约：`packages/contracts/openapi/scheduling.yaml` 0.5.0、`patient.yaml` 0.3.0；
 > 方案书：§2.4.2（M1 手术排程）、§2.7.1（HIS 集成）、§3.4.2/§3.4.3（实体与数据库）、
 > §3.5.3（I-01a/I-01b）、§3.9.2（RBAC/数据权限）、§3.9.3（加密脱敏）。
 > 全部示例、演示账号、患者、术间与申请均为 **SYNTHETIC** 合成数据。
@@ -15,9 +15,10 @@ M1 负责围术期排程上游的“手术申请接收与校验”和“术间/�
 - 提供申请分页/详情/取消与状态历史，向下游排程、术前访视（M2-M4-01）供数；
 - 提供排程/申请所需的患者脱敏摘要（姓名、性别、出生日期/年龄、脱敏住院号、科室/病区/床号），
   **不提供证件号与手机号**（含脱敏值）；
-- 维护术间主数据与日排程台次，提供规则引擎冲突检测（创建/调整事务内复检，409 + conflicts[]）。
+- 维护术间主数据与日排程台次，提供规则引擎冲突检测（创建/调整事务内复检，409 + conflicts[]）；
+- 停台/改台/急诊加台与变更留痕：原因码白名单、审批矩阵、抢占择期台次、通知 outbox（模拟）。
 
-非目标：停改台/急诊加台（M2-M2-02）、排程分析（M2-M6-01）、设备依赖与人员资质主数据（M3）。
+非目标：排程分析（M2-M6-01）、设备依赖与人员资质主数据（M3）、真实短信/企业微信通知（EXT）。
 
 ## 2. 代码结构
 
@@ -42,7 +43,7 @@ apps/api/modules/m1/
 模块边界：`m1-impl` 只依赖 `m1-api`、`m0-api`（认证主体、数据范围、审计）与基础设施；
 不访问其他模块 impl，不跨 schema 读写 M0 表。`api-bootstrap` 是唯一依赖 `m1-impl` 的装配点。
 
-## 3. 接口（scheduling 0.4.0 与 patient 0.3.0）
+## 3. 接口（scheduling 0.5.0 与 patient 0.3.0）
 
 ### 3.1 手术申请与患者摘要
 
@@ -70,6 +71,9 @@ SYS_ADMIN/SYS_SURGEON/SYS_OR_MANAGER）并受数据范围约束；旧 `GET /v1/p
 | PUT | `/v1/scheduling/schedules/{scheduleId}` | `rescheduleSchedule` | `m1:schedule:write` | 调整时间/术间/台次序号；必须回传 `version`，冲突/过期 409 |
 | POST | `/v1/scheduling/schedules/{scheduleId}/cancel` | `cancelSchedule` | `m1:schedule:write` | 停台/取消；原因码 + 原因 + 版本 |
 | POST | `/v1/scheduling/schedules/conflicts` | `detectScheduleConflicts` | `m1:schedule:read` | 只读冲突预检（不落库），供工作台即时提示 |
+| POST | `/v1/scheduling/schedules/{scheduleId}/stop` | `stopSchedule` | `m1:schedule:write`（IN_PROGRESS 另需 `m1:schedule:approve`） | 停台状态机 + 原因码白名单 + 变更/审计/通知；返回 CANCELLED 台次 |
+| GET | `/v1/scheduling/schedules/{scheduleId}/changes` | `listScheduleChanges` | `m1:schedule:read` | 变更历史（STOP/MODIFY/EMERGENCY + 审批/抢占关系），受数据范围约束 |
+| POST | `/v1/scheduling/emergency-cases` | `addEmergencyCase` | `m1:schedule:approve` | 急诊加台（201 + approval）；可抢占冲突中的择期台次 |
 
 旧 `POST /v1/scheduling/conflicts/check`（`checkScheduleConflict`）标记 `deprecated`，计划 1.0.0
 删除；**0.4.0 仍映射到同一 `checkConflicts` 服务方法**（响应与新端点逐字节一致），不得删除
@@ -119,9 +123,51 @@ PLANNED ─→ PUBLISHED ─→ IN_PROGRESS ─→ COMPLETED
 - 创建时 `CreateScheduleRequest.priority` 落库为 `schedule.priority`（0=ELECTIVE/1=URGENT/
   2=EMERGENCY），响应按库值回显；`staffIds`/`equipmentTags` 在契约标 `x-deferred: true`
   （M2-M2-02/M3 实现，当前服务端忽略）；
-- `IN_PROGRESS`/`COMPLETED`/`CANCELLED` 台次不允许调整或取消（409）；
+- `IN_PROGRESS`/`COMPLETED`/`CANCELLED` 台次不允许原始 0.4.0 `cancel`（409）；新停台端点
+  的矩阵见 §4.3；
 - 每个申请同一时刻只允许一个未取消台次（V8 部分唯一索引 `uk_schedule_application_active`）；
-- 创建/调整/取消分别写 `SCHEDULE_CREATE/SCHEDULE_UPDATE/SCHEDULE_CANCEL` 审计。
+- 创建/调整/旧取消分别写 `SCHEDULE_CREATE/SCHEDULE_UPDATE/SCHEDULE_CANCEL` 审计。
+
+### 4.3 停台状态机与审批矩阵（M2-M2-02）
+
+```text
+PLANNED / PUBLISHED / DELAYED ──stop（m1:schedule:write）──→ CANCELLED
+IN_PROGRESS ──stop（须 m1:schedule:approve）──────────────→ CANCELLED
+COMPLETED / CANCELLED ──stop──────────────────────────────→ 409 STATE_CONFLICT
+任意状态 + version 过期 ─────────────────────────────────→ 409 VERSION_CONFLICT
+```
+
+| 操作 | 所需权限 | 变更记录 | 审计 | 通知 outbox |
+|---|---|---|---|---|
+| 计划停台（PLANNED/PUBLISHED/DELAYED） | `m1:schedule:write` | STOP/APPROVED | `SCHEDULE_STOP` | `SCHEDULE_STOPPED` |
+| 术中停台（IN_PROGRESS） | `m1:schedule:write` + `m1:schedule:approve`，缺 approve 403 | STOP/APPROVED | `SCHEDULE_STOP` | `SCHEDULE_STOPPED` |
+| 改台（PUT） | `m1:schedule:write`；`reasonCode` **必填**且在白名单 | MODIFY/APPROVED | `SCHEDULE_UPDATE` | `SCHEDULE_MODIFIED` |
+| 旧取消（`/cancel`，0.4.0 兼容） | `m1:schedule:write`；IN_PROGRESS 409 | STOP/APPROVED | `SCHEDULE_CANCEL` | `SCHEDULE_STOPPED` |
+| 急诊加台 | `m1:schedule:approve`，缺权限 403 | EMERGENCY/APPROVED | `SCHEDULE_EMERGENCY_CREATE` | `EMERGENCY_SCHEDULED` |
+| 急诊抢占择期台次 | `m1:schedule:approve`；目标须 PLANNED/PUBLISHED 且 priority=ELECTIVE | 原台次 STOP + 急诊 EMERGENCY（各一条） | `SCHEDULE_PREEMPT` | `SCHEDULE_PREEMPTED` |
+
+- 原因码白名单：停台 `PATIENT_CONDITION`/`SURGEON_UNAVAILABLE`/`ROOM_EQUIPMENT_FAILURE`/
+  `ANESTHESIA_RISK`/`SCHEDULE_CHANGE`/`OTHER`；改台另含 `SCHEDULE_ADJUST`（0.5.0 起必填，
+  不预填、不静默补默认码）；急诊 `EMERGENCY_GREEN_CHANNEL`/`EMERGENCY_PREEMPT`/`OTHER`。
+  缺失/非白名单 400（`details[].field=reasonCode`）。
+- 变更记录 `m1_sched.schedule_change_request`：MVP 由执行人直接批准（status=APPROVED，
+  requested_by=approved_by），PENDING/REJECTED 预留给后续双人审批（EXT，需院方确认审批流）。
+  表为**完全 append-only**：审批结果在同一事务内以 APPROVED 行写入，V9 触发器拒绝
+  UPDATE/DELETE/TRUNCATE（SQLSTATE 55000），事后更正只能新增记录（B-2）。
+- **上线前风险登记（Q-2）**：MVP 单人审批存在自我审批风险；正式上线前必须引入独立审批角色/
+  双人双控（M6 审批流），并以 ADR-0012 为前置条件，不得以当前单人审批直接用于生产。
+- 急诊抢占规则：仅 `ROOM_OVERLAP` 冲突可通过抢占消除；术者/患者/术间类型冲突仍 409。未指定
+  `preemptScheduleId` 时返回 409 + `conflicts[]`，前端按 `conflictingScheduleId` 提示候选；
+  抢占成功后原择期台次 `CANCELLED`、reason=`EMERGENCY_PREEMPT`、版本 +1，保留原时段供统计，
+  并写 STOP 变更记录（`preempt_schedule_id`=急诊台次）便于双向追溯。抢占目标在事务内
+  `SELECT ... FOR UPDATE` 锁定后复检状态/优先级/术间/时段，任一变化返回 409
+  `PREEMPT_CONFLICT`，并与并发改台/停台按“advisory → 术间行 → 被抢占行”顺序加锁（B-1）；
+  STOP 留痕说明可配置（`anesop.m1.schedule.preempt-reason`），默认中性文案、不含 PHI（S-2）。
+- 通知端口 **SIMULATED**：`NotificationPort` 写 `m1_sched.notification_outbox`（PENDING），
+  `NotificationDispatcher` 每次 drain 1 条（`FOR UPDATE SKIP LOCKED`）→ SENT；失败按 60s×次数
+  退避，3 次后 FAILED（固定文案，不含 PHI）。payload 只含台次/申请/术间/变更标识与原因码，
+  数据库 `ck_notification_outbox_no_phi` 拒绝 PHI 键、`ck_notification_outbox_no_phi_value`
+  拒绝 15 位以上连续数字（身份证/长住院号值级兜底）。真实短信/企业微信为 **EXT**（待院方）。
 
 ## 5. HIS 适配器与 EXT-01
 
@@ -164,10 +210,11 @@ PLANNED ─→ PUBLISHED ─→ IN_PROGRESS ─→ COMPLETED
   `m1:application:write`（SYS_ADMIN、SYS_OR_MANAGER）与 `m1:patient:read`
   （SYS_ADMIN、SYS_SURGEON、SYS_OR_MANAGER，患者摘要最小权限）；V2 的 `m1:access` 菜单占位保留；
 - V8 新增 `m1:schedule:read`/`m1:schedule:write`，**仅授 SYS_ADMIN、SYS_OR_MANAGER**（最小权限：
-  外科/麻醉医师不直接改排程）；
+  外科/麻醉医师不直接改排程）；V9 新增 `m1:schedule:approve`（同样仅授 SYS_ADMIN、
+  SYS_OR_MANAGER），用于术中停台与急诊加台/抢占；
 - 审计动作：`SURGERY_APPLICATION_CREATE/IMPORT/CANCEL`（resource_type=`SURGERY_APPLICATION`）
-  与 `SCHEDULE_CREATE/UPDATE/CANCEL`（resource_type=`SCHEDULE`，detail 只含 applicationId/roomId/
-  时段/序号/reasonCode）；
+  与 `SCHEDULE_CREATE/UPDATE/CANCEL/STOP/PREEMPT/EMERGENCY_CREATE`（resource_type=`SCHEDULE`，
+  detail 只含 applicationId/roomId/时段/序号/reasonCode/changeId）；
 - 403 由 `ApiExceptionHandler` 写 `ACCESS_DENIED` 审计；审计 detail 只含状态、来源、原因码等非 PHI 字段。
 
 ## 8. 排程规则引擎（`SchedulingRule` + 注册表）

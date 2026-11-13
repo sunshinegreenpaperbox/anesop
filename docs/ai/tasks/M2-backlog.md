@@ -26,7 +26,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 | M2-M0-03 | E2E-04 越权 + 登录 E2E + 覆盖率 ratchet 清理 | `apps/web/e2e/**`、各 `src/test/**`、根 pom | M1 | Done（m0 96/87、gateway 91/77；ratchet 清零；9 E2E） |
 | M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Review（blocking/建议已修：B-1/B-2/B-3 + S-1…S-9 + Q-1…Q-3；待复审） |
 | M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Review（独立评审 blocking B-1…B-4 与 S-1…S-9 已修，待复审） |
-| M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Blocked |
+| M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Review（独立评审 B-1/B-2 + S-1…S-7 + Q-1…Q-3 已修；待复审） |
 | M2-M4-01 | 术前访视与评估 | `anesthesia.yaml` 扩展、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V8*` | M2-M1-01 | Blocked |
 | M2-M5-01 | 知情同意与三方核查 | anesthesia 契约（三方核查已定义）、m2 模块 | M2-M4-01 | Blocked |
 | M2-M6-01 | 排程分析（利用率/准点/取消） | m1 读模型、M6 报表引擎或 m1 分析接口 | M2-M2-01 | Blocked |
@@ -114,6 +114,58 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
   E2E-01（409→提示→改术间成功）。测试：m1-impl 单测 94（新增规则 15 + 服务 34），m1-impl
   覆盖率 94.79%/74.11%；集成 `SchedulingApiIntegrationTest` 8 用例（含两线程并发同室同窗恰一成功）。
   范围外必要改动：`m0-impl` 的 `M1MigrationTest` 表清单断言加入 V8 两表（仅测试夹具，无 m0 业务代码变更）。
+
+### M2-M2-02 停改台与急诊加台
+- 目标：停台/改台（原因码、审批、变更留痕、通知）；急诊加台优先于择期，可抢占冲突择期台次；
+  变更历史查询；通知端口（模拟）与 outbox。
+- 验收：停台状态机（PLANNED/PUBLISHED 直停；IN_PROGRESS 需 approve，否则 403）；原因码白名单
+  （非法 400）；急诊加台审批（无 approve 403）与抢占（原择期 CANCELLED + 审计/通知）；未指定
+  抢占遇冲突 409 + conflicts[]；改台写 MODIFY 变更；changes 查询按数据范围；并发仍不超排；
+  outbox 无 PHI；契约 baseline/TS/Java 同步；mvn verify + 前端四门禁全绿；独立 review。
+
+- 落地说明（Review）：契约 scheduling **0.5.0**（additive）：新增
+  `POST /v1/scheduling/schedules/{scheduleId}/stop`（200 + CANCELLED）、
+  `GET /v1/scheduling/schedules/{scheduleId}/changes`、急诊 201 + `approval`、
+  请求 `preemptScheduleId/expectedEnd/sequenceNo`、改台可选 `reasonCode`；旧 `.../cancel` 与
+  急诊 200 后经复审移除（Q-3）。V9 `m1_sched.schedule_change_request`（STOP/MODIFY/EMERGENCY，
+  审批一致性/原因码 CHECK，preempt 自引用 FK）与 `m1_sched.notification_outbox`
+  （PENDING/SENT/FAILED + 退避字段 + `ck_notification_outbox_no_phi` 禁 PHI 键）+ 权限
+  `m1:schedule:approve`（SYS_ADMIN/SYS_OR_MANAGER）。后端：`SchedulingServiceImpl.stop/
+  addEmergency/listChanges`，事务内术间行锁 + advisory 锁，急诊抢占仅消除 ROOM_OVERLAP，
+  写变更/审计（`SCHEDULE_STOP/PREEMPT/EMERGENCY_CREATE`）/outbox；`NotificationPort`
+  （SIMULATED）+ `SimulatedNotificationPort` + `NotificationDispatcher`（每次 drain 1 条，
+  SKIP LOCKED，3 次失败 FAILED）；`@Scheduled` 轮询默认开、测试 profile 关。前端：
+  `ScheduleBoardView` 停台/改台原因码对话框、急诊加台（冲突内抢占 CTA）、变更历史抽屉；
+  E2E 停台 + 急诊抢占（API 拦截）。测试：m1-impl 新增 24 个单测（服务 15：停台状态机/原因码/403、
+  改台、急诊审批/抢占/409、changes；通知派发 6 + 模拟端口 3），api-bootstrap 新增 8 用例
+  （含并发急诊不超排、outbox PHI 约束），M1MigrationTest 增 V9 结构断言；实测 m1-impl 行/分支 **93.67%/71.25%**（≥80/70）。范围外必要改动：`apps/api/modules/m0/impl/.../M1MigrationTest.java`
+  的表清单与 V9 断言（仅测试夹具，无 m0 业务代码变更）。
+
+- 复审修复（2026-11-13，独立评审 B-1/B-2 + S-1…S-7 + Q-1…Q-3）：
+  - **B-1** 急诊抢占目标新增 `ScheduleMapper.selectByIdForUpdate`（`SELECT ... FOR UPDATE`），
+    锁内复检 status（PLANNED/PUBLISHED）、priority（ELECTIVE）、roomId 与时间窗；不满足 409
+    `PREEMPT_CONFLICT`。留痕/审计/outbox 改用复检后实体，锁顺序 advisory → 术间行 → 被抢占行。
+    新增 CyclicBarrier 用例：并发“改台移出 + 急诊抢占”（恰一成功、不误停）、并发重复 stop
+    （变更/审计/outbox 各 1 条）。
+  - **B-2** V9 为 `schedule_change_request` 加完全 append-only 触发器（拒绝 UPDATE/DELETE/
+    TRUNCATE，SQLSTATE 55000）；审批结果同事务直接写 APPROVED 行；迁移测试断言三种改写均被拒。
+  - **S-1** 旧 `/cancel` 复用 `writeStopTrail`（change_request + outbox + 审计）。
+  - **S-2** 抢占 STOP 说明改为可配置中性文案 `anesop.m1.schedule.preempt-reason`。
+  - **S-3** Controller `addEmergency` 改为 `hasAuthority(PERM_m1:schedule:approve)`，服务层双保险。
+  - **S-4** `ScheduleChange/EmergencyApproval` 的 `approvedBy/approvedAt` 标 `nullable`（3.1 语法），
+    baseline/TS 同步。
+  - **S-5** 前端单测真实触发术中停台 403（按钮对 write 用户可见、服务端双保险拒绝）；E2E 新增
+    无审批术中停台 403 用例。
+  - **S-6** 抢占按钮 Element Plus `ElMessageBox.confirm` 二次确认，文案含被抢占台次信息。
+  - **S-7** 急诊缺省台次序号按术间计数；`GET .../changes` 增加 `page/size/meta`（additive）；
+    outbox 增加值级 PHI 约束 `ck_notification_outbox_no_phi_value`（15 位以上连续数字）；
+    新增多实例 SKIP LOCKED 并发派发用例（两条各处理一次、attempts=1）。
+  - **Q-1** PUT 改台 `reasonCode` 契约必填（缺失 400），前端不预填、必须选择；baseline/TS/
+    服务/单测/集成同步。
+  - **Q-2** `docs/modules/m1/README.md` §4.3 与 ADR-0012 登记：上线前需独立审批角色/双人双控（M6）。
+  - **Q-3** 移除急诊端点不可达的 200 响应，仅保留 201；文档同步。
+  - 契约兼容说明：Q-1/Q-3 相对 HEAD 的 0.4.0 baseline 属未发布窗口收紧，登记 ADR-0012；
+    `contract-check.sh` HEAD baseline 需在提交评审通过的 0.5.0 baseline 后转绿（不绕过门禁）。
 
 ### M2-M4-01 术前访视与评估
 - 目标：访视单（病史/气道/ASA）、评分（RCRI/Apfel/STOP-BANG/Mallampati）、麻醉计划、签署状态；
