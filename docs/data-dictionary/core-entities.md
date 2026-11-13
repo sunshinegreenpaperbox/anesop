@@ -163,27 +163,37 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 
 ## 3. M2 麻醉信息
 
-### 3.1 术前访视 `preop_visit`
+### 3.1 术前访视与评估 `m2_anes.preop_assessment`（V10 已实现，M2-M4-01）
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `visit_id` | bigint | 是 | 主键 | 契约 `PreopVisit` |
-| `record_id` | bigint | 是 | 麻醉记录单 | §2.4.3 |
-| `schedule_id` | bigint | 是 | 排程 | §2.4.3 |
-| `patient_id` | bigint | 是 | 患者 | §2.4.3 |
-| `history` | text | 是 | 病史摘要 | §2.4.3；自由文本，禁止入日志 |
-| `mallampati` | varchar | 是 | 气道 Mallampati 分级 I–IV | §2.4.3、glossary |
-| `asa_class` | varchar | 是 | ASA 分级 I–VI | §2.4.3、glossary |
-| `rcri_score` | smallint | 是 | RCRI 评分 | §2.4.3 |
-| `apfel_score` | smallint | 是 | Apfel PONV 评分 | §2.4.3 |
-| `stop_bang_score` | smallint | 是 | STOP-BANG 评分 | §2.4.3 |
-| `dasi_score` | numeric | 是 | DASI 指数 | §2.4.3；按院方口径配置，通行 DASI 0–58.2，【待确认】 |
-| `anesthesia_plan` | text | 是 | 麻醉计划 | §2.4.3 |
-| `consent_signed` | boolean | 是 | 知情同意是否签署 | §2.4.3 |
-| `status` | varchar | 是 | 访视状态 | 契约枚举 |
-| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
+| `id` | uuid | 是 | 主键 | 契约 `PreopAssessment.assessmentId` |
+| `application_id` | uuid | 是 | 手术申请（物理 FK + 逻辑外键） | §2.4.3；可见性沿用 M1 申请数据范围 |
+| `patient_id` | uuid | 是 | 患者标识 | 与申请患者一致；不存住院号明文 |
+| `patient_snapshot` | jsonb | 是 | 患者快照（院内患者号/姓名/性别/年龄/住院号脱敏值/科室病区床号） | §3.9.3；无证件号/手机号；created 时由 M1 申请服务端回填 |
+| `history_summary` | text | 是 | 病史要点 | §2.4.3；自由文本，禁止入日志/审计 |
+| `asa_class` | varchar(8) | 是 | ASA 分级 I–VI | §2.4.3、glossary |
+| `mallampati` | varchar(8) | 是 | 气道 Mallampati 分级 I–IV | §2.4.3、glossary |
+| `airway_details` | jsonb | 是 | 张口度 cm/颈椎活动度/气道备注 | §2.4.3；描述性字段不评分 |
+| `score_input` | jsonb | 是 | RCRI 6/Apfel 4/STOP-BANG 8/DASI 12 项勾选 | 复算与审计事实源 |
+| `rcri_score` / `apfel_score` / `stopbang_score` | smallint | 是 | 服务端计算的分数（0–6 / 0–4 / 0–8） | §2.4.3；客户端不得直接写 |
+| `dasi_score` | numeric(5,2) | 是 | DASI 指数 0–58.2（12 项权重） | §2.4.3；院方口径【待确认】 |
+| `rcri_risk` / `apfel_risk` / `stopbang_risk` / `risk_level` | varchar(16) | 是 | 各量表与综合风险分级 LOW/MODERATE/HIGH | 综合规则【待确认】 |
+| `functional_capacity_low` | boolean | 是 | DASI 估算 <4 METs | 切点【待确认】，不参与综合风险 |
+| `calculator_version` | varchar(16) | 是 | 量表实现版本 | 复算依据，当前 1.0.0 |
+| `scores` | jsonb | 是 | 服务端评分结果快照（只读） | 含分数/分级/计算时间/版本 |
+| `plan_type` | varchar(32) | 是 | 麻醉计划类型 | GENERAL/REGIONAL/COMBINED/MAC/SEDATION |
+| `airway_plan` | varchar(500) | 否 | 气道方案 | 描述性文本 |
+| `plan_notes` | text | 否 | 计划备注 | 禁止入日志 |
+| `status` | varchar(16) | 是 | DRAFT/FINALIZED | 最终化后只读，只能新建版本；DB 触发器拒绝最终化行 UPDATE |
+| `finalize_note` | varchar(500) | 否 | 最终化说明 | 只落库，不写入日志/审计 |
+| `finalized_at` / `finalized_by` | timestamptz / uuid | 否 | 最终化时间/操作人 | 与 status 一致性 CHECK |
+| 审计字段 | — | 是 | created_at/by、updated_at/by、version、deleted | §3.4.3 |
 
-说明：评分项与阈值可按院方口径配置（§2.4.3）；阈值配置表结构【待确认】。
+说明：旧契约 `PreopVisit`（0.2.0 骨架）保留但未落表；新接口使用 `PreopAssessment`（0.3.0）。
+评分项与阈值可按院方口径配置（§2.4.3）：当前以 `anesop.m2.preop.*` 配置属性实现
+（RCRI/Apfel/STOP-BANG 三级切点、DASI <4 METs 换算、量表版本），阈值配置表结构【待确认】；
+评分口径与 Q 登记详见 `docs/modules/m2/README.md` §4、§10。
 
 ### 3.2 麻醉记录单 `anesthesia_record`
 
@@ -311,7 +321,8 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 | `SurgeryApplication` | `surgery_application` | `applicationNo` 幂等 |
 | `OperatingRoom` | `operating_room` | 静态配置；实时状态另承载 |
 | `Schedule` | `schedule` | 冲突检测与版本 |
-| `PreopVisit` | `preop_visit` | 评分与麻醉计划 |
+| `PreopAssessment` | `m2_anes.preop_assessment` | 评分输入/结果、麻醉计划、最终化（V10） |
+| `PreopVisit`（0.2.0 骨架） | 未落表 | 保留兼容，计划 1.0.0 收敛 |
 | `AnesthesiaRecord` | `anesthesia_record` | 状态机与锁单 |
 | `ThreeWayCheck` | `three_way_check` | 三方核查，锁单前置条件 |
 | `AnesthesiaEvent` | `anesthesia_event` | 事件时间/录入时间分离 |
@@ -326,7 +337,7 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 3. 角色/权限/数据范围四张表的最终表名、权限点编码规范。
 4. 排程 `sequence_no` 唯一约束、跨天排程与改台记录是否独立成表。
 5. 麻醉记录单修订版本表、`record_hash` 算法与 CA 签名字段；三方核查是否独立成表。
-6. DASI 评分范围（通行 0–58.2）与院方口径，待临床确认。
+6. DASI 评分范围（V10 起按通行 0–58.2 实现）与院方口径、功能容量 <4 METs 切点，待临床确认。
 7. 用药剂量单位/途径字典、麻精双人核对签名字段与空安瓿台账。
 8. 生命体征指标编码、单位、采样间隔、波形存储（D-04）。
 9. 复苏记录评分项与转出阈值、随访量表口径。

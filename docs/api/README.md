@@ -1,6 +1,6 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.5.0`、`anesthesia 0.3.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -12,7 +12,7 @@ packages/contracts/
 │   ├── auth.yaml          # 认证、令牌、当前用户、会话
 │   ├── patient.yaml       # 患者主索引、手术申请
 │   ├── scheduling.yaml    # 术间、排程、冲突、急诊加台、停台
-│   ├── anesthesia.yaml    # 术前访视、记录单、锁单、三方核查、随访
+│   ├── anesthesia.yaml    # 术前访视与评估、记录单、锁单、三方核查、随访
 │   └── baseline/          # 当前已发布兼容基线（4 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
@@ -25,8 +25,8 @@ packages/contracts/
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
 | `scheduling.yaml` | 13 | 16 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史 | §2.4.2、§2.3.2、§3.4.2 |
-| `anesthesia.yaml` | 6 | 10 | 术前访视读写、记录单读写、锁单、三方核查读写、随访创建/查询/列表 | §2.4.3、§3.4.2、§3.9.4 |
-| **合计** | **36** | **45** | 4 个限界上下文骨架 | — |
+| `anesthesia.yaml` | 9 | 15 | 术前访视与评估（0.3.0）、旧访视骨架读写、记录单读写、锁单、三方核查读写、随访创建/查询/列表 | §2.4.3、§3.4.2、§3.9.4 |
+| **合计** | **39** | **50** | 4 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -135,6 +135,42 @@ packages/contracts/
   并记录无 PHI 日志，`NotificationDispatcher` 轮询 PENDING → SENT（失败退避，3 次后 FAILED）；
   真实短信/企业微信通道为 **EXT**，接入前 payload 白名单与数据库 `ck_notification_outbox_no_phi`
   双重禁止 PHI。
+
+### 3.4 术前访视与评估（M2-M4-01，anesthesia 0.3.0 additive）
+
+> 0.3.0 只新增路径与 schema，未修改既有 `PreopVisit` 字段；旧
+> `GET/PUT /v1/anesthesia/preop-visits/{visitId}` 保留但已标 `deprecated: true`（ADR-0011
+> 弃用窗口），新代码使用 preop-assessments。示例中的资源标识统一为 UUID 字符串。
+> baseline/HEAD baseline/生成物漂移三门禁全 PASS。
+
+- **列表** `GET /v1/anesthesia/preop-assessments?applicationId=`（`listPreopAssessments`）：
+  `m2:preop:read`；返回 `application`（申请上下文：患者快照/术式/科室/申请状态）与 `items`
+  （访视单，创建时间倒序）。申请不存在或超出数据范围按集合语义 **403**（不返回空列表、
+  不泄露存在性）；缺 `applicationId` 400。
+- **创建** `POST /v1/anesthesia/preop-assessments`（`createPreopAssessment`）：`m2:preop:write`；
+  **201** + `PreopAssessment`。请求只提交 `scoreInput`（RCRI 6 项/Apfel 4 项/STOP-BANG 8 项/
+  DASI 12 项勾选），**不接收分数**（客户端提交 `scores` 被忽略，服务端重算）；`dasiActivities`
+  重复项不做静默去重，显式 400；患者快照由服务端从申请回填（客户端姓名/年龄等被忽略），
+  仅 `patientId/hisPatientNo` 必须与申请一致，否则 400；申请不存在/不可见 422；
+  同一申请已有草稿 409。
+- **详情** `GET /v1/anesthesia/preop-assessments/{assessmentId}`（`getPreopAssessment`）：
+  `m2:preop:read`；不存在或超出数据范围 404。
+- **保存草稿** `PUT /v1/anesthesia/preop-assessments/{assessmentId}`（`updatePreopAssessment`）：
+  `m2:preop:write`；全量替换病史/气道/ASA/评分输入/计划并重算评分；必须回传 `version`；
+  已最终化或版本过期 409。
+- **最终化** `POST /v1/anesthesia/preop-assessments/{assessmentId}/finalize`
+  （`finalizePreopAssessment`）：`m2:preop:write`；DRAFT→FINALIZED，记录 `finalizedAt/By`
+  与可选的 `note`（落库 `finalize_note`，不入日志）；已最终化或版本过期 409；最终化后只能为
+  同一申请新建版本（新记录），原单保留评分快照与审计；数据库触发器拒绝 FINALIZED 行 UPDATE
+  与任何 DELETE/TRUNCATE（SQLSTATE 55000）。
+- **评分结果只读**：`scores` 含 `rcriScore/rcriRisk`、`apfelScore/apfelRisk`、
+  `stopBangScore/stopBangRisk`、`dasiScore`（0–58.2，保留 2 位小数）、`functionalCapacityLow`、
+  `riskLevel`、`calculatedAt`、`calculatorVersion`；契约中 `scores` 标 `readOnly: true`。
+  口径由 `anesop.m2.preop.*` 配置，【待确认】项见
+  `docs/modules/m2/README.md` §4；客户端不得直接写分数。
+- **权限与审计**：V10 新增 `m2:preop:read|write`（SYS_ADMIN/SYS_ANESTHESIOLOGIST/
+  SYS_NURSE_ANESTHETIST）；写操作审计 `PREOP_CREATE/PREOP_UPDATE/PREOP_FINALIZE`，detail 不含
+  姓名与病史原文。
 
 ## 4. 错误模型
 
@@ -255,7 +291,8 @@ pnpm -C packages/contracts check:breaking   # 仅 breaking
 
 - **角色/权限映射待办**：角色 R1–R12 与权限码（如 `anesthesia.record.lock`）的对应关系由 S0-07 定稿并回写契约与权限矩阵；本契约不自造映射表。
 - CA 签名与时间戳的厂商、接口与验签方式（§3.9.4，标【待确认】）；当前契约只保留 `signatureStatus`，不写外部 CA 接口。
-- DASI 取值范围按院方口径配置（通行 DASI 0–58.2，待临床确认），契约不设上限。
+- DASI 取值范围按院方口径配置：0.3.0 起服务端按通行 DASI 0–58.2 计算（12 项权重、保留 2 位小数），
+  功能容量 <4 METs 的换算与院方切点【待确认】；契约示例与校验上限为 58.2，配置表后续落地。
 - 会话与刷新令牌的最终时效、是否强制双因素，需安全评审确认（当前示例 1800 秒 / 30 分钟）。
 - 排程冲突已落地时间重叠/术者/患者/术间类型/时间窗五类规则；设备依赖、隔离与人员资质的
   字段与字典编码在 M2-M2-02/M3 资质模块评审后补充（枚举值已预留）。

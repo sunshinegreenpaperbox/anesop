@@ -7,7 +7,7 @@ info:
     硬规则：记录以事件时间为准、补录标注录入时间与原因、锁单后只能生成修订版本、三方核查
     （ThreeWayCheck 的 timeOutAt/signOutAt 均须记录）未完成不允许锁单。
     所有示例均为 SYNTHETIC 合成数据。
-  version: 0.2.0
+  version: 0.3.0
   contact:
     name: ANESOP 项目组
   license:
@@ -24,6 +24,7 @@ paths:
   /v1/anesthesia/preop-visits/{visitId}:
     get:
       operationId: getPreopVisit
+      deprecated: true
       tags:
         - 麻醉记录
       summary: 查询术前访视
@@ -31,7 +32,7 @@ paths:
       parameters:
         - name: visitId
           in: path
-          description: 术前访视标识（雪花 ID 字符串）。
+          description: 术前访视标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -43,10 +44,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/PreopVisit'
               example:
-                visitId: '1100000000000000001'
-                recordId: '1200000000000000001'
-                scheduleId: '8000000000000000001'
-                patientId: '5000000000000000001'
+                visitId: '11000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                scheduleId: '80000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 history: 演示病史（高血压，规律服药；合成数据）
@@ -60,9 +61,9 @@ paths:
                 consentSigned: true
                 status: SIGNED
                 createdAt: '2026-11-20T09:00:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-11-25T14:00:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 2
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -72,6 +73,7 @@ paths:
           $ref: '#/components/responses/NotFound'
     put:
       operationId: updatePreopVisit
+      deprecated: true
       tags:
         - 麻醉记录
       summary: 保存术前访视
@@ -79,7 +81,7 @@ paths:
       parameters:
         - name: visitId
           in: path
-          description: 术前访视标识（雪花 ID 字符串）。
+          description: 术前访视标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -108,10 +110,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/PreopVisit'
               example:
-                visitId: '1100000000000000001'
-                recordId: '1200000000000000001'
-                scheduleId: '8000000000000000001'
-                patientId: '5000000000000000001'
+                visitId: '11000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                scheduleId: '80000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 history: 演示病史（高血压，规律服药；合成数据）
@@ -125,9 +127,656 @@ paths:
                 consentSigned: true
                 status: SIGNED
                 createdAt: '2026-11-20T09:00:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-11-25T15:10:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/preop-assessments:
+    get:
+      operationId: listPreopAssessments
+      tags:
+        - 麻醉记录
+      summary: 按手术申请查询术前访视与评估
+      description: |
+        返回指定手术申请下的术前访视与评估单（按创建时间倒序；同一申请可有多份，
+        最终化后只能新建版本）以及申请上下文（患者快照/术式/申请状态）。评分结果由
+        服务端计算，响应 scores 为只读字段。
+        数据范围沿用 M1 申请可见性：申请不存在或超出数据范围时按“集合查询越权”返回 403，
+        不返回空列表、不泄露存在性。
+      parameters:
+        - name: applicationId
+          in: query
+          description: 手术申请标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 申请上下文与访视单列表；无访视单时 items 为空数组。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreopAssessmentList'
+              example:
+                application:
+                  applicationId: '60000000-0000-4000-8000-000000000001'
+                  patientId: '50000000-0000-4000-8000-000000000001'
+                  patientSnapshot:
+                    patientId: '50000000-0000-4000-8000-000000000001'
+                    hisPatientNo: SYNTH-HIS-P-0001
+                    patientName: 演示患者
+                    gender: FEMALE
+                    birthDate: '1972-05-18'
+                    age: 54
+                    departmentName: 演示手术科室（合成）
+                    ward: 演示病区（合成）
+                    bedNo: '01'
+                  surgeryName: 演示腹腔镜胆囊切除术（合成）
+                  departmentName: 演示手术科室（合成）
+                  status: SCHEDULED
+                items:
+                  - assessmentId: '16000000-0000-4000-8000-000000000001'
+                    applicationId: '60000000-0000-4000-8000-000000000001'
+                    patientId: '50000000-0000-4000-8000-000000000001'
+                    patientSnapshot:
+                      patientId: '50000000-0000-4000-8000-000000000001'
+                      hisPatientNo: SYNTH-HIS-P-0001
+                      patientName: 演示患者
+                      gender: FEMALE
+                      birthDate: '1972-05-18'
+                      age: 54
+                      departmentName: 演示手术科室（合成）
+                      ward: 演示病区（合成）
+                      bedNo: '01'
+                    historySummary: 演示病史（高血压，规律服药；合成数据）
+                    asaClass: II
+                    airwayAssessment:
+                      mallampati: II
+                      mouthOpeningCm: 4.5
+                      cervicalSpineMobility: NORMAL
+                      notes: 演示气道评估（合成数据）
+                    scoreInput:
+                      rcri:
+                        highRiskSurgery: true
+                        ischemicHeartDisease: false
+                        congestiveHeartFailure: false
+                        cerebrovascularDisease: false
+                        insulinDependentDiabetes: false
+                        renalImpairment: false
+                      apfel:
+                        female: true
+                        ponvOrMotionSicknessHistory: true
+                        nonSmoker: true
+                        postoperativeOpioid: true
+                      stopBang:
+                        snoring: true
+                        tiredness: true
+                        observedApnea: false
+                        hypertension: true
+                        bmiOver35: false
+                        ageOver50: true
+                        neckCircumferenceOver40: false
+                        male: false
+                      dasiActivities:
+                        - SELF_CARE
+                        - WALK_INDOORS
+                        - WALK_BLOCK
+                        - CLIMB_STAIRS
+                        - LIGHT_HOUSEHOLD_WORK
+                        - MODERATE_HOUSEHOLD_WORK
+                    scores:
+                      rcriScore: 1
+                      rcriRisk: MODERATE
+                      apfelScore: 4
+                      apfelRisk: HIGH
+                      stopBangScore: 4
+                      stopBangRisk: MODERATE
+                      dasiScore: 18.95
+                      functionalCapacityLow: false
+                      riskLevel: HIGH
+                      calculatedAt: '2026-11-28T09:10:00+08:00'
+                      calculatorVersion: '1.0.0'
+                    plan:
+                      planType: GENERAL
+                      airwayPlan: 气管插管（合成示例）
+                      notes: 演示麻醉计划（合成数据）
+                    status: DRAFT
+                    finalizedAt: null
+                    finalizedBy: null
+                    createdAt: '2026-11-28T09:10:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000002'
+                    updatedAt: '2026-11-28T09:10:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000002'
+                    version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createPreopAssessment
+      tags:
+        - 麻醉记录
+      summary: 创建术前访视与评估（草稿）
+      description: |
+        按手术申请创建访视单草稿。请求只提交评分输入（scoreInput），RCRI/Apfel/STOP-BANG/DASI
+        分数与风险等级由服务端计算并写入 scores；客户端不得直接提交分数。
+        applicationId 必须存在、对调用方可见且处于 SUBMITTED/ACCEPTED/SCHEDULED；
+        患者快照的 patientId/hisPatientNo 必须与申请患者一致。同一申请同时只允许一份草稿，
+        重复创建返回 409。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreopAssessmentCreateRequest'
+            example:
+              applicationId: '60000000-0000-4000-8000-000000000001'
+              patientSnapshot:
+                patientId: '50000000-0000-4000-8000-000000000001'
+                hisPatientNo: SYNTH-HIS-P-0001
+                patientName: 演示患者
+                gender: FEMALE
+                birthDate: '1972-05-18'
+                age: 54
+                departmentName: 演示手术科室（合成）
+                ward: 演示病区（合成）
+                bedNo: '01'
+              historySummary: 演示病史（高血压，规律服药；合成数据）
+              asaClass: II
+              airwayAssessment:
+                mallampati: II
+                mouthOpeningCm: 4.5
+                cervicalSpineMobility: NORMAL
+                notes: 演示气道评估（合成数据）
+              scoreInput:
+                rcri:
+                  highRiskSurgery: true
+                  ischemicHeartDisease: false
+                  congestiveHeartFailure: false
+                  cerebrovascularDisease: false
+                  insulinDependentDiabetes: false
+                  renalImpairment: false
+                apfel:
+                  female: true
+                  ponvOrMotionSicknessHistory: true
+                  nonSmoker: true
+                  postoperativeOpioid: true
+                stopBang:
+                  snoring: true
+                  tiredness: true
+                  observedApnea: false
+                  hypertension: true
+                  bmiOver35: false
+                  ageOver50: true
+                  neckCircumferenceOver40: false
+                  male: false
+                dasiActivities:
+                  - SELF_CARE
+                  - WALK_INDOORS
+                  - WALK_BLOCK
+                  - CLIMB_STAIRS
+                  - LIGHT_HOUSEHOLD_WORK
+                  - MODERATE_HOUSEHOLD_WORK
+              plan:
+                planType: GENERAL
+                airwayPlan: 气管插管（合成示例）
+                notes: 演示麻醉计划（合成数据）
+      responses:
+        '201':
+          description: 创建成功，返回服务端计算的评分与风险等级。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreopAssessment'
+              example:
+                assessmentId: '16000000-0000-4000-8000-000000000001'
+                applicationId: '60000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                patientSnapshot:
+                  patientId: '50000000-0000-4000-8000-000000000001'
+                  hisPatientNo: SYNTH-HIS-P-0001
+                  patientName: 演示患者
+                  gender: FEMALE
+                  birthDate: '1972-05-18'
+                  age: 54
+                  departmentName: 演示手术科室（合成）
+                  ward: 演示病区（合成）
+                  bedNo: '01'
+                historySummary: 演示病史（高血压，规律服药；合成数据）
+                asaClass: II
+                airwayAssessment:
+                  mallampati: II
+                  mouthOpeningCm: 4.5
+                  cervicalSpineMobility: NORMAL
+                  notes: 演示气道评估（合成数据）
+                scoreInput:
+                  rcri:
+                    highRiskSurgery: true
+                    ischemicHeartDisease: false
+                    congestiveHeartFailure: false
+                    cerebrovascularDisease: false
+                    insulinDependentDiabetes: false
+                    renalImpairment: false
+                  apfel:
+                    female: true
+                    ponvOrMotionSicknessHistory: true
+                    nonSmoker: true
+                    postoperativeOpioid: true
+                  stopBang:
+                    snoring: true
+                    tiredness: true
+                    observedApnea: false
+                    hypertension: true
+                    bmiOver35: false
+                    ageOver50: true
+                    neckCircumferenceOver40: false
+                    male: false
+                  dasiActivities:
+                    - SELF_CARE
+                    - WALK_INDOORS
+                    - WALK_BLOCK
+                    - CLIMB_STAIRS
+                    - LIGHT_HOUSEHOLD_WORK
+                    - MODERATE_HOUSEHOLD_WORK
+                scores:
+                  rcriScore: 1
+                  rcriRisk: MODERATE
+                  apfelScore: 4
+                  apfelRisk: HIGH
+                  stopBangScore: 4
+                  stopBangRisk: MODERATE
+                  dasiScore: 18.95
+                  functionalCapacityLow: false
+                  riskLevel: HIGH
+                  calculatedAt: '2026-11-28T09:10:00+08:00'
+                  calculatorVersion: '1.0.0'
+                plan:
+                  planType: GENERAL
+                  airwayPlan: 气管插管（合成示例）
+                  notes: 演示麻醉计划（合成数据）
+                status: DRAFT
+                finalizedAt: null
+                finalizedBy: null
+                createdAt: '2026-11-28T09:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+                updatedAt: '2026-11-28T09:10:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000002'
+                version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/anesthesia/preop-assessments/{assessmentId}:
+    get:
+      operationId: getPreopAssessment
+      tags:
+        - 麻醉记录
+      summary: 查询术前访视与评估详情
+      description: 返回访视单、服务端评分结果与最终化状态；不存在或超出数据范围返回 404（不泄露存在性）。
+      parameters:
+        - name: assessmentId
+          in: path
+          description: 术前访视与评估标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 访视单详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreopAssessment'
+              example:
+                assessmentId: '16000000-0000-4000-8000-000000000001'
+                applicationId: '60000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                patientSnapshot:
+                  patientId: '50000000-0000-4000-8000-000000000001'
+                  hisPatientNo: SYNTH-HIS-P-0001
+                  patientName: 演示患者
+                  gender: FEMALE
+                  birthDate: '1972-05-18'
+                  age: 54
+                  departmentName: 演示手术科室（合成）
+                  ward: 演示病区（合成）
+                  bedNo: '01'
+                historySummary: 演示病史（高血压，规律服药；合成数据）
+                asaClass: II
+                airwayAssessment:
+                  mallampati: II
+                  mouthOpeningCm: 4.5
+                  cervicalSpineMobility: NORMAL
+                  notes: 演示气道评估（合成数据）
+                scoreInput:
+                  rcri:
+                    highRiskSurgery: true
+                    ischemicHeartDisease: false
+                    congestiveHeartFailure: false
+                    cerebrovascularDisease: false
+                    insulinDependentDiabetes: false
+                    renalImpairment: false
+                  apfel:
+                    female: true
+                    ponvOrMotionSicknessHistory: true
+                    nonSmoker: true
+                    postoperativeOpioid: true
+                  stopBang:
+                    snoring: true
+                    tiredness: true
+                    observedApnea: false
+                    hypertension: true
+                    bmiOver35: false
+                    ageOver50: true
+                    neckCircumferenceOver40: false
+                    male: false
+                  dasiActivities:
+                    - SELF_CARE
+                    - WALK_INDOORS
+                    - WALK_BLOCK
+                    - CLIMB_STAIRS
+                    - LIGHT_HOUSEHOLD_WORK
+                    - MODERATE_HOUSEHOLD_WORK
+                scores:
+                  rcriScore: 1
+                  rcriRisk: MODERATE
+                  apfelScore: 4
+                  apfelRisk: HIGH
+                  stopBangScore: 4
+                  stopBangRisk: MODERATE
+                  dasiScore: 18.95
+                  functionalCapacityLow: false
+                  riskLevel: HIGH
+                  calculatedAt: '2026-11-28T09:10:00+08:00'
+                  calculatorVersion: '1.0.0'
+                plan:
+                  planType: GENERAL
+                  airwayPlan: 气管插管（合成示例）
+                  notes: 演示麻醉计划（合成数据）
+                status: FINALIZED
+                finalizedAt: '2026-11-28T10:00:00+08:00'
+                finalizedBy: '10000000-0000-4000-8000-000000000002'
+                createdAt: '2026-11-28T09:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+                updatedAt: '2026-11-28T10:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000002'
+                version: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updatePreopAssessment
+      tags:
+        - 麻醉记录
+      summary: 保存术前访视与评估（草稿）
+      description: |
+        全量替换草稿的病史、气道、ASA、评分输入与麻醉计划，服务端重新计算评分；必须回传
+        version 做乐观锁。已最终化（FINALIZED）的访视单不可修改，返回 409，只能为同一申请
+        新建版本（新记录）并保留原单审计与评分快照。
+      parameters:
+        - name: assessmentId
+          in: path
+          description: 术前访视与评估标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreopAssessmentUpdateRequest'
+            example:
+              version: 1
+              historySummary: 演示病史（高血压、糖尿病，规律服药；合成数据）
+              asaClass: III
+              airwayAssessment:
+                mallampati: III
+                mouthOpeningCm: 3.8
+                cervicalSpineMobility: LIMITED
+                notes: 演示气道评估（合成数据）
+              scoreInput:
+                rcri:
+                  highRiskSurgery: true
+                  ischemicHeartDisease: true
+                  congestiveHeartFailure: false
+                  cerebrovascularDisease: false
+                  insulinDependentDiabetes: true
+                  renalImpairment: false
+                apfel:
+                  female: true
+                  ponvOrMotionSicknessHistory: true
+                  nonSmoker: false
+                  postoperativeOpioid: true
+                stopBang:
+                  snoring: true
+                  tiredness: true
+                  observedApnea: true
+                  hypertension: true
+                  bmiOver35: false
+                  ageOver50: true
+                  neckCircumferenceOver40: false
+                  male: false
+                dasiActivities:
+                  - SELF_CARE
+                  - WALK_INDOORS
+                  - LIGHT_HOUSEHOLD_WORK
+              plan:
+                planType: COMBINED
+                airwayPlan: 气管插管 + 桡动脉穿刺（合成示例）
+                notes: 演示麻醉计划（合成数据）
+      responses:
+        '200':
+          description: 保存成功，返回重新计算的评分与风险等级。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreopAssessment'
+              example:
+                assessmentId: '16000000-0000-4000-8000-000000000001'
+                applicationId: '60000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                patientSnapshot:
+                  patientId: '50000000-0000-4000-8000-000000000001'
+                  hisPatientNo: SYNTH-HIS-P-0001
+                  patientName: 演示患者
+                  gender: FEMALE
+                  birthDate: '1972-05-18'
+                  age: 54
+                  departmentName: 演示手术科室（合成）
+                  ward: 演示病区（合成）
+                  bedNo: '01'
+                historySummary: 演示病史（高血压、糖尿病，规律服药；合成数据）
+                asaClass: III
+                airwayAssessment:
+                  mallampati: III
+                  mouthOpeningCm: 3.8
+                  cervicalSpineMobility: LIMITED
+                  notes: 演示气道评估（合成数据）
+                scoreInput:
+                  rcri:
+                    highRiskSurgery: true
+                    ischemicHeartDisease: true
+                    congestiveHeartFailure: false
+                    cerebrovascularDisease: false
+                    insulinDependentDiabetes: true
+                    renalImpairment: false
+                  apfel:
+                    female: true
+                    ponvOrMotionSicknessHistory: true
+                    nonSmoker: false
+                    postoperativeOpioid: true
+                  stopBang:
+                    snoring: true
+                    tiredness: true
+                    observedApnea: true
+                    hypertension: true
+                    bmiOver35: false
+                    ageOver50: true
+                    neckCircumferenceOver40: false
+                    male: false
+                  dasiActivities:
+                    - SELF_CARE
+                    - WALK_INDOORS
+                    - LIGHT_HOUSEHOLD_WORK
+                scores:
+                  rcriScore: 3
+                  rcriRisk: HIGH
+                  apfelScore: 3
+                  apfelRisk: HIGH
+                  stopBangScore: 5
+                  stopBangRisk: HIGH
+                  dasiScore: 7.2
+                  functionalCapacityLow: true
+                  riskLevel: HIGH
+                  calculatedAt: '2026-11-28T09:40:00+08:00'
+                  calculatorVersion: '1.0.0'
+                plan:
+                  planType: COMBINED
+                  airwayPlan: 气管插管 + 桡动脉穿刺（合成示例）
+                  notes: 演示麻醉计划（合成数据）
+                status: DRAFT
+                finalizedAt: null
+                finalizedBy: null
+                createdAt: '2026-11-28T09:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+                updatedAt: '2026-11-28T09:40:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000002'
+                version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/preop-assessments/{assessmentId}/finalize:
+    post:
+      operationId: finalizePreopAssessment
+      tags:
+        - 麻醉记录
+      summary: 最终化术前访视与评估
+      description: |
+        将草稿置为 FINALIZED 并记录最终化时间/操作人；最终化后访视单不可修改（409），
+        只能为同一申请新建版本。必须回传 version；已最终化或版本过期返回 409。
+        成功写 PREOP_FINALIZE 审计（不记录患者姓名、病史原文）。
+      parameters:
+        - name: assessmentId
+          in: path
+          description: 术前访视与评估标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinalizePreopAssessmentRequest'
+            example:
+              version: 2
+              note: 访视完成，麻醉计划已与患者沟通（合成示例）
+      responses:
+        '200':
+          description: 最终化成功，返回 FINALIZED 状态与最终化人/时间。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreopAssessment'
+              example:
+                assessmentId: '16000000-0000-4000-8000-000000000001'
+                applicationId: '60000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                patientSnapshot:
+                  patientId: '50000000-0000-4000-8000-000000000001'
+                  hisPatientNo: SYNTH-HIS-P-0001
+                  patientName: 演示患者
+                  gender: FEMALE
+                  birthDate: '1972-05-18'
+                  age: 54
+                  departmentName: 演示手术科室（合成）
+                  ward: 演示病区（合成）
+                  bedNo: '01'
+                historySummary: 演示病史（高血压、糖尿病，规律服药；合成数据）
+                asaClass: III
+                airwayAssessment:
+                  mallampati: III
+                  mouthOpeningCm: 3.8
+                  cervicalSpineMobility: LIMITED
+                  notes: 演示气道评估（合成数据）
+                scoreInput:
+                  rcri:
+                    highRiskSurgery: true
+                    ischemicHeartDisease: true
+                    congestiveHeartFailure: false
+                    cerebrovascularDisease: false
+                    insulinDependentDiabetes: true
+                    renalImpairment: false
+                  apfel:
+                    female: true
+                    ponvOrMotionSicknessHistory: true
+                    nonSmoker: false
+                    postoperativeOpioid: true
+                  stopBang:
+                    snoring: true
+                    tiredness: true
+                    observedApnea: true
+                    hypertension: true
+                    bmiOver35: false
+                    ageOver50: true
+                    neckCircumferenceOver40: false
+                    male: false
+                  dasiActivities:
+                    - SELF_CARE
+                    - WALK_INDOORS
+                    - LIGHT_HOUSEHOLD_WORK
+                scores:
+                  rcriScore: 3
+                  rcriRisk: HIGH
+                  apfelScore: 3
+                  apfelRisk: HIGH
+                  stopBangScore: 5
+                  stopBangRisk: HIGH
+                  dasiScore: 7.2
+                  functionalCapacityLow: true
+                  riskLevel: HIGH
+                  calculatedAt: '2026-11-28T09:40:00+08:00'
+                  calculatorVersion: '1.0.0'
+                plan:
+                  planType: COMBINED
+                  airwayPlan: 气管插管 + 桡动脉穿刺（合成示例）
+                  notes: 演示麻醉计划（合成数据）
+                status: FINALIZED
+                finalizedAt: '2026-11-28T10:00:00+08:00'
+                finalizedBy: '10000000-0000-4000-8000-000000000002'
+                createdAt: '2026-11-28T09:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+                updatedAt: '2026-11-28T10:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000002'
                 version: 3
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -149,7 +798,7 @@ paths:
       parameters:
         - name: recordId
           in: path
-          description: 麻醉记录单标识（雪花 ID 字符串）。
+          description: 麻醉记录单标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -161,9 +810,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/AnesthesiaRecord'
               example:
-                recordId: '1200000000000000001'
-                scheduleId: '8000000000000000001'
-                patientId: '5000000000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                scheduleId: '80000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 status: IN_PROGRESS
@@ -171,18 +820,18 @@ paths:
                 startedAt: '2026-12-01T08:40:00+08:00'
                 endedAt: null
                 events:
-                  - eventId: '1300000000000000001'
+                  - eventId: '13000000-0000-4000-8000-000000000001'
                     eventType: INDUCTION
                     occurredAt: '2026-12-01T08:45:00+08:00'
                     source: MANUAL
                     note: 演示诱导事件（合成数据）
                     entryReason: null
                     recordedAt: '2026-12-01T08:46:00+08:00'
-                    recordedBy: '1000000000000000001'
+                    recordedBy: '10000000-0000-4000-8000-000000000001'
                 createdAt: '2026-12-01T08:35:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-12-01T08:46:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 5
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -201,7 +850,7 @@ paths:
       parameters:
         - name: recordId
           in: path
-          description: 麻醉记录单标识（雪花 ID 字符串）。
+          description: 麻醉记录单标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -215,14 +864,14 @@ paths:
               anesthesiaType: GENERAL
               version: 5
               events:
-                - eventId: '1300000000000000002'
+                - eventId: '13000000-0000-4000-8000-000000000002'
                   eventType: INTUBATION
                   occurredAt: '2026-12-01T08:55:00+08:00'
                   source: MANUAL
                   note: 演示插管事件（合成数据）
                   entryReason: null
                   recordedAt: '2026-12-01T08:56:00+08:00'
-                  recordedBy: '1000000000000000001'
+                  recordedBy: '10000000-0000-4000-8000-000000000001'
       responses:
         '200':
           description: 保存成功，返回更新后的记录单。
@@ -231,9 +880,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/AnesthesiaRecord'
               example:
-                recordId: '1200000000000000001'
-                scheduleId: '8000000000000000001'
-                patientId: '5000000000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                scheduleId: '80000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 status: IN_PROGRESS
@@ -241,18 +890,18 @@ paths:
                 startedAt: '2026-12-01T08:40:00+08:00'
                 endedAt: null
                 events:
-                  - eventId: '1300000000000000002'
+                  - eventId: '13000000-0000-4000-8000-000000000002'
                     eventType: INTUBATION
                     occurredAt: '2026-12-01T08:55:00+08:00'
                     source: MANUAL
                     note: 演示插管事件（合成数据）
                     entryReason: null
                     recordedAt: '2026-12-01T08:56:00+08:00'
-                    recordedBy: '1000000000000000001'
+                    recordedBy: '10000000-0000-4000-8000-000000000001'
                 createdAt: '2026-12-01T08:35:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-12-01T08:56:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 6
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -277,7 +926,7 @@ paths:
       parameters:
         - name: recordId
           in: path
-          description: 麻醉记录单标识（雪花 ID 字符串）。
+          description: 麻醉记录单标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -298,10 +947,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/LockRecordResult'
               example:
-                id: '1200000000000000001'
+                id: '12000000-0000-4000-8000-000000000001'
                 status: LOCKED
                 lockedAt: '2026-12-01T11:30:00+08:00'
-                lockedBy: '1000000000000000001'
+                lockedBy: '10000000-0000-4000-8000-000000000001'
                 signatureStatus: PENDING
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -323,7 +972,7 @@ paths:
       parameters:
         - name: recordId
           in: path
-          description: 麻醉记录单标识（雪花 ID 字符串）。
+          description: 麻醉记录单标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -335,18 +984,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ThreeWayCheck'
               example:
-                checkId: '1500000000000000001'
-                recordId: '1200000000000000001'
+                checkId: '15000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
                 timeOutAt: '2026-12-01T08:50:00+08:00'
-                timeOutBy: '1000000000000000002'
+                timeOutBy: '10000000-0000-4000-8000-000000000002'
                 signOutAt: '2026-12-01T10:55:00+08:00'
-                signOutBy: '1000000000000000001'
+                signOutBy: '10000000-0000-4000-8000-000000000001'
                 specimenChecked: true
                 implantChecked: true
                 createdAt: '2026-12-01T10:55:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-12-01T10:55:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 1
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -365,7 +1014,7 @@ paths:
       parameters:
         - name: recordId
           in: path
-          description: 麻醉记录单标识（雪花 ID 字符串）。
+          description: 麻醉记录单标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -377,9 +1026,9 @@ paths:
               $ref: '#/components/schemas/UpsertThreeWayCheckRequest'
             example:
               timeOutAt: '2026-12-01T08:50:00+08:00'
-              timeOutBy: '1000000000000000002'
+              timeOutBy: '10000000-0000-4000-8000-000000000002'
               signOutAt: '2026-12-01T10:55:00+08:00'
-              signOutBy: '1000000000000000001'
+              signOutBy: '10000000-0000-4000-8000-000000000001'
               specimenChecked: true
               implantChecked: true
               version: 1
@@ -391,18 +1040,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ThreeWayCheck'
               example:
-                checkId: '1500000000000000001'
-                recordId: '1200000000000000001'
+                checkId: '15000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
                 timeOutAt: '2026-12-01T08:50:00+08:00'
-                timeOutBy: '1000000000000000002'
+                timeOutBy: '10000000-0000-4000-8000-000000000002'
                 signOutAt: '2026-12-01T10:55:00+08:00'
-                signOutBy: '1000000000000000001'
+                signOutBy: '10000000-0000-4000-8000-000000000001'
                 specimenChecked: true
                 implantChecked: true
                 createdAt: '2026-12-01T10:55:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-12-01T11:10:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 2
         '201':
           description: 三方核查创建成功。
@@ -411,18 +1060,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ThreeWayCheck'
               example:
-                checkId: '1500000000000000001'
-                recordId: '1200000000000000001'
+                checkId: '15000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
                 timeOutAt: '2026-12-01T08:50:00+08:00'
-                timeOutBy: '1000000000000000002'
+                timeOutBy: '10000000-0000-4000-8000-000000000002'
                 signOutAt: '2026-12-01T10:55:00+08:00'
-                signOutBy: '1000000000000000001'
+                signOutBy: '10000000-0000-4000-8000-000000000001'
                 specimenChecked: true
                 implantChecked: true
                 createdAt: '2026-12-01T10:55:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-12-01T10:55:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 1
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -483,9 +1132,9 @@ paths:
                 $ref: '#/components/schemas/FollowUpPage'
               example:
                 items:
-                  - followUpId: '1400000000000000001'
-                    recordId: '1200000000000000001'
-                    patientId: '5000000000000000001'
+                  - followUpId: '14000000-0000-4000-8000-000000000001'
+                    recordId: '12000000-0000-4000-8000-000000000001'
+                    patientId: '50000000-0000-4000-8000-000000000001'
                     patientNo: SYNTH-P-0001
                     patientName: 演示患者
                     followUpHours: 24
@@ -495,9 +1144,9 @@ paths:
                     satisfaction: 5
                     completedAt: '2026-12-02T10:00:00+08:00'
                     createdAt: '2026-12-02T10:00:00+08:00'
-                    createdBy: '1000000000000000001'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
                     updatedAt: '2026-12-02T10:00:00+08:00'
-                    updatedBy: '1000000000000000001'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
                     version: 1
                 meta:
                   page: 1
@@ -521,7 +1170,7 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateFollowUpRequest'
             example:
-              recordId: '1200000000000000001'
+              recordId: '12000000-0000-4000-8000-000000000001'
               followUpHours: 24
               painScore: 2
               ponv: false
@@ -536,9 +1185,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/FollowUp'
               example:
-                followUpId: '1400000000000000001'
-                recordId: '1200000000000000001'
-                patientId: '5000000000000000001'
+                followUpId: '14000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 followUpHours: 24
@@ -548,9 +1197,9 @@ paths:
                 satisfaction: 5
                 completedAt: '2026-12-02T10:00:00+08:00'
                 createdAt: '2026-12-02T10:00:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-12-02T10:00:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 1
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -572,7 +1221,7 @@ paths:
       parameters:
         - name: followUpId
           in: path
-          description: 随访标识（雪花 ID 字符串）。
+          description: 随访标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -584,9 +1233,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/FollowUp'
               example:
-                followUpId: '1400000000000000001'
-                recordId: '1200000000000000001'
-                patientId: '5000000000000000001'
+                followUpId: '14000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 followUpHours: 24
@@ -596,9 +1245,9 @@ paths:
                 satisfaction: 5
                 completedAt: '2026-12-02T10:00:00+08:00'
                 createdAt: '2026-12-02T10:00:00+08:00'
-                createdBy: '1000000000000000001'
+                createdBy: '10000000-0000-4000-8000-000000000001'
                 updatedAt: '2026-12-02T10:00:00+08:00'
-                updatedBy: '1000000000000000001'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 1
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -787,7 +1436,7 @@ components:
       properties:
         id:
           type: string
-          description: 雪花 ID 序列化后的字符串，避免前端精度丢失。
+          description: UUID 字符串；示例统一使用 8-4-4-4-12 形式。
     PreopVisit:
       type: object
       description: 术前访视；评分项与阈值可按院方口径配置。
@@ -939,6 +1588,542 @@ components:
           type: integer
           description: 当前版本号。
           minimum: 1
+    PreopPatientSnapshot:
+      type: object
+      description: |
+        术前访视内的患者快照（SYNTHETIC 示例）。created 时由服务端按手术申请（M1 患者快照）
+        强制回填，客户端提交的姓名/性别/年龄等字段不落库；仅 patientId/hisPatientNo 用于
+        一致性校验，与申请不一致返回 400。只含姓名、性别、出生日期/年龄、院内患者号、
+        住院号脱敏值与科室/病区/床号；不含证件号、手机号与住院号明文。
+      required:
+        - patientId
+        - hisPatientNo
+        - patientName
+        - gender
+        - age
+        - departmentName
+      properties:
+        patientId:
+          type: string
+          description: 患者标识（UUID 字符串）；必须与手术申请的患者一致。
+        hisPatientNo:
+          type: string
+          description: HIS 患者号；必须与手术申请的患者号一致，否则 400。
+        inpatientNoMasked:
+          type: [string, 'null']
+          description: 住院号脱敏值（服务端由 M1 患者快照回填）；不返回住院号明文。
+        patientName:
+          type: string
+          description: 患者姓名；示例统一使用“演示患者”。
+        gender:
+          type: string
+          description: 性别。
+          enum:
+            - MALE
+            - FEMALE
+            - UNKNOWN
+        birthDate:
+          type: [string, 'null']
+          format: date
+          description: 出生日期；按最小必要返回，缺失时为 null。
+        age:
+          type: integer
+          description: 年龄（岁）。
+          minimum: 0
+          maximum: 150
+        departmentName:
+          type: string
+          description: 患者所属科室名称。
+        ward:
+          type: [string, 'null']
+          description: 病区；缺失时为 null。
+        bedNo:
+          type: [string, 'null']
+          description: 床号；缺失时为 null。
+    PreopAirwayAssessment:
+      type: object
+      description: |
+        气道评估。Mallampati 分级按 Samsoon & Young 改良分级（I–IV）；张口度与颈椎活动度
+        为描述性字段，仅记录不参与评分；张口度切点与困难气道综合判断【待确认】。
+      required:
+        - mallampati
+        - mouthOpeningCm
+        - cervicalSpineMobility
+      properties:
+        mallampati:
+          type: string
+          description: Mallampati 分级（I–IV）。
+          enum:
+            - I
+            - II
+            - III
+            - IV
+        mouthOpeningCm:
+          type: number
+          description: 张口度（厘米，门齿间距）；只记录测量值，困难气道切点【待确认】。
+          minimum: 0
+          maximum: 10
+        cervicalSpineMobility:
+          type: string
+          description: 颈椎活动度（描述性；不参与评分）。
+          enum:
+            - NORMAL
+            - LIMITED
+            - FIXED
+            - UNASSESSED
+        notes:
+          type: [string, 'null']
+          maxLength: 500
+          description: 气道评估备注（演示文本，不入日志）；服务端上限 500 字符。
+    PreopRcriInput:
+      type: object
+      description: |
+        修订版心脏风险指数（RCRI，Lee 1999）6 个预测因子，每项 1 分。
+        计分与切点：0=低危、1=中危、≥2=高危（公开量表口径；院方口径【待确认】）。
+      required:
+        - highRiskSurgery
+        - ischemicHeartDisease
+        - congestiveHeartFailure
+        - cerebrovascularDisease
+        - insulinDependentDiabetes
+        - renalImpairment
+      properties:
+        highRiskSurgery:
+          type: boolean
+          description: 高危手术（腹腔内、胸腔内或腹股沟以上血管手术）。
+        ischemicHeartDisease:
+          type: boolean
+          description: 缺血性心脏病史。
+        congestiveHeartFailure:
+          type: boolean
+          description: 充血性心力衰竭史。
+        cerebrovascularDisease:
+          type: boolean
+          description: 脑血管病史。
+        insulinDependentDiabetes:
+          type: boolean
+          description: 胰岛素依赖型糖尿病。
+        renalImpairment:
+          type: boolean
+          description: 肾功能不全（血清肌酐 > 2.0 mg/dL 或 177 µmol/L）。
+    PreopApfelInput:
+      type: object
+      description: |
+        Apfel 简化 PONV 风险评分 4 个预测因子，每项 1 分（Apfel 1999）。
+        计分与切点：0–1=低危、2=中危、≥3=高危（对应公开研究 10%/21%/39%/61%/79% 口径；
+        院方口径【待确认】）。
+      required:
+        - female
+        - ponvOrMotionSicknessHistory
+        - nonSmoker
+        - postoperativeOpioid
+      properties:
+        female:
+          type: boolean
+          description: 女性。
+        ponvOrMotionSicknessHistory:
+          type: boolean
+          description: 既往 PONV 或晕动症史。
+        nonSmoker:
+          type: boolean
+          description: 不吸烟。
+        postoperativeOpioid:
+          type: boolean
+          description: 术后使用阿片类药物。
+    PreopStopBangInput:
+      type: object
+      description: |
+        STOP-BANG OSA 筛查 8 个条目，每项 1 分（Chung 2008）。
+        计分与切点：0–2=低危、3–4=中危、5–8=高危（公开量表口径；院方口径【待确认】）。
+      required:
+        - snoring
+        - tiredness
+        - observedApnea
+        - hypertension
+        - bmiOver35
+        - ageOver50
+        - neckCircumferenceOver40
+        - male
+      properties:
+        snoring:
+          type: boolean
+          description: 打鼾（Snoring）。
+        tiredness:
+          type: boolean
+          description: 白天嗜睡/疲乏（Tiredness）。
+        observedApnea:
+          type: boolean
+          description: 目击呼吸暂停（Observed apnea）。
+        hypertension:
+          type: boolean
+          description: 高血压（Pressure）。
+        bmiOver35:
+          type: boolean
+          description: BMI > 35 kg/m²。
+        ageOver50:
+          type: boolean
+          description: 年龄 > 50 岁。
+        neckCircumferenceOver40:
+          type: boolean
+          description: 颈围 > 40 cm。
+        male:
+          type: boolean
+          description: 男性（Gender）。
+    PreopScoreInput:
+      type: object
+      description: |
+        评分输入（只含量表条目，不含分数）。RCRI/Apfel/STOP-BANG/DASI 分数与风险等级由
+        服务端计算，客户端提交的任何分数均被忽略或拒绝。
+      required:
+        - rcri
+        - apfel
+        - stopBang
+        - dasiActivities
+      properties:
+        rcri:
+          $ref: '#/components/schemas/PreopRcriInput'
+        apfel:
+          $ref: '#/components/schemas/PreopApfelInput'
+        stopBang:
+          $ref: '#/components/schemas/PreopStopBangInput'
+        dasiActivities:
+          type: array
+          description: |
+            杜克活动状态指数（DASI，Hlatky 1989）中患者**能够完成**的活动项；服务端按量表
+            权重求和（0–58.2）。空数组表示均不能完成（0 分）。重复项不做静默去重，
+            服务端显式返回 400。
+          items:
+            type: string
+            description: DASI 活动项编码（12 项，权重见服务端量表实现）。
+            enum:
+              - SELF_CARE
+              - WALK_INDOORS
+              - WALK_BLOCK
+              - CLIMB_STAIRS
+              - RUN_SHORT_DISTANCE
+              - LIGHT_HOUSEHOLD_WORK
+              - MODERATE_HOUSEHOLD_WORK
+              - HEAVY_HOUSEHOLD_WORK
+              - YARD_WORK
+              - SEXUAL_RELATIONS
+              - MODERATE_RECREATION
+              - STRENUOUS_SPORTS
+    PreopScores:
+      type: object
+      description: |
+        服务端计算的评分结果（只读）。calculatorVersion 标识量表口径版本，用于复算与审计追溯。
+        dasiRisk 不单列：functionalCapacityLow 由 DASI 估算 <4 METs 得出，切点【待确认】，
+        且不参与 riskLevel 合成（合成规则为“取各量表分级的最高级”，属展示约定，临床确认前
+        不得替代医师判断）。
+      required:
+        - rcriScore
+        - rcriRisk
+        - apfelScore
+        - apfelRisk
+        - stopBangScore
+        - stopBangRisk
+        - dasiScore
+        - functionalCapacityLow
+        - riskLevel
+        - calculatedAt
+        - calculatorVersion
+      properties:
+        rcriScore:
+          type: integer
+          description: RCRI 得分（0–6）。
+          minimum: 0
+          maximum: 6
+        rcriRisk:
+          type: string
+          description: RCRI 风险分级。
+          enum:
+            - LOW
+            - MODERATE
+            - HIGH
+        apfelScore:
+          type: integer
+          description: Apfel PONV 得分（0–4）。
+          minimum: 0
+          maximum: 4
+        apfelRisk:
+          type: string
+          description: Apfel 风险分级。
+          enum:
+            - LOW
+            - MODERATE
+            - HIGH
+        stopBangScore:
+          type: integer
+          description: STOP-BANG 得分（0–8）。
+          minimum: 0
+          maximum: 8
+        stopBangRisk:
+          type: string
+          description: STOP-BANG 风险分级。
+          enum:
+            - LOW
+            - MODERATE
+            - HIGH
+        dasiScore:
+          type: number
+          description: DASI 指数（0–58.2，通行量表口径；院方口径【待确认】）。
+          minimum: 0
+          maximum: 58.2
+        functionalCapacityLow:
+          type: boolean
+          description: 功能容量偏低（DASI 估算 <4 METs）；切点【待确认】，不参与 riskLevel。
+        riskLevel:
+          type: string
+          description: |
+            综合风险等级（展示用）：取 RCRI/Apfel/STOP-BANG 三者分级的最高级（保守取高）。
+            合成规则未经临床验证，标【待确认】；医师判断优先。
+          enum:
+            - LOW
+            - MODERATE
+            - HIGH
+        calculatedAt:
+          type: string
+          format: date-time
+          description: 计算时间（服务端时间）。
+        calculatorVersion:
+          type: string
+          description: 量表实现版本（复算依据），如 1.0.0。
+    PreopPlan:
+      type: object
+      description: 麻醉计划（方式、气道方案与备注）。
+      required:
+        - planType
+      properties:
+        planType:
+          type: string
+          description: 麻醉计划类型。
+          enum:
+            - GENERAL
+            - REGIONAL
+            - COMBINED
+            - MONITORED_ANESTHESIA_CARE
+            - SEDATION
+        airwayPlan:
+          type: [string, 'null']
+          maxLength: 500
+          description: 气道方案（描述性文本，如气管插管/喉罩/区域阻滞）；服务端上限 500 字符。
+        notes:
+          type: [string, 'null']
+          maxLength: 2000
+          description: 计划备注（演示文本，不入日志）；服务端上限 2000 字符。
+    PreopAssessment:
+      type: object
+      description: |
+        术前访视与评估单。评分结果由服务端计算并冻结在 scores 中；最终化后不可修改，
+        只能为同一申请新建版本，原单保留用于审计与复算。
+      allOf:
+        - $ref: '#/components/schemas/AuditFields'
+        - type: object
+          required:
+            - assessmentId
+            - applicationId
+            - patientId
+            - patientSnapshot
+            - historySummary
+            - asaClass
+            - airwayAssessment
+            - scoreInput
+            - scores
+            - plan
+            - status
+            - finalizedAt
+            - finalizedBy
+          properties:
+            assessmentId:
+              type: string
+              description: 术前访视与评估标识（UUID 字符串）。
+            applicationId:
+              type: string
+              description: 关联手术申请标识。
+            patientId:
+              type: string
+              description: 患者标识（与申请患者一致）。
+            patientSnapshot:
+              $ref: '#/components/schemas/PreopPatientSnapshot'
+            historySummary:
+              type: string
+              description: 病史要点（合成演示文本；不写入日志与审计）。
+            asaClass:
+              type: string
+              description: ASA 分级 I–VI（ASA Physical Status Classification）。
+              enum:
+                - I
+                - II
+                - III
+                - IV
+                - V
+                - VI
+            airwayAssessment:
+              $ref: '#/components/schemas/PreopAirwayAssessment'
+            scoreInput:
+              $ref: '#/components/schemas/PreopScoreInput'
+            scores:
+              $ref: '#/components/schemas/PreopScores'
+              readOnly: true
+            plan:
+              $ref: '#/components/schemas/PreopPlan'
+            status:
+              type: string
+              description: 访视单状态；FINALIZED 后不可修改。
+              enum:
+                - DRAFT
+                - FINALIZED
+            finalizeNote:
+              type: [string, 'null']
+              maxLength: 500
+              description: 最终化说明（可选；落库 finalize_note，不写入日志/审计）。
+            finalizedAt:
+              type: [string, 'null']
+              format: date-time
+              description: 最终化时间；草稿为 null。
+            finalizedBy:
+              type: [string, 'null']
+              description: 最终化操作人用户标识；草稿为 null。
+    PreopAssessmentCreateRequest:
+      type: object
+      description: |
+        创建术前访视与评估草稿。只提交评分输入，分数由服务端计算；同一申请同时只允许
+        一份草稿（重复创建 409）。
+      required:
+        - applicationId
+        - patientSnapshot
+        - historySummary
+        - asaClass
+        - airwayAssessment
+        - scoreInput
+        - plan
+      properties:
+        applicationId:
+          type: string
+          description: 手术申请标识（UUID 字符串）。
+        patientSnapshot:
+          $ref: '#/components/schemas/PreopPatientSnapshot'
+        historySummary:
+          type: string
+          description: 病史要点（合成演示文本；不写入日志与审计）。
+          minLength: 1
+          maxLength: 4000
+        asaClass:
+          type: string
+          description: ASA 分级 I–VI。
+          enum:
+            - I
+            - II
+            - III
+            - IV
+            - V
+            - VI
+        airwayAssessment:
+          $ref: '#/components/schemas/PreopAirwayAssessment'
+        scoreInput:
+          $ref: '#/components/schemas/PreopScoreInput'
+        plan:
+          $ref: '#/components/schemas/PreopPlan'
+    PreopAssessmentUpdateRequest:
+      type: object
+      description: |
+        全量保存草稿：病史、气道、ASA、评分输入与麻醉计划重新提交，服务端重新计算评分。
+        version 必填；已最终化或版本过期 409。患者身份字段不可修改。
+      required:
+        - version
+        - historySummary
+        - asaClass
+        - airwayAssessment
+        - scoreInput
+        - plan
+      properties:
+        version:
+          type: integer
+          description: 当前版本号，必须与库内一致。
+          minimum: 1
+        historySummary:
+          type: string
+          description: 病史要点（合成演示文本；不写入日志与审计）。
+          minLength: 1
+          maxLength: 4000
+        asaClass:
+          type: string
+          description: ASA 分级 I–VI。
+          enum:
+            - I
+            - II
+            - III
+            - IV
+            - V
+            - VI
+        airwayAssessment:
+          $ref: '#/components/schemas/PreopAirwayAssessment'
+        scoreInput:
+          $ref: '#/components/schemas/PreopScoreInput'
+        plan:
+          $ref: '#/components/schemas/PreopPlan'
+    FinalizePreopAssessmentRequest:
+      type: object
+      description: 最终化请求；必须回传 version，已最终化/版本过期 409。
+      required:
+        - version
+      properties:
+        version:
+          type: integer
+          description: 当前版本号，必须与库内一致。
+          minimum: 1
+        note:
+          type: [string, 'null']
+          description: 最终化说明（可选，合成演示文本）；落库 finalize_note，不写入日志与审计。
+          maxLength: 500
+    PreopApplicationSummary:
+      type: object
+      description: 术前访视页所需的申请上下文（由 M1 申请服务按数据范围解析，不含 PHI 之外字段）。
+      required:
+        - applicationId
+        - patientId
+        - patientSnapshot
+        - surgeryName
+        - departmentName
+        - status
+      properties:
+        applicationId:
+          type: string
+          description: 手术申请标识。
+        patientId:
+          type: string
+          description: 患者标识。
+        patientSnapshot:
+          $ref: '#/components/schemas/PreopPatientSnapshot'
+        surgeryName:
+          type: string
+          description: 拟施术式。
+        departmentName:
+          type: string
+          description: 申请科室名称。
+        status:
+          type: string
+          description: 申请状态（沿用 scheduling 契约枚举）。
+          enum:
+            - SUBMITTED
+            - ACCEPTED
+            - SCHEDULED
+            - CANCELLED
+            - REJECTED
+    PreopAssessmentList:
+      type: object
+      description: 申请上下文与访视单列表（按创建时间倒序）；无访视单时 items 为空数组。
+      required:
+        - application
+        - items
+      properties:
+        application:
+          $ref: '#/components/schemas/PreopApplicationSummary'
+        items:
+          type: array
+          description: 该申请下的访视单（草稿与历史最终化版本）。
+          items:
+            $ref: '#/components/schemas/PreopAssessment'
     AnesthesiaEvent:
       type: object
       description: 麻醉事件；事件时间与录入时间分离，补录须说明原因。

@@ -15,15 +15,97 @@ export interface paths {
     }
     /**
      * 查询术前访视
+     * @deprecated
      * @description 返回病史、气道 Mallampati 分级、ASA 分级、RCRI/Apfel/STOP-BANG/DASI 评分与麻醉计划。
      */
     get: operations['getPreopVisit']
     /**
      * 保存术前访视
+     * @deprecated
      * @description 更新访视内容与评分；使用 version 做乐观锁，冲突返回 409，不静默覆盖他人修改。
      */
     put: operations['updatePreopVisit']
     post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/preop-assessments': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 按手术申请查询术前访视与评估
+     * @description 返回指定手术申请下的术前访视与评估单（按创建时间倒序；同一申请可有多份，
+     *     最终化后只能新建版本）以及申请上下文（患者快照/术式/申请状态）。评分结果由
+     *     服务端计算，响应 scores 为只读字段。
+     *     数据范围沿用 M1 申请可见性：申请不存在或超出数据范围时按“集合查询越权”返回 403，
+     *     不返回空列表、不泄露存在性。
+     */
+    get: operations['listPreopAssessments']
+    put?: never
+    /**
+     * 创建术前访视与评估（草稿）
+     * @description 按手术申请创建访视单草稿。请求只提交评分输入（scoreInput），RCRI/Apfel/STOP-BANG/DASI
+     *     分数与风险等级由服务端计算并写入 scores；客户端不得直接提交分数。
+     *     applicationId 必须存在、对调用方可见且处于 SUBMITTED/ACCEPTED/SCHEDULED；
+     *     患者快照的 patientId/hisPatientNo 必须与申请患者一致。同一申请同时只允许一份草稿，
+     *     重复创建返回 409。
+     */
+    post: operations['createPreopAssessment']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/preop-assessments/{assessmentId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询术前访视与评估详情
+     * @description 返回访视单、服务端评分结果与最终化状态；不存在或超出数据范围返回 404（不泄露存在性）。
+     */
+    get: operations['getPreopAssessment']
+    /**
+     * 保存术前访视与评估（草稿）
+     * @description 全量替换草稿的病史、气道、ASA、评分输入与麻醉计划，服务端重新计算评分；必须回传
+     *     version 做乐观锁。已最终化（FINALIZED）的访视单不可修改，返回 409，只能为同一申请
+     *     新建版本（新记录）并保留原单审计与评分快照。
+     */
+    put: operations['updatePreopAssessment']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/preop-assessments/{assessmentId}/finalize': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * 最终化术前访视与评估
+     * @description 将草稿置为 FINALIZED 并记录最终化时间/操作人；最终化后访视单不可修改（409），
+     *     只能为同一申请新建版本。必须回传 version；已最终化或版本过期返回 409。
+     *     成功写 PREOP_FINALIZE 审计（不记录患者姓名、病史原文）。
+     */
+    post: operations['finalizePreopAssessment']
     delete?: never
     options?: never
     head?: never
@@ -200,7 +282,7 @@ export interface components {
     }
     /** @description 仅返回资源标识的通用响应。 */
     IdResponse: {
-      /** @description 雪花 ID 序列化后的字符串，避免前端精度丢失。 */
+      /** @description UUID 字符串；示例统一使用 8-4-4-4-12 形式。 */
       id: string
     }
     /** @description 术前访视；评分项与阈值可按院方口径配置。 */
@@ -275,6 +357,306 @@ export interface components {
       consentSigned?: boolean
       /** @description 当前版本号。 */
       version: number
+    }
+    /**
+     * @description 术前访视内的患者快照（SYNTHETIC 示例）。created 时由服务端按手术申请（M1 患者快照）
+     *     强制回填，客户端提交的姓名/性别/年龄等字段不落库；仅 patientId/hisPatientNo 用于
+     *     一致性校验，与申请不一致返回 400。只含姓名、性别、出生日期/年龄、院内患者号、
+     *     住院号脱敏值与科室/病区/床号；不含证件号、手机号与住院号明文。
+     */
+    PreopPatientSnapshot: {
+      /** @description 患者标识（UUID 字符串）；必须与手术申请的患者一致。 */
+      patientId: string
+      /** @description HIS 患者号；必须与手术申请的患者号一致，否则 400。 */
+      hisPatientNo: string
+      /** @description 住院号脱敏值（服务端由 M1 患者快照回填）；不返回住院号明文。 */
+      inpatientNoMasked?: string | null
+      /** @description 患者姓名；示例统一使用“演示患者”。 */
+      patientName: string
+      /**
+       * @description 性别。
+       * @enum {string}
+       */
+      gender: 'MALE' | 'FEMALE' | 'UNKNOWN'
+      /**
+       * Format: date
+       * @description 出生日期；按最小必要返回，缺失时为 null。
+       */
+      birthDate?: string | null
+      /** @description 年龄（岁）。 */
+      age: number
+      /** @description 患者所属科室名称。 */
+      departmentName: string
+      /** @description 病区；缺失时为 null。 */
+      ward?: string | null
+      /** @description 床号；缺失时为 null。 */
+      bedNo?: string | null
+    }
+    /**
+     * @description 气道评估。Mallampati 分级按 Samsoon & Young 改良分级（I–IV）；张口度与颈椎活动度
+     *     为描述性字段，仅记录不参与评分；张口度切点与困难气道综合判断【待确认】。
+     */
+    PreopAirwayAssessment: {
+      /**
+       * @description Mallampati 分级（I–IV）。
+       * @enum {string}
+       */
+      mallampati: 'I' | 'II' | 'III' | 'IV'
+      /** @description 张口度（厘米，门齿间距）；只记录测量值，困难气道切点【待确认】。 */
+      mouthOpeningCm: number
+      /**
+       * @description 颈椎活动度（描述性；不参与评分）。
+       * @enum {string}
+       */
+      cervicalSpineMobility: 'NORMAL' | 'LIMITED' | 'FIXED' | 'UNASSESSED'
+      /** @description 气道评估备注（演示文本，不入日志）；服务端上限 500 字符。 */
+      notes?: string | null
+    }
+    /**
+     * @description 修订版心脏风险指数（RCRI，Lee 1999）6 个预测因子，每项 1 分。
+     *     计分与切点：0=低危、1=中危、≥2=高危（公开量表口径；院方口径【待确认】）。
+     */
+    PreopRcriInput: {
+      /** @description 高危手术（腹腔内、胸腔内或腹股沟以上血管手术）。 */
+      highRiskSurgery: boolean
+      /** @description 缺血性心脏病史。 */
+      ischemicHeartDisease: boolean
+      /** @description 充血性心力衰竭史。 */
+      congestiveHeartFailure: boolean
+      /** @description 脑血管病史。 */
+      cerebrovascularDisease: boolean
+      /** @description 胰岛素依赖型糖尿病。 */
+      insulinDependentDiabetes: boolean
+      /** @description 肾功能不全（血清肌酐 > 2.0 mg/dL 或 177 µmol/L）。 */
+      renalImpairment: boolean
+    }
+    /**
+     * @description Apfel 简化 PONV 风险评分 4 个预测因子，每项 1 分（Apfel 1999）。
+     *     计分与切点：0–1=低危、2=中危、≥3=高危（对应公开研究 10%/21%/39%/61%/79% 口径；
+     *     院方口径【待确认】）。
+     */
+    PreopApfelInput: {
+      /** @description 女性。 */
+      female: boolean
+      /** @description 既往 PONV 或晕动症史。 */
+      ponvOrMotionSicknessHistory: boolean
+      /** @description 不吸烟。 */
+      nonSmoker: boolean
+      /** @description 术后使用阿片类药物。 */
+      postoperativeOpioid: boolean
+    }
+    /**
+     * @description STOP-BANG OSA 筛查 8 个条目，每项 1 分（Chung 2008）。
+     *     计分与切点：0–2=低危、3–4=中危、5–8=高危（公开量表口径；院方口径【待确认】）。
+     */
+    PreopStopBangInput: {
+      /** @description 打鼾（Snoring）。 */
+      snoring: boolean
+      /** @description 白天嗜睡/疲乏（Tiredness）。 */
+      tiredness: boolean
+      /** @description 目击呼吸暂停（Observed apnea）。 */
+      observedApnea: boolean
+      /** @description 高血压（Pressure）。 */
+      hypertension: boolean
+      /** @description BMI > 35 kg/m²。 */
+      bmiOver35: boolean
+      /** @description 年龄 > 50 岁。 */
+      ageOver50: boolean
+      /** @description 颈围 > 40 cm。 */
+      neckCircumferenceOver40: boolean
+      /** @description 男性（Gender）。 */
+      male: boolean
+    }
+    /**
+     * @description 评分输入（只含量表条目，不含分数）。RCRI/Apfel/STOP-BANG/DASI 分数与风险等级由
+     *     服务端计算，客户端提交的任何分数均被忽略或拒绝。
+     */
+    PreopScoreInput: {
+      rcri: components['schemas']['PreopRcriInput']
+      apfel: components['schemas']['PreopApfelInput']
+      stopBang: components['schemas']['PreopStopBangInput']
+      /**
+       * @description 杜克活动状态指数（DASI，Hlatky 1989）中患者**能够完成**的活动项；服务端按量表
+       *     权重求和（0–58.2）。空数组表示均不能完成（0 分）。重复项不做静默去重，
+       *     服务端显式返回 400。
+       */
+      dasiActivities: (
+        | 'SELF_CARE'
+        | 'WALK_INDOORS'
+        | 'WALK_BLOCK'
+        | 'CLIMB_STAIRS'
+        | 'RUN_SHORT_DISTANCE'
+        | 'LIGHT_HOUSEHOLD_WORK'
+        | 'MODERATE_HOUSEHOLD_WORK'
+        | 'HEAVY_HOUSEHOLD_WORK'
+        | 'YARD_WORK'
+        | 'SEXUAL_RELATIONS'
+        | 'MODERATE_RECREATION'
+        | 'STRENUOUS_SPORTS'
+      )[]
+    }
+    /**
+     * @description 服务端计算的评分结果（只读）。calculatorVersion 标识量表口径版本，用于复算与审计追溯。
+     *     dasiRisk 不单列：functionalCapacityLow 由 DASI 估算 <4 METs 得出，切点【待确认】，
+     *     且不参与 riskLevel 合成（合成规则为“取各量表分级的最高级”，属展示约定，临床确认前
+     *     不得替代医师判断）。
+     */
+    PreopScores: {
+      /** @description RCRI 得分（0–6）。 */
+      rcriScore: number
+      /**
+       * @description RCRI 风险分级。
+       * @enum {string}
+       */
+      rcriRisk: 'LOW' | 'MODERATE' | 'HIGH'
+      /** @description Apfel PONV 得分（0–4）。 */
+      apfelScore: number
+      /**
+       * @description Apfel 风险分级。
+       * @enum {string}
+       */
+      apfelRisk: 'LOW' | 'MODERATE' | 'HIGH'
+      /** @description STOP-BANG 得分（0–8）。 */
+      stopBangScore: number
+      /**
+       * @description STOP-BANG 风险分级。
+       * @enum {string}
+       */
+      stopBangRisk: 'LOW' | 'MODERATE' | 'HIGH'
+      /** @description DASI 指数（0–58.2，通行量表口径；院方口径【待确认】）。 */
+      dasiScore: number
+      /** @description 功能容量偏低（DASI 估算 <4 METs）；切点【待确认】，不参与 riskLevel。 */
+      functionalCapacityLow: boolean
+      /**
+       * @description 综合风险等级（展示用）：取 RCRI/Apfel/STOP-BANG 三者分级的最高级（保守取高）。
+       *     合成规则未经临床验证，标【待确认】；医师判断优先。
+       * @enum {string}
+       */
+      riskLevel: 'LOW' | 'MODERATE' | 'HIGH'
+      /**
+       * Format: date-time
+       * @description 计算时间（服务端时间）。
+       */
+      calculatedAt: string
+      /** @description 量表实现版本（复算依据），如 1.0.0。 */
+      calculatorVersion: string
+    }
+    /** @description 麻醉计划（方式、气道方案与备注）。 */
+    PreopPlan: {
+      /**
+       * @description 麻醉计划类型。
+       * @enum {string}
+       */
+      planType: 'GENERAL' | 'REGIONAL' | 'COMBINED' | 'MONITORED_ANESTHESIA_CARE' | 'SEDATION'
+      /** @description 气道方案（描述性文本，如气管插管/喉罩/区域阻滞）；服务端上限 500 字符。 */
+      airwayPlan?: string | null
+      /** @description 计划备注（演示文本，不入日志）；服务端上限 2000 字符。 */
+      notes?: string | null
+    }
+    /**
+     * @description 术前访视与评估单。评分结果由服务端计算并冻结在 scores 中；最终化后不可修改，
+     *     只能为同一申请新建版本，原单保留用于审计与复算。
+     */
+    PreopAssessment: components['schemas']['AuditFields'] & {
+      /** @description 术前访视与评估标识（UUID 字符串）。 */
+      assessmentId: string
+      /** @description 关联手术申请标识。 */
+      applicationId: string
+      /** @description 患者标识（与申请患者一致）。 */
+      patientId: string
+      patientSnapshot: components['schemas']['PreopPatientSnapshot']
+      /** @description 病史要点（合成演示文本；不写入日志与审计）。 */
+      historySummary: string
+      /**
+       * @description ASA 分级 I–VI（ASA Physical Status Classification）。
+       * @enum {string}
+       */
+      asaClass: 'I' | 'II' | 'III' | 'IV' | 'V' | 'VI'
+      airwayAssessment: components['schemas']['PreopAirwayAssessment']
+      scoreInput: components['schemas']['PreopScoreInput']
+      readonly scores: components['schemas']['PreopScores']
+      plan: components['schemas']['PreopPlan']
+      /**
+       * @description 访视单状态；FINALIZED 后不可修改。
+       * @enum {string}
+       */
+      status: 'DRAFT' | 'FINALIZED'
+      /** @description 最终化说明（可选；落库 finalize_note，不写入日志/审计）。 */
+      finalizeNote?: string | null
+      /**
+       * Format: date-time
+       * @description 最终化时间；草稿为 null。
+       */
+      finalizedAt: string | null
+      /** @description 最终化操作人用户标识；草稿为 null。 */
+      finalizedBy: string | null
+    }
+    /**
+     * @description 创建术前访视与评估草稿。只提交评分输入，分数由服务端计算；同一申请同时只允许
+     *     一份草稿（重复创建 409）。
+     */
+    PreopAssessmentCreateRequest: {
+      /** @description 手术申请标识（UUID 字符串）。 */
+      applicationId: string
+      patientSnapshot: components['schemas']['PreopPatientSnapshot']
+      /** @description 病史要点（合成演示文本；不写入日志与审计）。 */
+      historySummary: string
+      /**
+       * @description ASA 分级 I–VI。
+       * @enum {string}
+       */
+      asaClass: 'I' | 'II' | 'III' | 'IV' | 'V' | 'VI'
+      airwayAssessment: components['schemas']['PreopAirwayAssessment']
+      scoreInput: components['schemas']['PreopScoreInput']
+      plan: components['schemas']['PreopPlan']
+    }
+    /**
+     * @description 全量保存草稿：病史、气道、ASA、评分输入与麻醉计划重新提交，服务端重新计算评分。
+     *     version 必填；已最终化或版本过期 409。患者身份字段不可修改。
+     */
+    PreopAssessmentUpdateRequest: {
+      /** @description 当前版本号，必须与库内一致。 */
+      version: number
+      /** @description 病史要点（合成演示文本；不写入日志与审计）。 */
+      historySummary: string
+      /**
+       * @description ASA 分级 I–VI。
+       * @enum {string}
+       */
+      asaClass: 'I' | 'II' | 'III' | 'IV' | 'V' | 'VI'
+      airwayAssessment: components['schemas']['PreopAirwayAssessment']
+      scoreInput: components['schemas']['PreopScoreInput']
+      plan: components['schemas']['PreopPlan']
+    }
+    /** @description 最终化请求；必须回传 version，已最终化/版本过期 409。 */
+    FinalizePreopAssessmentRequest: {
+      /** @description 当前版本号，必须与库内一致。 */
+      version: number
+      /** @description 最终化说明（可选，合成演示文本）；落库 finalize_note，不写入日志与审计。 */
+      note?: string | null
+    }
+    /** @description 术前访视页所需的申请上下文（由 M1 申请服务按数据范围解析，不含 PHI 之外字段）。 */
+    PreopApplicationSummary: {
+      /** @description 手术申请标识。 */
+      applicationId: string
+      /** @description 患者标识。 */
+      patientId: string
+      patientSnapshot: components['schemas']['PreopPatientSnapshot']
+      /** @description 拟施术式。 */
+      surgeryName: string
+      /** @description 申请科室名称。 */
+      departmentName: string
+      /**
+       * @description 申请状态（沿用 scheduling 契约枚举）。
+       * @enum {string}
+       */
+      status: 'SUBMITTED' | 'ACCEPTED' | 'SCHEDULED' | 'CANCELLED' | 'REJECTED'
+    }
+    /** @description 申请上下文与访视单列表（按创建时间倒序）；无访视单时 items 为空数组。 */
+    PreopAssessmentList: {
+      application: components['schemas']['PreopApplicationSummary']
+      /** @description 该申请下的访视单（草稿与历史最终化版本）。 */
+      items: components['schemas']['PreopAssessment'][]
     }
     /** @description 麻醉事件；事件时间与录入时间分离，补录须说明原因。 */
     AnesthesiaEvent: {
@@ -639,7 +1021,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 术前访视标识（雪花 ID 字符串）。 */
+        /** @description 术前访视标识（UUID 字符串）。 */
         visitId: string
       }
       cookie?: never
@@ -654,10 +1036,10 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "visitId": "1100000000000000001",
-           *       "recordId": "1200000000000000001",
-           *       "scheduleId": "8000000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "visitId": "11000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "scheduleId": "80000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "history": "演示病史（高血压，规律服药；合成数据）",
@@ -671,9 +1053,9 @@ export interface operations {
            *       "consentSigned": true,
            *       "status": "SIGNED",
            *       "createdAt": "2026-11-20T09:00:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-11-25T14:00:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 2
            *     }
            */
@@ -690,7 +1072,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 术前访视标识（雪花 ID 字符串）。 */
+        /** @description 术前访视标识（UUID 字符串）。 */
         visitId: string
       }
       cookie?: never
@@ -723,10 +1105,10 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "visitId": "1100000000000000001",
-           *       "recordId": "1200000000000000001",
-           *       "scheduleId": "8000000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "visitId": "11000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "scheduleId": "80000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "history": "演示病史（高血压，规律服药；合成数据）",
@@ -740,13 +1122,722 @@ export interface operations {
            *       "consentSigned": true,
            *       "status": "SIGNED",
            *       "createdAt": "2026-11-20T09:00:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-11-25T15:10:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 3
            *     }
            */
           'application/json': components['schemas']['PreopVisit']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  listPreopAssessments: {
+    parameters: {
+      query: {
+        /** @description 手术申请标识（UUID 字符串）。 */
+        applicationId: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 申请上下文与访视单列表；无访视单时 items 为空数组。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "application": {
+           *         "applicationId": "60000000-0000-4000-8000-000000000001",
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "patientSnapshot": {
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "hisPatientNo": "SYNTH-HIS-P-0001",
+           *           "patientName": "演示患者",
+           *           "gender": "FEMALE",
+           *           "birthDate": "1972-05-18",
+           *           "age": 54,
+           *           "departmentName": "演示手术科室（合成）",
+           *           "ward": "演示病区（合成）",
+           *           "bedNo": "01"
+           *         },
+           *         "surgeryName": "演示腹腔镜胆囊切除术（合成）",
+           *         "departmentName": "演示手术科室（合成）",
+           *         "status": "SCHEDULED"
+           *       },
+           *       "items": [
+           *         {
+           *           "assessmentId": "16000000-0000-4000-8000-000000000001",
+           *           "applicationId": "60000000-0000-4000-8000-000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "patientSnapshot": {
+           *             "patientId": "50000000-0000-4000-8000-000000000001",
+           *             "hisPatientNo": "SYNTH-HIS-P-0001",
+           *             "patientName": "演示患者",
+           *             "gender": "FEMALE",
+           *             "birthDate": "1972-05-18",
+           *             "age": 54,
+           *             "departmentName": "演示手术科室（合成）",
+           *             "ward": "演示病区（合成）",
+           *             "bedNo": "01"
+           *           },
+           *           "historySummary": "演示病史（高血压，规律服药；合成数据）",
+           *           "asaClass": "II",
+           *           "airwayAssessment": {
+           *             "mallampati": "II",
+           *             "mouthOpeningCm": 4.5,
+           *             "cervicalSpineMobility": "NORMAL",
+           *             "notes": "演示气道评估（合成数据）"
+           *           },
+           *           "scoreInput": {
+           *             "rcri": {
+           *               "highRiskSurgery": true,
+           *               "ischemicHeartDisease": false,
+           *               "congestiveHeartFailure": false,
+           *               "cerebrovascularDisease": false,
+           *               "insulinDependentDiabetes": false,
+           *               "renalImpairment": false
+           *             },
+           *             "apfel": {
+           *               "female": true,
+           *               "ponvOrMotionSicknessHistory": true,
+           *               "nonSmoker": true,
+           *               "postoperativeOpioid": true
+           *             },
+           *             "stopBang": {
+           *               "snoring": true,
+           *               "tiredness": true,
+           *               "observedApnea": false,
+           *               "hypertension": true,
+           *               "bmiOver35": false,
+           *               "ageOver50": true,
+           *               "neckCircumferenceOver40": false,
+           *               "male": false
+           *             },
+           *             "dasiActivities": [
+           *               "SELF_CARE",
+           *               "WALK_INDOORS",
+           *               "WALK_BLOCK",
+           *               "CLIMB_STAIRS",
+           *               "LIGHT_HOUSEHOLD_WORK",
+           *               "MODERATE_HOUSEHOLD_WORK"
+           *             ]
+           *           },
+           *           "scores": {
+           *             "rcriScore": 1,
+           *             "rcriRisk": "MODERATE",
+           *             "apfelScore": 4,
+           *             "apfelRisk": "HIGH",
+           *             "stopBangScore": 4,
+           *             "stopBangRisk": "MODERATE",
+           *             "dasiScore": 18.95,
+           *             "functionalCapacityLow": false,
+           *             "riskLevel": "HIGH",
+           *             "calculatedAt": "2026-11-28T09:10:00+08:00",
+           *             "calculatorVersion": "1.0.0"
+           *           },
+           *           "plan": {
+           *             "planType": "GENERAL",
+           *             "airwayPlan": "气管插管（合成示例）",
+           *             "notes": "演示麻醉计划（合成数据）"
+           *           },
+           *           "status": "DRAFT",
+           *           "finalizedAt": null,
+           *           "finalizedBy": null,
+           *           "createdAt": "2026-11-28T09:10:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000002",
+           *           "updatedAt": "2026-11-28T09:10:00+08:00",
+           *           "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *           "version": 1
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['PreopAssessmentList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  createPreopAssessment: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "applicationId": "60000000-0000-4000-8000-000000000001",
+         *       "patientSnapshot": {
+         *         "patientId": "50000000-0000-4000-8000-000000000001",
+         *         "hisPatientNo": "SYNTH-HIS-P-0001",
+         *         "patientName": "演示患者",
+         *         "gender": "FEMALE",
+         *         "birthDate": "1972-05-18",
+         *         "age": 54,
+         *         "departmentName": "演示手术科室（合成）",
+         *         "ward": "演示病区（合成）",
+         *         "bedNo": "01"
+         *       },
+         *       "historySummary": "演示病史（高血压，规律服药；合成数据）",
+         *       "asaClass": "II",
+         *       "airwayAssessment": {
+         *         "mallampati": "II",
+         *         "mouthOpeningCm": 4.5,
+         *         "cervicalSpineMobility": "NORMAL",
+         *         "notes": "演示气道评估（合成数据）"
+         *       },
+         *       "scoreInput": {
+         *         "rcri": {
+         *           "highRiskSurgery": true,
+         *           "ischemicHeartDisease": false,
+         *           "congestiveHeartFailure": false,
+         *           "cerebrovascularDisease": false,
+         *           "insulinDependentDiabetes": false,
+         *           "renalImpairment": false
+         *         },
+         *         "apfel": {
+         *           "female": true,
+         *           "ponvOrMotionSicknessHistory": true,
+         *           "nonSmoker": true,
+         *           "postoperativeOpioid": true
+         *         },
+         *         "stopBang": {
+         *           "snoring": true,
+         *           "tiredness": true,
+         *           "observedApnea": false,
+         *           "hypertension": true,
+         *           "bmiOver35": false,
+         *           "ageOver50": true,
+         *           "neckCircumferenceOver40": false,
+         *           "male": false
+         *         },
+         *         "dasiActivities": [
+         *           "SELF_CARE",
+         *           "WALK_INDOORS",
+         *           "WALK_BLOCK",
+         *           "CLIMB_STAIRS",
+         *           "LIGHT_HOUSEHOLD_WORK",
+         *           "MODERATE_HOUSEHOLD_WORK"
+         *         ]
+         *       },
+         *       "plan": {
+         *         "planType": "GENERAL",
+         *         "airwayPlan": "气管插管（合成示例）",
+         *         "notes": "演示麻醉计划（合成数据）"
+         *       }
+         *     }
+         */
+        'application/json': components['schemas']['PreopAssessmentCreateRequest']
+      }
+    }
+    responses: {
+      /** @description 创建成功，返回服务端计算的评分与风险等级。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "assessmentId": "16000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "patientSnapshot": {
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "hisPatientNo": "SYNTH-HIS-P-0001",
+           *         "patientName": "演示患者",
+           *         "gender": "FEMALE",
+           *         "birthDate": "1972-05-18",
+           *         "age": 54,
+           *         "departmentName": "演示手术科室（合成）",
+           *         "ward": "演示病区（合成）",
+           *         "bedNo": "01"
+           *       },
+           *       "historySummary": "演示病史（高血压，规律服药；合成数据）",
+           *       "asaClass": "II",
+           *       "airwayAssessment": {
+           *         "mallampati": "II",
+           *         "mouthOpeningCm": 4.5,
+           *         "cervicalSpineMobility": "NORMAL",
+           *         "notes": "演示气道评估（合成数据）"
+           *       },
+           *       "scoreInput": {
+           *         "rcri": {
+           *           "highRiskSurgery": true,
+           *           "ischemicHeartDisease": false,
+           *           "congestiveHeartFailure": false,
+           *           "cerebrovascularDisease": false,
+           *           "insulinDependentDiabetes": false,
+           *           "renalImpairment": false
+           *         },
+           *         "apfel": {
+           *           "female": true,
+           *           "ponvOrMotionSicknessHistory": true,
+           *           "nonSmoker": true,
+           *           "postoperativeOpioid": true
+           *         },
+           *         "stopBang": {
+           *           "snoring": true,
+           *           "tiredness": true,
+           *           "observedApnea": false,
+           *           "hypertension": true,
+           *           "bmiOver35": false,
+           *           "ageOver50": true,
+           *           "neckCircumferenceOver40": false,
+           *           "male": false
+           *         },
+           *         "dasiActivities": [
+           *           "SELF_CARE",
+           *           "WALK_INDOORS",
+           *           "WALK_BLOCK",
+           *           "CLIMB_STAIRS",
+           *           "LIGHT_HOUSEHOLD_WORK",
+           *           "MODERATE_HOUSEHOLD_WORK"
+           *         ]
+           *       },
+           *       "scores": {
+           *         "rcriScore": 1,
+           *         "rcriRisk": "MODERATE",
+           *         "apfelScore": 4,
+           *         "apfelRisk": "HIGH",
+           *         "stopBangScore": 4,
+           *         "stopBangRisk": "MODERATE",
+           *         "dasiScore": 18.95,
+           *         "functionalCapacityLow": false,
+           *         "riskLevel": "HIGH",
+           *         "calculatedAt": "2026-11-28T09:10:00+08:00",
+           *         "calculatorVersion": "1.0.0"
+           *       },
+           *       "plan": {
+           *         "planType": "GENERAL",
+           *         "airwayPlan": "气管插管（合成示例）",
+           *         "notes": "演示麻醉计划（合成数据）"
+           *       },
+           *       "status": "DRAFT",
+           *       "finalizedAt": null,
+           *       "finalizedBy": null,
+           *       "createdAt": "2026-11-28T09:10:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-11-28T09:10:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['PreopAssessment']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
+  getPreopAssessment: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 术前访视与评估标识（UUID 字符串）。 */
+        assessmentId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 访视单详情。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "assessmentId": "16000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "patientSnapshot": {
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "hisPatientNo": "SYNTH-HIS-P-0001",
+           *         "patientName": "演示患者",
+           *         "gender": "FEMALE",
+           *         "birthDate": "1972-05-18",
+           *         "age": 54,
+           *         "departmentName": "演示手术科室（合成）",
+           *         "ward": "演示病区（合成）",
+           *         "bedNo": "01"
+           *       },
+           *       "historySummary": "演示病史（高血压，规律服药；合成数据）",
+           *       "asaClass": "II",
+           *       "airwayAssessment": {
+           *         "mallampati": "II",
+           *         "mouthOpeningCm": 4.5,
+           *         "cervicalSpineMobility": "NORMAL",
+           *         "notes": "演示气道评估（合成数据）"
+           *       },
+           *       "scoreInput": {
+           *         "rcri": {
+           *           "highRiskSurgery": true,
+           *           "ischemicHeartDisease": false,
+           *           "congestiveHeartFailure": false,
+           *           "cerebrovascularDisease": false,
+           *           "insulinDependentDiabetes": false,
+           *           "renalImpairment": false
+           *         },
+           *         "apfel": {
+           *           "female": true,
+           *           "ponvOrMotionSicknessHistory": true,
+           *           "nonSmoker": true,
+           *           "postoperativeOpioid": true
+           *         },
+           *         "stopBang": {
+           *           "snoring": true,
+           *           "tiredness": true,
+           *           "observedApnea": false,
+           *           "hypertension": true,
+           *           "bmiOver35": false,
+           *           "ageOver50": true,
+           *           "neckCircumferenceOver40": false,
+           *           "male": false
+           *         },
+           *         "dasiActivities": [
+           *           "SELF_CARE",
+           *           "WALK_INDOORS",
+           *           "WALK_BLOCK",
+           *           "CLIMB_STAIRS",
+           *           "LIGHT_HOUSEHOLD_WORK",
+           *           "MODERATE_HOUSEHOLD_WORK"
+           *         ]
+           *       },
+           *       "scores": {
+           *         "rcriScore": 1,
+           *         "rcriRisk": "MODERATE",
+           *         "apfelScore": 4,
+           *         "apfelRisk": "HIGH",
+           *         "stopBangScore": 4,
+           *         "stopBangRisk": "MODERATE",
+           *         "dasiScore": 18.95,
+           *         "functionalCapacityLow": false,
+           *         "riskLevel": "HIGH",
+           *         "calculatedAt": "2026-11-28T09:10:00+08:00",
+           *         "calculatorVersion": "1.0.0"
+           *       },
+           *       "plan": {
+           *         "planType": "GENERAL",
+           *         "airwayPlan": "气管插管（合成示例）",
+           *         "notes": "演示麻醉计划（合成数据）"
+           *       },
+           *       "status": "FINALIZED",
+           *       "finalizedAt": "2026-11-28T10:00:00+08:00",
+           *       "finalizedBy": "10000000-0000-4000-8000-000000000002",
+           *       "createdAt": "2026-11-28T09:10:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-11-28T10:00:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['PreopAssessment']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  updatePreopAssessment: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 术前访视与评估标识（UUID 字符串）。 */
+        assessmentId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "version": 1,
+         *       "historySummary": "演示病史（高血压、糖尿病，规律服药；合成数据）",
+         *       "asaClass": "III",
+         *       "airwayAssessment": {
+         *         "mallampati": "III",
+         *         "mouthOpeningCm": 3.8,
+         *         "cervicalSpineMobility": "LIMITED",
+         *         "notes": "演示气道评估（合成数据）"
+         *       },
+         *       "scoreInput": {
+         *         "rcri": {
+         *           "highRiskSurgery": true,
+         *           "ischemicHeartDisease": true,
+         *           "congestiveHeartFailure": false,
+         *           "cerebrovascularDisease": false,
+         *           "insulinDependentDiabetes": true,
+         *           "renalImpairment": false
+         *         },
+         *         "apfel": {
+         *           "female": true,
+         *           "ponvOrMotionSicknessHistory": true,
+         *           "nonSmoker": false,
+         *           "postoperativeOpioid": true
+         *         },
+         *         "stopBang": {
+         *           "snoring": true,
+         *           "tiredness": true,
+         *           "observedApnea": true,
+         *           "hypertension": true,
+         *           "bmiOver35": false,
+         *           "ageOver50": true,
+         *           "neckCircumferenceOver40": false,
+         *           "male": false
+         *         },
+         *         "dasiActivities": [
+         *           "SELF_CARE",
+         *           "WALK_INDOORS",
+         *           "LIGHT_HOUSEHOLD_WORK"
+         *         ]
+         *       },
+         *       "plan": {
+         *         "planType": "COMBINED",
+         *         "airwayPlan": "气管插管 + 桡动脉穿刺（合成示例）",
+         *         "notes": "演示麻醉计划（合成数据）"
+         *       }
+         *     }
+         */
+        'application/json': components['schemas']['PreopAssessmentUpdateRequest']
+      }
+    }
+    responses: {
+      /** @description 保存成功，返回重新计算的评分与风险等级。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "assessmentId": "16000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "patientSnapshot": {
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "hisPatientNo": "SYNTH-HIS-P-0001",
+           *         "patientName": "演示患者",
+           *         "gender": "FEMALE",
+           *         "birthDate": "1972-05-18",
+           *         "age": 54,
+           *         "departmentName": "演示手术科室（合成）",
+           *         "ward": "演示病区（合成）",
+           *         "bedNo": "01"
+           *       },
+           *       "historySummary": "演示病史（高血压、糖尿病，规律服药；合成数据）",
+           *       "asaClass": "III",
+           *       "airwayAssessment": {
+           *         "mallampati": "III",
+           *         "mouthOpeningCm": 3.8,
+           *         "cervicalSpineMobility": "LIMITED",
+           *         "notes": "演示气道评估（合成数据）"
+           *       },
+           *       "scoreInput": {
+           *         "rcri": {
+           *           "highRiskSurgery": true,
+           *           "ischemicHeartDisease": true,
+           *           "congestiveHeartFailure": false,
+           *           "cerebrovascularDisease": false,
+           *           "insulinDependentDiabetes": true,
+           *           "renalImpairment": false
+           *         },
+           *         "apfel": {
+           *           "female": true,
+           *           "ponvOrMotionSicknessHistory": true,
+           *           "nonSmoker": false,
+           *           "postoperativeOpioid": true
+           *         },
+           *         "stopBang": {
+           *           "snoring": true,
+           *           "tiredness": true,
+           *           "observedApnea": true,
+           *           "hypertension": true,
+           *           "bmiOver35": false,
+           *           "ageOver50": true,
+           *           "neckCircumferenceOver40": false,
+           *           "male": false
+           *         },
+           *         "dasiActivities": [
+           *           "SELF_CARE",
+           *           "WALK_INDOORS",
+           *           "LIGHT_HOUSEHOLD_WORK"
+           *         ]
+           *       },
+           *       "scores": {
+           *         "rcriScore": 3,
+           *         "rcriRisk": "HIGH",
+           *         "apfelScore": 3,
+           *         "apfelRisk": "HIGH",
+           *         "stopBangScore": 5,
+           *         "stopBangRisk": "HIGH",
+           *         "dasiScore": 7.2,
+           *         "functionalCapacityLow": true,
+           *         "riskLevel": "HIGH",
+           *         "calculatedAt": "2026-11-28T09:40:00+08:00",
+           *         "calculatorVersion": "1.0.0"
+           *       },
+           *       "plan": {
+           *         "planType": "COMBINED",
+           *         "airwayPlan": "气管插管 + 桡动脉穿刺（合成示例）",
+           *         "notes": "演示麻醉计划（合成数据）"
+           *       },
+           *       "status": "DRAFT",
+           *       "finalizedAt": null,
+           *       "finalizedBy": null,
+           *       "createdAt": "2026-11-28T09:10:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-11-28T09:40:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['PreopAssessment']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  finalizePreopAssessment: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 术前访视与评估标识（UUID 字符串）。 */
+        assessmentId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "version": 2,
+         *       "note": "访视完成，麻醉计划已与患者沟通（合成示例）"
+         *     }
+         */
+        'application/json': components['schemas']['FinalizePreopAssessmentRequest']
+      }
+    }
+    responses: {
+      /** @description 最终化成功，返回 FINALIZED 状态与最终化人/时间。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "assessmentId": "16000000-0000-4000-8000-000000000001",
+           *       "applicationId": "60000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "patientSnapshot": {
+           *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "hisPatientNo": "SYNTH-HIS-P-0001",
+           *         "patientName": "演示患者",
+           *         "gender": "FEMALE",
+           *         "birthDate": "1972-05-18",
+           *         "age": 54,
+           *         "departmentName": "演示手术科室（合成）",
+           *         "ward": "演示病区（合成）",
+           *         "bedNo": "01"
+           *       },
+           *       "historySummary": "演示病史（高血压、糖尿病，规律服药；合成数据）",
+           *       "asaClass": "III",
+           *       "airwayAssessment": {
+           *         "mallampati": "III",
+           *         "mouthOpeningCm": 3.8,
+           *         "cervicalSpineMobility": "LIMITED",
+           *         "notes": "演示气道评估（合成数据）"
+           *       },
+           *       "scoreInput": {
+           *         "rcri": {
+           *           "highRiskSurgery": true,
+           *           "ischemicHeartDisease": true,
+           *           "congestiveHeartFailure": false,
+           *           "cerebrovascularDisease": false,
+           *           "insulinDependentDiabetes": true,
+           *           "renalImpairment": false
+           *         },
+           *         "apfel": {
+           *           "female": true,
+           *           "ponvOrMotionSicknessHistory": true,
+           *           "nonSmoker": false,
+           *           "postoperativeOpioid": true
+           *         },
+           *         "stopBang": {
+           *           "snoring": true,
+           *           "tiredness": true,
+           *           "observedApnea": true,
+           *           "hypertension": true,
+           *           "bmiOver35": false,
+           *           "ageOver50": true,
+           *           "neckCircumferenceOver40": false,
+           *           "male": false
+           *         },
+           *         "dasiActivities": [
+           *           "SELF_CARE",
+           *           "WALK_INDOORS",
+           *           "LIGHT_HOUSEHOLD_WORK"
+           *         ]
+           *       },
+           *       "scores": {
+           *         "rcriScore": 3,
+           *         "rcriRisk": "HIGH",
+           *         "apfelScore": 3,
+           *         "apfelRisk": "HIGH",
+           *         "stopBangScore": 5,
+           *         "stopBangRisk": "HIGH",
+           *         "dasiScore": 7.2,
+           *         "functionalCapacityLow": true,
+           *         "riskLevel": "HIGH",
+           *         "calculatedAt": "2026-11-28T09:40:00+08:00",
+           *         "calculatorVersion": "1.0.0"
+           *       },
+           *       "plan": {
+           *         "planType": "COMBINED",
+           *         "airwayPlan": "气管插管 + 桡动脉穿刺（合成示例）",
+           *         "notes": "演示麻醉计划（合成数据）"
+           *       },
+           *       "status": "FINALIZED",
+           *       "finalizedAt": "2026-11-28T10:00:00+08:00",
+           *       "finalizedBy": "10000000-0000-4000-8000-000000000002",
+           *       "createdAt": "2026-11-28T09:10:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-11-28T10:00:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 3
+           *     }
+           */
+          'application/json': components['schemas']['PreopAssessment']
         }
       }
       400: components['responses']['BadRequest']
@@ -761,7 +1852,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 麻醉记录单标识（雪花 ID 字符串）。 */
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
         recordId: string
       }
       cookie?: never
@@ -776,9 +1867,9 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "recordId": "1200000000000000001",
-           *       "scheduleId": "8000000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "scheduleId": "80000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "status": "IN_PROGRESS",
@@ -787,20 +1878,20 @@ export interface operations {
            *       "endedAt": null,
            *       "events": [
            *         {
-           *           "eventId": "1300000000000000001",
+           *           "eventId": "13000000-0000-4000-8000-000000000001",
            *           "eventType": "INDUCTION",
            *           "occurredAt": "2026-12-01T08:45:00+08:00",
            *           "source": "MANUAL",
            *           "note": "演示诱导事件（合成数据）",
            *           "entryReason": null,
            *           "recordedAt": "2026-12-01T08:46:00+08:00",
-           *           "recordedBy": "1000000000000000001"
+           *           "recordedBy": "10000000-0000-4000-8000-000000000001"
            *         }
            *       ],
            *       "createdAt": "2026-12-01T08:35:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-12-01T08:46:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 5
            *     }
            */
@@ -817,7 +1908,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 麻醉记录单标识（雪花 ID 字符串）。 */
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
         recordId: string
       }
       cookie?: never
@@ -830,14 +1921,14 @@ export interface operations {
          *       "version": 5,
          *       "events": [
          *         {
-         *           "eventId": "1300000000000000002",
+         *           "eventId": "13000000-0000-4000-8000-000000000002",
          *           "eventType": "INTUBATION",
          *           "occurredAt": "2026-12-01T08:55:00+08:00",
          *           "source": "MANUAL",
          *           "note": "演示插管事件（合成数据）",
          *           "entryReason": null,
          *           "recordedAt": "2026-12-01T08:56:00+08:00",
-         *           "recordedBy": "1000000000000000001"
+         *           "recordedBy": "10000000-0000-4000-8000-000000000001"
          *         }
          *       ]
          *     }
@@ -854,9 +1945,9 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "recordId": "1200000000000000001",
-           *       "scheduleId": "8000000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "scheduleId": "80000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "status": "IN_PROGRESS",
@@ -865,20 +1956,20 @@ export interface operations {
            *       "endedAt": null,
            *       "events": [
            *         {
-           *           "eventId": "1300000000000000002",
+           *           "eventId": "13000000-0000-4000-8000-000000000002",
            *           "eventType": "INTUBATION",
            *           "occurredAt": "2026-12-01T08:55:00+08:00",
            *           "source": "MANUAL",
            *           "note": "演示插管事件（合成数据）",
            *           "entryReason": null,
            *           "recordedAt": "2026-12-01T08:56:00+08:00",
-           *           "recordedBy": "1000000000000000001"
+           *           "recordedBy": "10000000-0000-4000-8000-000000000001"
            *         }
            *       ],
            *       "createdAt": "2026-12-01T08:35:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-12-01T08:56:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 6
            *     }
            */
@@ -897,7 +1988,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 麻醉记录单标识（雪花 ID 字符串）。 */
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
         recordId: string
       }
       cookie?: never
@@ -922,10 +2013,10 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "id": "1200000000000000001",
+           *       "id": "12000000-0000-4000-8000-000000000001",
            *       "status": "LOCKED",
            *       "lockedAt": "2026-12-01T11:30:00+08:00",
-           *       "lockedBy": "1000000000000000001",
+           *       "lockedBy": "10000000-0000-4000-8000-000000000001",
            *       "signatureStatus": "PENDING"
            *     }
            */
@@ -944,7 +2035,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 麻醉记录单标识（雪花 ID 字符串）。 */
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
         recordId: string
       }
       cookie?: never
@@ -959,18 +2050,18 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "checkId": "1500000000000000001",
-           *       "recordId": "1200000000000000001",
+           *       "checkId": "15000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
            *       "timeOutAt": "2026-12-01T08:50:00+08:00",
-           *       "timeOutBy": "1000000000000000002",
+           *       "timeOutBy": "10000000-0000-4000-8000-000000000002",
            *       "signOutAt": "2026-12-01T10:55:00+08:00",
-           *       "signOutBy": "1000000000000000001",
+           *       "signOutBy": "10000000-0000-4000-8000-000000000001",
            *       "specimenChecked": true,
            *       "implantChecked": true,
            *       "createdAt": "2026-12-01T10:55:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-12-01T10:55:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 1
            *     }
            */
@@ -987,7 +2078,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 麻醉记录单标识（雪花 ID 字符串）。 */
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
         recordId: string
       }
       cookie?: never
@@ -997,9 +2088,9 @@ export interface operations {
         /**
          * @example {
          *       "timeOutAt": "2026-12-01T08:50:00+08:00",
-         *       "timeOutBy": "1000000000000000002",
+         *       "timeOutBy": "10000000-0000-4000-8000-000000000002",
          *       "signOutAt": "2026-12-01T10:55:00+08:00",
-         *       "signOutBy": "1000000000000000001",
+         *       "signOutBy": "10000000-0000-4000-8000-000000000001",
          *       "specimenChecked": true,
          *       "implantChecked": true,
          *       "version": 1
@@ -1017,18 +2108,18 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "checkId": "1500000000000000001",
-           *       "recordId": "1200000000000000001",
+           *       "checkId": "15000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
            *       "timeOutAt": "2026-12-01T08:50:00+08:00",
-           *       "timeOutBy": "1000000000000000002",
+           *       "timeOutBy": "10000000-0000-4000-8000-000000000002",
            *       "signOutAt": "2026-12-01T10:55:00+08:00",
-           *       "signOutBy": "1000000000000000001",
+           *       "signOutBy": "10000000-0000-4000-8000-000000000001",
            *       "specimenChecked": true,
            *       "implantChecked": true,
            *       "createdAt": "2026-12-01T10:55:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-12-01T11:10:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 2
            *     }
            */
@@ -1043,18 +2134,18 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "checkId": "1500000000000000001",
-           *       "recordId": "1200000000000000001",
+           *       "checkId": "15000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
            *       "timeOutAt": "2026-12-01T08:50:00+08:00",
-           *       "timeOutBy": "1000000000000000002",
+           *       "timeOutBy": "10000000-0000-4000-8000-000000000002",
            *       "signOutAt": "2026-12-01T10:55:00+08:00",
-           *       "signOutBy": "1000000000000000001",
+           *       "signOutBy": "10000000-0000-4000-8000-000000000001",
            *       "specimenChecked": true,
            *       "implantChecked": true,
            *       "createdAt": "2026-12-01T10:55:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-12-01T10:55:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 1
            *     }
            */
@@ -1096,9 +2187,9 @@ export interface operations {
            * @example {
            *       "items": [
            *         {
-           *           "followUpId": "1400000000000000001",
-           *           "recordId": "1200000000000000001",
-           *           "patientId": "5000000000000000001",
+           *           "followUpId": "14000000-0000-4000-8000-000000000001",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
            *           "patientNo": "SYNTH-P-0001",
            *           "patientName": "演示患者",
            *           "followUpHours": 24,
@@ -1108,9 +2199,9 @@ export interface operations {
            *           "satisfaction": 5,
            *           "completedAt": "2026-12-02T10:00:00+08:00",
            *           "createdAt": "2026-12-02T10:00:00+08:00",
-           *           "createdBy": "1000000000000000001",
+           *           "createdBy": "10000000-0000-4000-8000-000000000001",
            *           "updatedAt": "2026-12-02T10:00:00+08:00",
-           *           "updatedBy": "1000000000000000001",
+           *           "updatedBy": "10000000-0000-4000-8000-000000000001",
            *           "version": 1
            *         }
            *       ],
@@ -1140,7 +2231,7 @@ export interface operations {
       content: {
         /**
          * @example {
-         *       "recordId": "1200000000000000001",
+         *       "recordId": "12000000-0000-4000-8000-000000000001",
          *       "followUpHours": 24,
          *       "painScore": 2,
          *       "ponv": false,
@@ -1161,9 +2252,9 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "followUpId": "1400000000000000001",
-           *       "recordId": "1200000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "followUpId": "14000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "followUpHours": 24,
@@ -1173,9 +2264,9 @@ export interface operations {
            *       "satisfaction": 5,
            *       "completedAt": "2026-12-02T10:00:00+08:00",
            *       "createdAt": "2026-12-02T10:00:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-12-02T10:00:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 1
            *     }
            */
@@ -1194,7 +2285,7 @@ export interface operations {
       query?: never
       header?: never
       path: {
-        /** @description 随访标识（雪花 ID 字符串）。 */
+        /** @description 随访标识（UUID 字符串）。 */
         followUpId: string
       }
       cookie?: never
@@ -1209,9 +2300,9 @@ export interface operations {
         content: {
           /**
            * @example {
-           *       "followUpId": "1400000000000000001",
-           *       "recordId": "1200000000000000001",
-           *       "patientId": "5000000000000000001",
+           *       "followUpId": "14000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
            *       "patientNo": "SYNTH-P-0001",
            *       "patientName": "演示患者",
            *       "followUpHours": 24,
@@ -1221,9 +2312,9 @@ export interface operations {
            *       "satisfaction": 5,
            *       "completedAt": "2026-12-02T10:00:00+08:00",
            *       "createdAt": "2026-12-02T10:00:00+08:00",
-           *       "createdBy": "1000000000000000001",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
            *       "updatedAt": "2026-12-02T10:00:00+08:00",
-           *       "updatedBy": "1000000000000000001",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 1
            *     }
            */

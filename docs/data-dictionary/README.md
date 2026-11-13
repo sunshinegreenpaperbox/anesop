@@ -42,7 +42,7 @@
 | M1 | 手术申请 | `surgery_application` | HIS 申请映射，`application_no` 幂等 | `SurgeryApplication` | §3.4.2、§3.5.3 I-01b |
 | M1 | 排程/台次 | `schedule` | 术间时段不重叠 | `Schedule` | §3.4.2、§2.4.2 |
 | M1 | 排程变更 | `schedule_change` | 停台/改台/换台原因与前后值 | 契约暂未单列 | §2.4.2、§3.4.2 |
-| M2 | 术前访视 | `preop_visit` | 病史、气道、ASA、评分、计划 | `PreopVisit` | §2.4.3、§2.7.1 |
+| M2 | 术前访视与评估 | `m2_anes.preop_assessment` | 病史、气道、ASA、评分输入/结果、计划、最终化 | `PreopAssessment` | §2.4.3、§2.7.1 |
 | M2 | 麻醉记录单 | `anesthesia_record` | 状态机 + 修订版本 | `AnesthesiaRecord` | §3.4.2、§2.4.3 |
 | M2 | 麻醉事件 | `anesthesia_event` | 按记录单分区，时间倒序索引 | `AnesthesiaEvent` | §3.4.2、§2.4.3 |
 | M2 | 三方核查 | `three_way_check` | Time-out/Sign-out，锁单前置条件 | `ThreeWayCheck` | §2.4.3 |

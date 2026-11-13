@@ -3,7 +3,8 @@
 > 状态：S0-06 基线 + V3（认证令牌）+ V4（M2 采集骨架）+ V5（数据范围绑定，M2-M0-01）
 > + V6（手机号加解密与用户管理，M2-M0-02）+ V7（M1 手术申请接收，M2-M1-01）
 > + V8（M1 术间与排程台次，M2-M2-01）
-> + V9（M1 停改台/急诊加台与通知 outbox，M2-M2-02）；
+> + V9（M1 停改台/急诊加台与通知 outbox，M2-M2-02）
+> + V10（M2 术前访视与评估，M2-M4-01）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -22,6 +23,7 @@ db/
 │   ├── V7__m1_schedule_application.sql     # m1_sched 患者快照/手术申请/状态历史（含 append-only 触发器）+ m1:application:* / m1:patient:read（M2-M1-01）
 │   ├── V8__m1_schedule_room_plan.sql       # m1_sched 术间/排程台次 + surgery_application.required_room_type + m1:schedule:*（M2-M2-01）
 │   ├── V9__m1_schedule_change_emergency.sql # m1_sched 变更记录/通知 outbox + m1:schedule:approve（M2-M2-02）
+│   ├── V10__m2_preop_assessment.sql        # m2_anes 术前访视与评估 + m2:preop:*（M2-M4-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -43,7 +45,7 @@ db/
 |---|---|---|
 | `m0_platform` | M0 公共支撑 | 用户、角色、权限、审计、字典（本基线） |
 | `m1_sched` | M1 手术排程 | 手术申请、排程/台次、术间 |
-| `m2_anes` | M2 麻醉记录 | 记录单、事件、用药、体征 |
+| `m2_anes` | M2 麻醉记录 | 术前访视与评估（V10）、设备采集体征（V4）；记录单/事件/用药由后续版本扩展 |
 | `m3_staff` | M3 人员资质 | 人员档案、授权 |
 | `m4_supply` | M4 耗材追溯 | 批次、消耗 |
 | `m5_drug` | M5 药品管理 | 麻精台账、处方 |
@@ -168,6 +170,34 @@ V9 属 expand 段：新增 `m1_sched.schedule_change_request`（台次变更申�
   如需保留，只能依赖导出归档。
 - **重放**：修复后重新执行 V9 会重建空表；已导出的审批记录不得直接回灌（会与 Flyway 版本/
   外键冲突），须走受控数据修复流程并记录操作人与时间。
+
+### 4.5 V10（M2 术前访视与评估）回滚说明
+
+V10 属 expand 段：新增 `m2_anes.preop_assessment`（术前访视与评估单）与
+`uk_preop_assessment_application_draft`（同一申请最多一份草稿的部分唯一索引）、5 个普通索引、
+2 个权限点 `m2:preop:read|write`（授予 SYS_ADMIN/SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）；
+不修改 V1–V9 已执行脚本，也不改写既有列与数据。关键约束：`fk_preop_assessment_application`
+（申请逻辑外键 + 物理 FK）、`ck_preop_assessment_finalized`（FINALIZED 必须有最终化人/时间，
+DRAFT 必须没有）、`ck_preop_assessment_json_objects`（患者快照/气道/评分输入/评分结果必须是
+JSON 对象）、各项分数范围 CHECK、`finalize_note varchar(500)`（最终化说明，只落库不入日志）；
+评分输入与结果均以 jsonb 结构化保存，便于复算。最终化不可变由数据库触发器
+`trg_preop_assessment_no_update_finalized`（FINALIZED 行拒绝 UPDATE）、
+`trg_preop_assessment_no_delete`、`trg_preop_assessment_no_truncate`（DELETE/TRUNCATE 一律拒绝）
+兜底，SQLSTATE 55000；草稿 UPDATE 仍允许。
+
+- **应用回滚**：下线 `/v1/anesthesia/preop-assessments*` 五个路由与前端 `/m2/preop*` 页面
+  （含菜单项）；V4 采集表、麻醉记录/锁单/随访能力不受影响。
+- **库层回滚**（前向修复脚本，需 DBA 审批 + 备份；顺序不可颠倒）：
+  `DROP TABLE m2_anes.preop_assessment` →
+  `DROP FUNCTION IF EXISTS m2_anes.fn_preop_assessment_finalized_immutable()` →
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN
+  ('b0000000-0000-4000-8000-00000000002a','b0000000-0000-4000-8000-00000000002b')` →
+  `DELETE FROM m0_platform.sys_permission WHERE code IN ('m2:preop:read','m2:preop:write')`。
+- **数据保全**：回滚前必须导出 `m2_anes.preop_assessment`（访视、评分输入与结果快照）并校验
+  行数；临床记录不得丢失，须先归档到离线审计库。
+- **不可逆项**：最终化单的评分快照与审计链无法从其他表反推；回滚后只能依赖导出归档。
+- **重放**：修复后重新执行 V10 会重建空表并重新灌入 6 条权限授权；已导出的访视数据不得直接
+  回灌（会与 Flyway 版本/外键冲突），须走受控数据修复流程并记录操作人与时间。
 
 ## 5. 运行方式
 
