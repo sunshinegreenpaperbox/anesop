@@ -1201,6 +1201,8 @@ public class SchedulingServiceImpl implements SchedulingService {
             dto.setRoomType(OperatingRoom.RoomTypeEnum.fromValue(room.getRoomType()));
         }
         dto.setSiteId(room.getSiteId() == null ? "" : room.getSiteId().toString());
+        dto.setDeptId(room.getDeptId() == null ? null : room.getDeptId().toString());
+        dto.setDeptName(room.getDeptName());
         dto.setStatus(OperatingRoom.StatusEnum.fromValue(room.getStatus()));
         dto.setIsolationRequired(false);
         dto.setEquipmentTags(List.of());

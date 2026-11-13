@@ -29,6 +29,12 @@ public final class M1Permissions {
      */
     public static final String SCHEDULE_APPROVE = "m1:schedule:approve";
 
+    /**
+     * 排程分析只读（V12 新增，M2-M6-01）：术间利用率、准点开台率、取消率与脱敏 CSV 导出。
+     * 授予 SYS_ADMIN、SYS_OR_MANAGER、SYS_QC_MANAGER（质控统计口径）。
+     */
+    public static final String ANALYTICS_READ = "m1:analytics:read";
+
     /** Spring Security 授权表达式中的申请只读权限：{@code PERM_m1:application:read}。 */
     public static final String AUTHORITY_APPLICATION_READ = "PERM_" + APPLICATION_READ;
 
@@ -46,6 +52,9 @@ public final class M1Permissions {
 
     /** Spring Security 授权表达式中的停台/急诊加台审批权限：{@code PERM_m1:schedule:approve}。 */
     public static final String AUTHORITY_SCHEDULE_APPROVE = "PERM_" + SCHEDULE_APPROVE;
+
+    /** Spring Security 授权表达式中的排程分析只读权限：{@code PERM_m1:analytics:read}。 */
+    public static final String AUTHORITY_ANALYTICS_READ = "PERM_" + ANALYTICS_READ;
 
     private M1Permissions() {
     }

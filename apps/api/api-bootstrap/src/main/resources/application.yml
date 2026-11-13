@@ -60,6 +60,16 @@ anesop:
       scheduler-enabled: ${ANESOP_NOTIFICATION_SCHEDULER_ENABLED:true}
       poll-interval-ms: ${ANESOP_NOTIFICATION_POLL_INTERVAL_MS:30000}
       initial-delay-ms: ${ANESOP_NOTIFICATION_INITIAL_DELAY_MS:30000}
+    # 排程分析口径（M2-M6-01，契约 scheduling.yaml 0.6.0）。
+    # 口径由院方最终确定（D-21：系统出数、绩效规则院方另定）；以下默认值均为可配置项，
+    # 未确认项在 docs/modules/m1/README.md §12 标【待确认】。非法配置启动即拒绝（fail-closed）。
+    analytics:
+      # 首台准点阈值（分钟，±）：|实际开始 - 计划开始| ≤ 该值计准点，默认 15。
+      on-time-threshold-minutes: ${ANESOP_M1_ANALYTICS_ON_TIME_THRESHOLD_MINUTES:15}
+      # 每术间每日可用分钟（利用率分母），默认 600 分钟（10 小时）【待确认院方开放时长】。
+      room-daily-available-minutes: ${ANESOP_M1_ANALYTICS_ROOM_DAILY_AVAILABLE_MINUTES:600}
+      # 查询最大跨度（含首尾），默认 92 天；配置 >92 时夹紧为 92 并 WARN（契约上限固定 92）。
+      max-range-days: ${ANESOP_M1_ANALYTICS_MAX_RANGE_DAYS:92}
   # M2 术前评分口径（M2-M4-01）。默认值 = 当前实现口径（公开量表）：
   # RCRI 0/1/≥2、Apfel 0–1/2/≥3、STOP-BANG 0–2/3–4/≥5；VO2peak < 14 ≈ <4 METs。
   # 院方口径确认后只改配置并升级 calculator-version（写入 scores.calculatorVersion），
