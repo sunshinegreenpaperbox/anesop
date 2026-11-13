@@ -6,7 +6,9 @@
 > + V9（M1 停改台/急诊加台与通知 outbox，M2-M2-02）
 > + V10（M2 术前访视与评估，M2-M4-01）
 > + V11（M2 知情同意与三方核查，M2-M5-01）
-> + V12（M1 排程分析权限点，M2-M6-01，data-only）；
+> + V12（M1 排程分析权限点，M2-M6-01，data-only）
+> + V13（M2 麻醉记录单/时间轴/用药/出入量，M3-M2-01）
+> + V14（M2 设备登记与采集接入，M3-M8-01）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -28,6 +30,8 @@ db/
 │   ├── V10__m2_preop_assessment.sql        # m2_anes 术前访视与评估 + m2:preop:*（M2-M4-01）
 │   ├── V11__m2_consent_threeway.sql        # m2_anes 知情同意/三方核查 + m2:consent:* / m2:threeway:*（M2-M5-01）
 │   ├── V12__m1_analytics_permission.sql    # m1:analytics:read（data-only，无表/视图变更；M2-M6-01）
+│   ├── V13__m2_anesthesia_record.sql       # m2_anes 记录单/时间轴/用药/出入量 + m2:record:*（M3-M2-01）
+│   ├── V14__m2_device_registry.sql         # m2_anes 设备登记/上报幂等日志 + m2:device:*（M3-M8-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -276,6 +280,59 @@ V12 属 **data-only** 迁移：不建表、不改既有表/列/索引、不创�
   记录按审计留存要求保留 ≥6 个月，不得随权限回滚删除。
 - **重放**：修复后重新执行 V12 会重新插入同一权限与三条角色授权（`ON CONFLICT` 不适用，
   需先清理再重放），已产生的分析审计不受影响。
+
+### 4.8 V13（M2 麻醉记录单与时间轴）回滚说明
+
+V13 属 expand 段：新增 `m2_anes.anesthesia_record`（一个台次一张，`uk_anesthesia_record_schedule`
+唯一）、`m2_anes.record_event`（append-only，`(record_id, seq)` 唯一）、
+`m2_anes.drug_administration`（append-only，麻精双人核对 CHECK）、
+`m2_anes.fluid_record`（append-only，`amount_ml > 0`），并新增权限点 `m2:record:read|write`
+（授予 SYS_ADMIN/SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）。不改写 V1–V12 既有列与数据，
+V14 与本脚本无表级依赖。
+
+- **应用回滚**：下线 `/v1/anesthesia/records`（按台次创建/查询）与
+  `/v1/anesthesia/records/{recordId}/events|drugs|fluids|io-summary` 路由、前端 `/m2/records*`
+  路由/菜单；术前访视、知情同意、三方核查、申请与排程不受影响（排程页内「麻醉记录」跳转
+  需 M1 写域任务，本任务写域不含 `apps/web/src/modules/m1`）。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份，顺序不可颠倒）：
+  `DROP TABLE m2_anes.fluid_record;` → `DROP TABLE m2_anes.drug_administration;` →
+  `DROP TABLE m2_anes.record_event;` → `DROP TABLE m2_anes.anesthesia_record;` →
+  `DROP FUNCTION IF EXISTS m2_anes.fn_fluid_record_append_only();` /
+  `fn_drug_administration_append_only()` / `fn_record_event_append_only()` /
+  `fn_anesthesia_record_guard();` →
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN
+  ('b0000000-0000-4000-8000-000000000031','b0000000-0000-4000-8000-000000000032');` →
+  `DELETE FROM m0_platform.sys_permission WHERE code IN ('m2:record:read','m2:record:write');`。
+- **不可逆项**：时间轴事件、用药与出入量明细为 append-only 临床留痕，无法从其他表反推；
+  回滚前必须导出四张表并校验行数，先归档到离线审计库，生产执行须人签字。
+- **重放**：修复后重新执行 V13 会重建空表并重新灌入 2 个权限点；已导出数据不得直接回灌。
+- **锁单演进**：V13 的 `status` 约束只允许 `DRAFT/ONGOING`；M3-M2-03 锁单/修订以新迁移
+  （V15+）扩展 `LOCKED/REVISED` 与锁单列，禁止回改本脚本。
+- **单向守卫**：`fn_anesthesia_record_guard` 拒绝状态回退、`started_at` 清空/改写与
+  `version` 不增；守卫依赖触发器，运行账号不得有 DDL 权限（见 §4.9 运行时权限）。
+
+### 4.9 V14（M2 设备登记与采集接入）回滚说明
+
+V14 属 expand 段：新增 `m2_anes.device_registry`（登记与术间绑定，唯一
+`(gateway_id, device_id)`）、`m2_anes.device_ingest_log`（网关批量上报幂等日志，唯一
+`(gateway_id, batch_key)`）与权限点 `m2:device:read|write`（授予 SYS_ADMIN/SYS_OR_MANAGER）。
+不改写 V1–V13 既有表/列/约束，V13 与本脚本无表级依赖，可独立回滚。
+
+- **应用回滚**：下线 `/v1/devices*` 端点与前端设备台账入口，网关
+  `anesop.gateway.platform.mode` 改回 `jdbc`（继续直连 PG 写 `anesthesia_vital`）；设备采集
+  质量看板暂不可用，临床记录单不受影响。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份）：
+  `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN
+  ('b0000000-0000-4000-8000-000000000040','b0000000-0000-4000-8000-000000000041');` →
+  `DELETE FROM m0_platform.sys_permission WHERE code IN ('m2:device:read','m2:device:write');` →
+  `DROP TABLE m2_anes.device_ingest_log;` → `DROP TABLE m2_anes.device_registry;`。
+- **不可逆项**：设备登记与上报日志是运维辅助数据（不含体征明细与患者标识），回滚前
+  `pg_dump -t` 归档两张表；`anesthesia_vital`（V4）为临床体征留痕，**不得随 V14 删除**。
+- **重放**：修复后重新执行 V14 会重建空表并重新灌入 2 个权限点；归档数据不得直接回灌。
+- **运行时权限（S-4）**：`anesthesia_record` 的单向守卫依赖 PL/pgSQL 函数与触发器，
+  **生产运行账号不得拥有 CREATE/ALTER/DROP 等 DDL 权限**——否则可 `ALTER TABLE ...
+  DISABLE TRIGGER USER` 后改写已锁定/已结束的临床记录。运行账号只授业务所需
+  SELECT/INSERT/UPDATE/DELETE（审计表只授 SELECT/INSERT），DDL 仅迁移账号持有。
 
 ## 5. 运行方式
 
