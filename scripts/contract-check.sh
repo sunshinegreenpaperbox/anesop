@@ -23,7 +23,7 @@ cd "$ROOT"
 source "$ROOT/scripts/env.sh" >/dev/null
 
 CONTRACTS_DIR="$ROOT/packages/contracts"
-DOMAINS=(auth patient scheduling anesthesia)
+DOMAINS=(auth patient scheduling anesthesia device)
 MODE="all"
 
 for arg in "$@"; do
@@ -90,7 +90,7 @@ if [ "$MODE" != "lint" ]; then
     fi
   done
   if [ "$breaking_result" != "FAIL" ]; then
-    breaking_result="PASS（4 域均无破坏性变更）"
+    breaking_result="PASS（5 域均无破坏性变更）"
   fi
 fi
 
@@ -146,7 +146,7 @@ if [ "$MODE" = "all" ]; then
         [ "$diff_before" = "$diff_after" ] || drift=1
       fi
       if [ "$drift" -eq 0 ]; then
-        echo "  PASS：generated/typescript 与 4 份契约一致"
+        echo "  PASS：generated/typescript 与 5 份契约一致"
         drift_result="PASS"
       else
         echo "  FAIL：generated/typescript 与契约不一致（重生成产生了文件变化）"

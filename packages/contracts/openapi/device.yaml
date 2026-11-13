@@ -1,0 +1,1120 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 设备采集契约（device）
+  summary: 设备登记、网关批量上报、体征窗口查询与采集健康摘要
+  description: |
+    ANESOP 设备采集域契约（新增域，无历史包袱，0.1.0 首版），对应方案书 §3.6
+    （设备数据采集：协议接入 → 解析 → 标准化 → 缓冲 → 上行，时间戳三规则与数据质量标记）
+    与 §3.6.5（离线判定与运维看板），任务卡 M3-M8-01。
+
+    边界与硬规则：
+    - 设备只采集不控制：本契约不下发任何设备控制指令；
+    - 采集解耦：网关断网可缓存并补传，平台 ingest 以 batchKey（批次唯一）与
+      anesthesia_vital 行级唯一键 (deviceId, seq, measuredAt) 双层幂等，重复批次不重复入库；
+    - 质量优先于丢弃：超范围/单位不符/时钟偏差的帧仍入库，只打 quality（0 正常/1 可疑/
+      2 缺失/3 超时）与 qualityFlags；只有格式非法（缺字段、序号非法、质量码越界）才拒绝，
+      并只返回原因码，不回显报文原文；
+    - 无 PHI：设备域只处理设备标识、术间标识与数值体征，不接收姓名/住院号/证件号；
+      审计 detail 同样不含 PHI；
+    - 网关认证：`POST /v1/devices/{gatewayId}/{deviceId}/ingest` 使用内部网关令牌
+      `X-Gateway-Token`（与用户 JWT 分离），密钥由部署注入、缺失时 fail-closed 拒绝；
+      令牌不得出现在日志、审计与错误响应中；
+    - 所有示例均为 SYNTHETIC 合成数据（设备标识 SIM-*，术间为演示 UUID）。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 设备采集
+    description: 设备登记与术间绑定、网关批量上报（幂等）、体征窗口查询与采集健康摘要。
+paths:
+  /v1/devices:
+    get:
+      operationId: listDevices
+      tags:
+        - 设备采集
+      summary: 查询设备登记列表
+      description: |
+        按网关/术间/状态过滤设备登记台账，返回最后在线时间与质量统计（接受/重复/拒绝/
+        可疑帧数与比例）。状态由服务端按 `lastSeenAt + 离线超时阈值` 推导：
+        超过阈值未上报即返回 OFFLINE（视图计算，不写回登记表）；MAINTENANCE 为运维显式状态，
+        不参与超时推导。
+      parameters:
+        - name: gatewayId
+          in: query
+          required: false
+          description: 按网关实例标识过滤（[A-Za-z0-9._-]{1,64}）。
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9._-]{1,64}$'
+        - name: status
+          in: query
+          required: false
+          description: 按推导后的设备状态过滤；缺省返回全部状态。
+          schema:
+            $ref: '#/components/schemas/DeviceStatus'
+        - name: roomId
+          in: query
+          required: false
+          description: 按绑定术间过滤（逻辑外键，UUID 字符串）。
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 设备登记列表（未分页：单院设备量级为百级，一次返回便于看板高亮）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceList'
+              example:
+                items:
+                  - gatewayId: GW-OR-01
+                    deviceId: SIM-MON-01
+                    roomId: 80000000-0000-4000-8000-000000000001
+                    deviceType: MONITOR
+                    status: ONLINE
+                    lastSeenAt: '2026-11-14T09:30:00+08:00'
+                    qualityStats:
+                      batches: 12
+                      acceptedRows: 1440
+                      duplicateRows: 0
+                      rejectedRows: 3
+                      suspectRows: 5
+                      missingRows: 1
+                      qualityRate: 0.0042
+                      rejectedRate: 0.0021
+                      lastBatchKey: GW-OR-01-SIM-MON-01-1440-1440-1763083800000
+                      lastBatchAt: '2026-11-14T09:30:00+08:00'
+                    createdAt: '2026-11-14T08:00:00+08:00'
+                    updatedAt: '2026-11-14T09:30:00+08:00'
+                    version: 13
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: registerDevice
+      tags:
+        - 设备采集
+      summary: 登记设备并绑定术间
+      description: |
+        登记一台采集设备并绑定术间。唯一键 (gatewayId, deviceId)：
+        - 首次登记返回 201；
+        - 同一 (gatewayId, deviceId) 再次提交且内容相同 → 200 幂等返回，不产生新行；
+        - 同一设备换台（roomId/deviceType 变化）→ 200 重新绑定，version 递增；
+        - 并发登记由数据库唯一键兜底，冲突返回 409。
+        roomId 为逻辑外键（术间主数据在 M1），未绑定可传 null（仅全院 ALL 数据范围可操作），
+        后续再绑；目标术间必须在调用者数据范围内，否则 403。
+        请求未带 status 时不覆盖已有状态：首次登记默认 ONLINE，已有登记保留当前状态
+        （例如 MAINTENANCE 不会被重复登记改回 ONLINE）。请求 status 是运维设置的显式状态，
+        与响应 Device.status（查询期推导）语义不同。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRegisterRequest'
+            example:
+              gatewayId: GW-OR-01
+              deviceId: SIM-MON-01
+              roomId: 80000000-0000-4000-8000-000000000001
+              deviceType: MONITOR
+              status: ONLINE
+      responses:
+        '201':
+          description: 首次登记成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+              example:
+                gatewayId: GW-OR-01
+                deviceId: SIM-MON-01
+                roomId: 80000000-0000-4000-8000-000000000001
+                deviceType: MONITOR
+                status: OFFLINE
+                lastSeenAt: null
+                qualityStats:
+                  batches: 0
+                  acceptedRows: 0
+                  duplicateRows: 0
+                  rejectedRows: 0
+                  suspectRows: 0
+                  missingRows: 0
+                  qualityRate: 0
+                  rejectedRate: 0
+                  lastBatchKey: null
+                  lastBatchAt: null
+                createdAt: '2026-11-14T08:00:00+08:00'
+                updatedAt: '2026-11-14T08:00:00+08:00'
+                version: 1
+        '200':
+          description: 幂等登记或换台绑定成功（返回当前登记状态，version 递增）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+              example:
+                gatewayId: GW-OR-01
+                deviceId: SIM-MON-01
+                roomId: 80000000-0000-4000-8000-000000000002
+                deviceType: MONITOR
+                status: ONLINE
+                lastSeenAt: '2026-11-14T09:30:00+08:00'
+                qualityStats:
+                  batches: 1
+                  acceptedRows: 120
+                  duplicateRows: 0
+                  rejectedRows: 0
+                  suspectRows: 0
+                  missingRows: 0
+                  qualityRate: 0
+                  rejectedRate: 0
+                  lastBatchKey: GW-OR-01-SIM-MON-01-120-120-1763083800000
+                  lastBatchAt: '2026-11-14T09:30:00+08:00'
+                createdAt: '2026-11-14T08:00:00+08:00'
+                updatedAt: '2026-11-14T10:00:00+08:00'
+                version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/devices/health:
+    get:
+      operationId: getDeviceHealth
+      tags:
+        - 设备采集
+      summary: 采集健康摘要（运维）
+      description: |
+        平台侧看到的采集健康摘要：按网关聚合设备在线/离线/维护数量、最近上报时间、
+        近 N 小时批次与接受/重复/拒绝帧数、质量比例。N 为统计窗口，默认 24 小时、可配置
+        1–168（`anesop.m2.acquisition.health-window-hours`）；批次统计与质量比例分子/分母
+        使用同一窗口。整体状态 HEALTHY（全部网关窗口内有上报且无拒绝）、DEGRADED（存在
+        STALE/NO_INGEST 网关或存在拒绝帧）、NO_DATA（尚无任何登记设备）。
+        网关本机缓冲深度与上传重试指标由网关 `/actuator/metrics` 暴露（EXT-04），
+        本端点只聚合平台已接收的数据，不含报文与患者标识。
+      responses:
+        '200':
+          description: 采集健康摘要。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceHealth'
+              example:
+                generatedAt: '2026-11-14T09:35:00+08:00'
+                offlineTimeoutSeconds: 120
+                status: HEALTHY
+                devices:
+                  total: 2
+                  online: 1
+                  offline: 1
+                  maintenance: 0
+                ingest:
+                  batches: 24
+                  acceptedRows: 2880
+                  duplicateRows: 0
+                  rejectedRows: 1
+                  lastReceivedAt: '2026-11-14T09:30:00+08:00'
+                gateways:
+                  - gatewayId: GW-OR-01
+                    status: ONLINE
+                    devicesTotal: 2
+                    devicesOnline: 1
+                    devicesOffline: 1
+                    devicesMaintenance: 0
+                    lastSeenAt: '2026-11-14T09:30:00+08:00'
+                    lastIngestAt: '2026-11-14T09:30:00+08:00'
+                    batches: 24
+                    acceptedRows: 2880
+                    duplicateRows: 0
+                    rejectedRows: 1
+                    qualityRate: 0.0017
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/devices/{gatewayId}/{deviceId}/vitals:
+    get:
+      operationId: listDeviceVitals
+      tags:
+        - 设备采集
+      summary: 按窗口查询标准化体征
+      description: |
+        查询某设备在 [from, to) 窗口内的标准化体征，按采样帧分页（一帧可展开为多条指标行，
+        每行含 metric/value/unit/measuredAt/quality/qualityFlags；未采到的指标不返回）。
+        过滤：窗口必填且跨度不超过查询上限（默认 24 小时，可配置 1–168；超过返回 422）；quality 可选，只返回指定质量码的帧。
+        排序：measuredAt 升序；measuredAt 为设备原始测量时间（幂等键组成部分），
+        时钟校正值仅用于质量标记说明。设备未登记或超出调用者数据范围统一返回 404
+        （不泄露设备存在性）。
+      parameters:
+        - $ref: '#/components/parameters/GatewayId'
+        - $ref: '#/components/parameters/DeviceId'
+        - name: from
+          in: query
+          required: true
+          description: 窗口起点（含），RFC 3339；示例为合成时间。
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          description: 窗口终点（不含），必须晚于 from；跨度不超过查询上限（默认 24 小时，可配置 1–168）。
+          schema:
+            type: string
+            format: date-time
+        - name: quality
+          in: query
+          required: false
+          description: 质量码过滤（0 正常/1 可疑/2 缺失/3 超时）；缺省不过滤。
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 3
+        - name: page
+          in: query
+          required: false
+          description: 页码，从 1 开始（按采样帧计数）。
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          required: false
+          description: 每页采样帧数，1–200，默认 50。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: 体征分页结果；items 按帧展开为指标行。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VitalPage'
+              example:
+                items:
+                  - metric: HR
+                    value: 76
+                    unit: bpm
+                    measuredAt: '2026-11-14T09:29:00+08:00'
+                    quality: 0
+                    qualityFlags: []
+                  - metric: SPO2
+                    value: 98
+                    unit: '%'
+                    measuredAt: '2026-11-14T09:29:00+08:00'
+                    quality: 0
+                    qualityFlags: []
+                  - metric: NIBP_SYS
+                    value: 120
+                    unit: mmHg
+                    measuredAt: '2026-11-14T09:29:00+08:00'
+                    quality: 1
+                    qualityFlags:
+                      - nibp_sys:RANGE
+                meta:
+                  page: 1
+                  size: 50
+                  total: 3
+                  totalPages: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/devices/{gatewayId}/{deviceId}/ingest:
+    post:
+      operationId: ingestDeviceVitals
+      tags:
+        - 设备采集
+      summary: 网关批量上报标准化体征（内部令牌）
+      description: |
+        采集网关把本地缓冲的一批标准化体征上报平台。认证与用户 JWT 分离：请求头
+        `X-Gateway-Token` 必须匹配部署注入的网关密钥；密钥未配置时 fail-closed 一律 401，
+        令牌不落日志、审计与错误响应。
+        幂等：同一 (gatewayId, batchKey) 只接受一次，重复批次返回 duplicateBatch=true、
+        acceptedRows=0，不新增行；同一帧重复（行级唯一键）计入 duplicateRows。
+        部分成功：格式非法的帧不中断整批，计入 rejectedRows 并只返回原因码（不回显报文原文）；
+        质量可疑/缺失帧仍入库，只打 quality 与 qualityFlags。
+        未登记设备返回 404（先登记后采集，防止未知设备注入）。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/GatewayId'
+        - $ref: '#/components/parameters/DeviceId'
+        - name: X-Gateway-Token
+          in: header
+          required: true
+          description: 内部网关令牌（部署注入，与用户 JWT 分离）；示例值为合成占位。
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+            example:
+              batchKey: GW-OR-01-SIM-MON-01-1440-1441-1763083800000
+              frames:
+                - seq: 1440
+                  measuredAt: '2026-11-14T09:30:00+08:00'
+                  measuredAtCorrected: '2026-11-14T09:30:00+08:00'
+                  receivedAt: '2026-11-14T09:30:01+08:00'
+                  hr: 76
+                  spo2: 98
+                  nibpSys: 120
+                  nibpDia: 80
+                  etco2: 35
+                  temp: 36.7
+                  quality: 0
+                  flags:
+                    - ts:BACKFILL:-600000
+                  source: AUTO
+                - seq: 1441
+                  measuredAt: '2026-11-14T09:30:01+08:00'
+                  measuredAtCorrected: '2026-11-14T09:30:01+08:00'
+                  receivedAt: '2026-11-14T09:30:02+08:00'
+                  hr: 78
+                  spo2: 97
+                  nibpSys: null
+                  nibpDia: null
+                  etco2: null
+                  temp: null
+                  quality: 2
+                  flags:
+                    - spo2:MISSING
+                  source: AUTO
+      responses:
+        '202':
+          description: 批次已接收（含部分拒绝）；acceptedRows 为本次新入库帧数。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+              example:
+                gatewayId: GW-OR-01
+                deviceId: SIM-MON-01
+                batchKey: GW-OR-01-SIM-MON-01-1440-1441-1763083800000
+                acceptedRows: 2
+                duplicateRows: 0
+                rejectedRows: 0
+                duplicateBatch: false
+                rejections: []
+                receivedAt: '2026-11-14T09:30:02+08:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
+  parameters:
+    GatewayId:
+      name: gatewayId
+      in: path
+      required: true
+      description: 采集网关实例标识。
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,64}$'
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      description: 设备标识（厂商序列号或院内资产号）。
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,64}$'
+  responses:
+    BadRequest:
+      description: 请求参数校验失败：字段缺失、格式非法或取值越界；details 为字段级错误数组。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0105
+            details:
+              - field: batchKey
+                reason: 批次键不能为空
+    Unauthorized:
+      description: 未认证：未携带/令牌无效，或网关令牌缺失/不匹配（fail-closed）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0101
+            details: []
+    Forbidden:
+      description: 已认证但无权限（缺少 m2:device:read 或 m2:device:write）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0102
+            details:
+              - field: permission
+                reason: 需要 m2:device:write 权限
+    NotFound:
+      description: 设备未登记或不存在（不泄露其他网关的设备存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-0103
+            details: []
+    Conflict:
+      description: 并发登记冲突（同一 gatewayId + deviceId 已被并发创建）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: STATE_CONFLICT
+            message: 设备已登记或数据已被修改
+            traceId: SYNTH-TRACE-0104
+            details: []
+    UnprocessableEntity:
+      description: 业务规则拒绝：窗口跨度超过查询上限（默认 24 小时，可配置 1–168）等。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 查询窗口超过允许的最大跨度
+            traceId: SYNTH-TRACE-0106
+            details:
+              - field: to
+                reason: 查询窗口跨度超过上限（默认 24 小时，可配置 1–168）
+  schemas:
+    ErrorDetail:
+      type: object
+      description: 错误明细项，用于字段级校验失败或权限范围说明。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 相关字段名或资源标识。
+        reason:
+          type: string
+          description: 可读的失败原因，不包含堆栈、SQL 实参与患者标识。
+    Error:
+      type: object
+      description: 统一错误响应；错误信息不暴露堆栈、SQL 实参、令牌与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用，如 AUTH_UNAUTHORIZED。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联，便于排障。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    PageMeta:
+      type: object
+      description: 分页元数据；页码从 1 开始（本域按采样帧计数）。
+      required:
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          description: 当前页码，从 1 开始。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页采样帧数。
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          description: 符合条件的采样帧总数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数；total 为 0 时为 0。
+          minimum: 0
+    DeviceStatus:
+      type: string
+      description: |
+        设备状态。响应 Device.status 为查询期推导：MAINTENANCE（运维显式状态）优先；
+        其余按 lastSeenAt + 离线超时阈值推导 ONLINE/OFFLINE，不写回数据库。
+        请求 DeviceRegisterRequest.status 为运维设置的显式状态（缺省时首次登记 ONLINE、
+        已有登记保持原状态）。
+      enum:
+        - ONLINE
+        - OFFLINE
+        - MAINTENANCE
+    DeviceType:
+      type: string
+      description: 设备类型（真实型号清单待 D-06/EXT-04）。
+      enum:
+        - MONITOR
+        - ANESTHESIA_MACHINE
+        - INFUSION_PUMP
+        - VENTILATOR
+        - OTHER
+    QualityStats:
+      type: object
+      description: 设备质量统计（无 PHI）；比例为服务端按累计行数计算。
+      required:
+        - batches
+        - acceptedRows
+        - duplicateRows
+        - rejectedRows
+        - suspectRows
+        - missingRows
+        - qualityRate
+        - rejectedRate
+      properties:
+        batches:
+          type: integer
+          description: 已接收批次数（仅新批次，重复批次不计）。
+          minimum: 0
+        acceptedRows:
+          type: integer
+          description: 成功入库帧数。
+          minimum: 0
+        duplicateRows:
+          type: integer
+          description: 行级唯一键冲突（补传重放）帧数。
+          minimum: 0
+        rejectedRows:
+          type: integer
+          description: 校验拒绝帧数（格式非法，未入库）。
+          minimum: 0
+        suspectRows:
+          type: integer
+          description: 质量可疑帧数（quality=1）。
+          minimum: 0
+        missingRows:
+          type: integer
+          description: 质量缺失/超时帧数（quality=2/3）。
+          minimum: 0
+        qualityRate:
+          type: number
+          description: 质量异常比例 = (suspectRows + missingRows) / acceptedRows；无数据为 0。
+          minimum: 0
+          maximum: 1
+        rejectedRate:
+          type: number
+          description: 拒绝比例 = rejectedRows / (acceptedRows + rejectedRows)；无数据为 0。
+          minimum: 0
+          maximum: 1
+        lastBatchKey:
+          type: [string, 'null']
+          description: 最近一次新批次的幂等键；从未上报为 null。
+        lastBatchAt:
+          type: [string, 'null']
+          format: date-time
+          description: 最近一次新批次的接收时间；从未上报为 null。
+    Device:
+      type: object
+      description: 设备登记视图（含推导状态与质量统计）。
+      required:
+        - gatewayId
+        - deviceId
+        - deviceType
+        - status
+        - qualityStats
+        - createdAt
+        - updatedAt
+        - version
+      properties:
+        gatewayId:
+          type: string
+          description: 采集网关实例标识。
+        deviceId:
+          type: string
+          description: 设备标识。
+        roomId:
+          type: [string, 'null']
+          format: uuid
+          description: 绑定术间标识（逻辑外键）；未绑定为 null。
+        deviceType:
+          $ref: '#/components/schemas/DeviceType'
+        status:
+          $ref: '#/components/schemas/DeviceStatus'
+        lastSeenAt:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            最近一次成功接收该设备体征的服务端时间；从未上报为 null。
+            仅在本批 acceptedRows>0 时推进（全部重复/全部被拒绝的批次不刷新在线时间）。
+        qualityStats:
+          $ref: '#/components/schemas/QualityStats'
+        createdAt:
+          type: string
+          format: date-time
+          description: 登记时间。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间。
+        version:
+          type: integer
+          description: 乐观锁版本号，从 1 开始。
+          minimum: 1
+    DeviceList:
+      type: object
+      description: 设备登记列表（未分页，按 gatewayId、deviceId 升序）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 设备登记项。
+          items:
+            $ref: '#/components/schemas/Device'
+    DeviceRegisterRequest:
+      type: object
+      description: 设备登记/换台绑定请求；同一 (gatewayId, deviceId) 唯一。
+      required:
+        - gatewayId
+        - deviceId
+        - deviceType
+      properties:
+        gatewayId:
+          type: string
+          description: 采集网关实例标识。
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+        deviceId:
+          type: string
+          description: 设备标识。
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+        roomId:
+          type: [string, 'null']
+          format: uuid
+          description: 绑定术间标识（逻辑外键）；未绑定传 null。
+        deviceType:
+          $ref: '#/components/schemas/DeviceType'
+        status:
+          $ref: '#/components/schemas/DeviceStatus'
+    DeviceVital:
+      type: object
+      description: 单条标准化体征（一帧可展开为多条指标行）；单位固定为规范单位。
+      required:
+        - metric
+        - value
+        - unit
+        - measuredAt
+        - quality
+        - qualityFlags
+      properties:
+        metric:
+          type: string
+          description: 体征指标编码。
+          enum:
+            - HR
+            - SPO2
+            - NIBP_SYS
+            - NIBP_DIA
+            - ETCO2
+            - TEMP
+        value:
+          type: number
+          description: 指标数值（规范单位；保留 1 位小数的指标按数值返回）。
+        unit:
+          type: string
+          description: 规范单位。
+          enum:
+            - bpm
+            - '%'
+            - mmHg
+            - C
+        measuredAt:
+          type: string
+          format: date-time
+          description: 设备原始测量时间（幂等键组成部分，不因时钟校正改写）。
+        quality:
+          type: integer
+          description: 质量码：0 正常、1 可疑、2 缺失、3 超时。
+          minimum: 0
+          maximum: 3
+        qualityFlags:
+          type: array
+          description: 质量标记明细（如 hr:RANGE、ts:BACKFILL:-600000）；无标记为空数组。
+          items:
+            type: string
+    VitalPage:
+      type: object
+      description: 体征分页结果；items 为当前页采样帧展开后的指标行。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页指标行（按 measuredAt 升序）。
+          items:
+            $ref: '#/components/schemas/DeviceVital'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    IngestFrame:
+      type: object
+      description: 一帧标准化体征（与网关协议 v1 对齐，单位已规范化）。
+      required:
+        - seq
+        - measuredAt
+        - quality
+      properties:
+        seq:
+          type: integer
+          description: 设备侧帧序号（≥0）；与 measuredAt 共同构成行级幂等键。
+          minimum: 0
+        measuredAt:
+          type: string
+          format: date-time
+          description: 设备测量时间原值（幂等键，不得由平台改写）。
+        measuredAtCorrected:
+          type: string
+          format: date-time
+          description: 网关时钟校正后的测量时间；缺省视为等于 measuredAt。
+        receivedAt:
+          type: string
+          format: date-time
+          description: 网关接收时间；缺省由平台接收时间填充。
+        hr:
+          type: [integer, 'null']
+          description: 心率 bpm；null 表示本帧未采到。
+          minimum: 0
+          maximum: 1000
+        spo2:
+          type: [integer, 'null']
+          description: 血氧 %；null 表示本帧未采到。
+          minimum: 0
+          maximum: 1000
+        nibpSys:
+          type: [integer, 'null']
+          description: 无创收缩压 mmHg；null 表示本帧未采到。
+          minimum: 0
+          maximum: 1000
+        nibpDia:
+          type: [integer, 'null']
+          description: 无创舒张压 mmHg；null 表示本帧未采到。
+          minimum: 0
+          maximum: 1000
+        etco2:
+          type: [number, 'null']
+          description: 呼气末二氧化碳 mmHg（保留 1 位小数）。
+          minimum: 0
+          maximum: 1000
+        temp:
+          type: [number, 'null']
+          description: 体温 ℃（保留 1 位小数）。
+          minimum: -50
+          maximum: 150
+        quality:
+          type: integer
+          description: 质量码：0 正常、1 可疑、2 缺失、3 超时。
+          minimum: 0
+          maximum: 3
+        flags:
+          type: array
+          description: 质量标记明细（逗号拼接后 ≤200 字符）。
+          items:
+            type: string
+        source:
+          type: string
+          description: 数据来源；缺省 AUTO。
+          enum:
+            - AUTO
+            - MANUAL
+            - REPLAY
+    IngestRequest:
+      type: object
+      description: 网关批量上报请求；batchKey 为批次幂等键，补传/重试必须复用。
+      required:
+        - batchKey
+        - frames
+      properties:
+        batchKey:
+          type: string
+          description: 批次幂等键（1–128，[A-Za-z0-9._:-]）；同一网关内唯一。
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._:-]+$'
+        frames:
+          type: array
+          description: 本批帧（1–500）；格式非法的帧计入拒绝，不中断整批。
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/IngestFrame'
+    Rejection:
+      type: object
+      description: 单帧拒绝原因码（不回显报文原文，不含 PHI）。
+      required:
+        - index
+        - reason
+      properties:
+        index:
+          type: integer
+          description: 该帧在 frames 数组中的下标（从 0 起）。
+          minimum: 0
+        reason:
+          type: string
+          description: 原因码，如 SEQ_INVALID、MEASURED_AT_MISSING、QUALITY_OUT_OF_RANGE、VALUE_OUT_OF_RANGE。
+    IngestResult:
+      type: object
+      description: 批量上报结果；重复批次 acceptedRows=0 且 duplicateBatch=true。
+      required:
+        - gatewayId
+        - deviceId
+        - batchKey
+        - acceptedRows
+        - duplicateRows
+        - rejectedRows
+        - duplicateBatch
+        - rejections
+        - receivedAt
+      properties:
+        gatewayId:
+          type: string
+          description: 采集网关实例标识。
+        deviceId:
+          type: string
+          description: 设备标识。
+        batchKey:
+          type: string
+          description: 本批幂等键。
+        acceptedRows:
+          type: integer
+          description: 本次新入库帧数（重复批次为 0）。
+          minimum: 0
+        duplicateRows:
+          type: integer
+          description: 行级唯一键冲突帧数（重复批次为整批帧数）。
+          minimum: 0
+        rejectedRows:
+          type: integer
+          description: 校验拒绝帧数。
+          minimum: 0
+        duplicateBatch:
+          type: boolean
+          description: 是否为重复批次（同一 gatewayId + batchKey 已处理过）。
+        rejections:
+          type: array
+          description: 拒绝明细（仅原因码）；无拒绝为空数组。
+          items:
+            $ref: '#/components/schemas/Rejection'
+        receivedAt:
+          type: string
+          format: date-time
+          description: 平台接收时间。
+    DeviceCounts:
+      type: object
+      description: 设备数量汇总（含推导后的离线）。
+      required:
+        - total
+        - online
+        - offline
+        - maintenance
+      properties:
+        total:
+          type: integer
+          description: 登记设备总数。
+          minimum: 0
+        online:
+          type: integer
+          description: 在用且在离线阈值内的设备数。
+          minimum: 0
+        offline:
+          type: integer
+          description: 超过离线阈值未上报的设备数。
+          minimum: 0
+        maintenance:
+          type: integer
+          description: 维护中的设备数。
+          minimum: 0
+    IngestSummary:
+      type: object
+      description: 统计窗口内上报汇总（平台已接收的数据；窗口默认 24h，可配置 1–168）。
+      required:
+        - batches
+        - acceptedRows
+        - duplicateRows
+        - rejectedRows
+      properties:
+        batches:
+          type: integer
+          description: 新批次数。
+          minimum: 0
+        acceptedRows:
+          type: integer
+          description: 入库帧数。
+          minimum: 0
+        duplicateRows:
+          type: integer
+          description: 重复帧数。
+          minimum: 0
+        rejectedRows:
+          type: integer
+          description: 拒绝帧数。
+          minimum: 0
+        lastReceivedAt:
+          type: [string, 'null']
+          format: date-time
+          description: 最近一次接收时间；无数据为 null。
+    GatewayHealth:
+      type: object
+      description: 单网关采集健康摘要；status=ONLINE（近阈值内有上报）、STALE（超出离线阈值）、NO_INGEST（从未上报）。
+      required:
+        - gatewayId
+        - status
+        - devicesTotal
+        - devicesOnline
+        - devicesOffline
+        - devicesMaintenance
+        - batches
+        - acceptedRows
+        - duplicateRows
+        - rejectedRows
+        - qualityRate
+      properties:
+        gatewayId:
+          type: string
+          description: 采集网关实例标识。
+        status:
+          type: string
+          description: 网关上报状态。
+          enum:
+            - ONLINE
+            - STALE
+            - NO_INGEST
+        devicesTotal:
+          type: integer
+          description: 该网关登记设备数。
+          minimum: 0
+        devicesOnline:
+          type: integer
+          description: 在线设备数（推导）。
+          minimum: 0
+        devicesOffline:
+          type: integer
+          description: 离线设备数（推导）。
+          minimum: 0
+        devicesMaintenance:
+          type: integer
+          description: 维护中设备数。
+          minimum: 0
+        lastSeenAt:
+          type: [string, 'null']
+          format: date-time
+          description: 该网关下设备最近上报时间；从未上报为 null。
+        lastIngestAt:
+          type: [string, 'null']
+          format: date-time
+          description: 该网关最近批次接收时间；从未上报为 null。
+        batches:
+          type: integer
+          description: 统计窗口内批次数（默认 24h，可配置 1–168）。
+          minimum: 0
+        acceptedRows:
+          type: integer
+          description: 统计窗口内入库帧数（默认 24h，可配置 1–168）。
+          minimum: 0
+        duplicateRows:
+          type: integer
+          description: 统计窗口内重复帧数（默认 24h，可配置 1–168）。
+          minimum: 0
+        rejectedRows:
+          type: integer
+          description: 统计窗口内拒绝帧数（默认 24h，可配置 1–168）。
+          minimum: 0
+        qualityRate:
+          type: number
+          description: 统计窗口内质量异常比例（可疑+缺失）/入库帧数；分子分母同一窗口（measuredAt ∈ [now−窗口, now]），无数据为 0。
+          minimum: 0
+          maximum: 1
+    DeviceHealth:
+      type: object
+      description: 采集健康摘要（运维）；只含设备/批次/质量计数，不含报文与患者标识。
+      required:
+        - generatedAt
+        - offlineTimeoutSeconds
+        - status
+        - devices
+        - ingest
+        - gateways
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+          description: 摘要生成时间。
+        offlineTimeoutSeconds:
+          type: integer
+          description: 当前生效的设备离线超时阈值（秒）。
+          minimum: 1
+        status:
+          type: string
+          description: 整体状态：HEALTHY=全部网关在统计窗口内（默认 24h，可配置 1–168）有上报且无拒绝，DEGRADED=存在 STALE/NO_INGEST 网关或存在拒绝帧，NO_DATA=尚无登记设备。
+          enum:
+            - HEALTHY
+            - DEGRADED
+            - NO_DATA
+        devices:
+          $ref: '#/components/schemas/DeviceCounts'
+        ingest:
+          $ref: '#/components/schemas/IngestSummary'
+        gateways:
+          type: array
+          description: 按网关聚合的摘要，按 gatewayId 升序。
+          items:
+            $ref: '#/components/schemas/GatewayHealth'

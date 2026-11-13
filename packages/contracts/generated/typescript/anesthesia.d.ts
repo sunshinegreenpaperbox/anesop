@@ -121,13 +121,16 @@ export interface paths {
     }
     /**
      * 查询麻醉记录单
-     * @description 返回记录单状态、时间轴事件与审计字段；生命体征高频序列另走采集查询接口。
+     * @description 返回记录单状态、时间轴事件（0.4.0 兼容字段 events）、生命体征占位与审计字段。
+     *     0.5.0 起完整时间轴（含 append-only 的 seq 与 ANESTHESIA_START/ANESTHESIA_END/CUSTOM）
+     *     请调用 GET /records/{recordId}/events；用药与出入量分别调用 /drugs、/fluids、/io-summary。
      */
     get: operations['getAnesthesiaRecord']
     /**
      * 保存麻醉记录单
-     * @description 更新记录单事件与麻醉方式。事件时间以 occurredAt 为准；补录须填写 entryReason。
-     *     锁单后调用本接口返回 409，只能走修订流程。
+     * @description 更新记录单可改字段（麻醉方式）并递增乐观锁版本；version 必须回传，过期 409。
+     *     0.5.0 起事件为 append-only：本接口不接受非空 events（返回 400 PARAM_INVALID），
+     *     追加事件请调用 POST /records/{recordId}/events；锁单后调用本接口仍返回 409（M3-M2-03）。
      */
     put: operations['updateAnesthesiaRecord']
     post?: never
@@ -178,6 +181,137 @@ export interface paths {
      *     已存在时更新返回 200；记录已锁定时返回 409，避免锁单后补签。核查是否完成是锁单前置条件。
      */
     post: operations['upsertThreeWayCheck']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 按台次查询麻醉记录单
+     * @description 按排程台次（scheduleId）查询记录单，一个台次最多一张。集合语义：台次不存在或超出当前
+     *     用户数据范围返回 403（不返回空列表，避免泄露存在性）；台次存在但尚未创建记录单时返回
+     *     空 items，前端据此显示“创建记录单”。全部数据为 SYNTHETIC 示例。
+     */
+    get: operations['listAnesthesiaRecords']
+    put?: never
+    /**
+     * 创建麻醉记录单（按台次）
+     * @description 按排程台次创建麻醉记录单：一个台次只允许一张记录单，重复创建 409（数据库唯一约束兜底）；
+     *     台次不存在或不可见 422（标识在请求体，不回显存在性）；台次已取消/已完成 409。
+     *     创建后状态为 DRAFT，首个 ANESTHESIA_START 事件将状态置为 IN_PROGRESS。
+     */
+    post: operations['createAnesthesiaRecord']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/events': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询记录单时间轴事件
+     * @description 按 occurredAt 升序返回时间轴事件；同一时刻按 seq（服务端创建序）升序，保证时间轴稳定。
+     *     事件表 append-only（数据库触发器拒绝 UPDATE/DELETE/TRUNCATE，SQLSTATE 55000）。
+     */
+    get: operations['listRecordEvents']
+    put?: never
+    /**
+     * 追加时间轴事件（append-only）
+     * @description 只追加不修改：seq 由服务端在锁定记录单行后分配，occurredAt 必填；不得早于记录开始
+     *     时间（400），不得晚于服务端当前时间 + 容差（400），ANESTHESIA_END 之后追加 409；
+     *     补录（早于最新事件或早于 now − 容差）必须填写 entryReason（否则 400）。
+     *     记录单锁定后追加返回 409（锁单 M3-M2-03）。eventType 取值为
+     *     ANESTHESIA_START/INDUCTION/INTUBATION/INCISION/CUSTOM/EXTUBATION/ANESTHESIA_END；
+     *     ANESTHESIA_START 将记录单置为 IN_PROGRESS 并记录开始时间，ANESTHESIA_END 记录结束时间。
+     */
+    post: operations['appendRecordEvent']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/drugs': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询用药记录
+     * @description 按给药时间（administeredAt）倒序返回；麻精类记录含双人核对人标识与姓名摘要字段。
+     */
+    get: operations['listDrugAdministrations']
+    put?: never
+    /**
+     * 记录用药（麻精类双人核对）
+     * @description 用药记录 append-only。麻精药品（narcotic=true）必须填写 secondCheckerId 与
+     *     secondCheckerName 双人核对信息，缺失返回 400；核对人不得与给药人（当前登录用户）为
+     *     同一人，同人核对返回 400。记录单锁定后返回 409（锁单 M3-M2-03）。
+     */
+    post: operations['recordDrugAdministration']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/fluids': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询输液/出入量明细
+     * @description 按记录时间（recordedAt）倒序返回入量（INTAKE）与出量（OUTPUT）明细。
+     */
+    get: operations['listFluidRecords']
+    put?: never
+    /**
+     * 记录输液/出入量
+     * @description 记录一条入量（INTAKE）或出量（OUTPUT）：amountMl 必须大于 0；recordedAt 缺省取服务端
+     *     时间。明细 append-only（不提供修改/删除），出入量以明细汇总为准。记录单锁定后返回 409
+     *     （锁单 M3-M2-03）。
+     */
+    post: operations['recordFluidRecord']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/io-summary': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询出入量汇总
+     * @description 按明细汇总入量、出量与平衡（balanceMl = intakeMl - outputMl），只统计未删除明细；
+     *     结果由服务端计算，前端不得自行累加覆盖。
+     */
+    get: operations['getIntakeOutputSummary']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -922,8 +1056,17 @@ export interface components {
        * @description 记录结束时间；未结束为 null。
        */
       endedAt?: string | null
-      /** @description 时间轴事件列表。 */
+      /**
+       * @description 时间轴事件（0.4.0 兼容字段）：只映射经典事件类型（INDUCTION/INTUBATION/INCISION/
+       *     EXTUBATION/OTHER，CUSTOM 映射为 OTHER，ANESTHESIA_START/ANESTHESIA_END 不在此列）。
+       *     0.5.0 完整时间轴（含 seq 与麻醉开始/结束事件）请调用 GET /records/{recordId}/events。
+       */
       events: components['schemas']['AnesthesiaEvent'][]
+      /**
+       * @description 生命体征序列占位：M3-M8-01 采集接入平台端后填充；本期固定返回空数组，
+       *     前端据此显示“体征待采集接入”，不得伪造体征数值。
+       */
+      readonly vitalSigns?: components['schemas']['VitalSignSample'][]
       /** @description 三方核查（Time-out 与 Sign-out）是否均已完成；只读摘要，锁单前置条件。 */
       readonly threeWayCheckCompleted?: boolean
       /**
@@ -1339,6 +1482,272 @@ export interface components {
       /** @description 当前页随访列表。 */
       items: components['schemas']['FollowUp'][]
       meta: components['schemas']['PageMeta']
+    }
+    /** @description 按台次查询的麻醉记录单列表（一个台次最多一条）。 */
+    AnesthesiaRecordList: {
+      /** @description 记录单列表；台次尚未创建记录单时为空数组。 */
+      items: components['schemas']['AnesthesiaRecord'][]
+    }
+    /** @description 创建麻醉记录单请求；一个台次只允许一张记录单。 */
+    CreateAnesthesiaRecordRequest: {
+      /** @description 排程台次标识（UUID 字符串）；患者/申请由服务端按台次解析。 */
+      scheduleId: string
+      /**
+       * @description 计划麻醉方式。
+       * @enum {string}
+       */
+      anesthesiaType: 'GENERAL' | 'REGIONAL' | 'COMBINED' | 'LOCAL' | 'SEDATION'
+    }
+    /** @description 时间轴事件（append-only）；seq 为服务端分配的同记录创建序。 */
+    RecordEvent: {
+      /** @description 事件标识。 */
+      eventId: string
+      /** @description 所属麻醉记录单标识。 */
+      recordId: string
+      /** @description 同一记录单内的创建序号，从 1 开始；同一 occurredAt 按 seq 升序。 */
+      seq: number
+      /**
+       * @description 事件类型；ANESTHESIA_START/ANESTHESIA_END 为麻醉开始/结束，CUSTOM 为自定义关键事件。
+       * @enum {string}
+       */
+      eventType:
+        | 'ANESTHESIA_START'
+        | 'INDUCTION'
+        | 'INTUBATION'
+        | 'INCISION'
+        | 'CUSTOM'
+        | 'EXTUBATION'
+        | 'ANESTHESIA_END'
+      /**
+       * Format: date-time
+       * @description 事件实际发生时间（不得早于记录开始时间）。
+       */
+      occurredAt: string
+      /**
+       * @description 数据来源：MANUAL=手工录入，DEVICE=设备采集（M3-M8-01）。
+       * @enum {string}
+       */
+      source: 'MANUAL' | 'DEVICE'
+      /** @description 事件备注（演示文本，不含患者直接标识）。 */
+      note?: string | null
+      /** @description 补录/修正原因；正常录入为 null。 */
+      entryReason?: string | null
+      /**
+       * Format: date-time
+       * @description 录入时间（服务端时间），与 occurredAt 分离。
+       */
+      recordedAt: string
+      /** @description 录入人用户标识。 */
+      recordedBy: string
+      /**
+       * Format: date-time
+       * @description 落库时间（服务端时间）。
+       */
+      createdAt: string
+    }
+    /** @description 时间轴事件列表（occurredAt 升序，同刻按 seq 升序）。 */
+    RecordEventList: {
+      /** @description 事件列表。 */
+      items: components['schemas']['RecordEvent'][]
+    }
+    /** @description 追加时间轴事件请求（append-only，不提供修改/删除）。 */
+    CreateRecordEventRequest: {
+      /**
+       * @description 事件类型。
+       * @enum {string}
+       */
+      eventType:
+        | 'ANESTHESIA_START'
+        | 'INDUCTION'
+        | 'INTUBATION'
+        | 'INCISION'
+        | 'CUSTOM'
+        | 'EXTUBATION'
+        | 'ANESTHESIA_END'
+      /**
+       * Format: date-time
+       * @description 事件实际发生时间。不得早于记录开始时间，也不得晚于服务端当前时间 + 时钟容差
+       *     （默认 600 秒，可配置），否则 400 PARAM_INVALID（字段 occurredAt）。
+       *     早于该记录单最新事件时间、或早于服务端当前时间 − 容差的补录，必须同时提供
+       *     entryReason，否则 400 PARAM_INVALID（字段 entryReason）。
+       */
+      occurredAt: string
+      /** @description 事件备注（可为空；不得写入患者直接标识）。 */
+      note?: string
+      /**
+       * @description 补录原因：条件必填。当 occurredAt 早于该记录单最新事件时间，或早于服务端
+       *     当前时间 − 容差（默认 600 秒）时必须填写（否则 400 PARAM_INVALID，字段
+       *     entryReason）；常规按时间顺序追加时可选。只落库 payload，不写入审计 detail 原文。
+       */
+      entryReason?: string
+      /**
+       * @description 数据来源；默认 MANUAL，设备事件由采集链路写入。
+       * @enum {string}
+       */
+      source?: 'MANUAL' | 'DEVICE'
+    }
+    /** @description 用药记录（append-only）；麻精类必须记录双人核对。 */
+    DrugAdministration: {
+      /** @description 用药记录标识。 */
+      drugId: string
+      /** @description 所属麻醉记录单标识。 */
+      recordId: string
+      /** @description 药品名称（院内字典名，不含患者标识）。 */
+      drugName: string
+      /** @description 剂量；必须大于 0。 */
+      dose: number
+      /** @description 剂量单位（如 mg/ug/ml）。 */
+      unit: string
+      /** @description 给药途径（如 IV/INHALATION/EPIDURAL）。 */
+      route: string
+      /**
+       * Format: date-time
+       * @description 给药时间。
+       */
+      administeredAt: string
+      /** @description 是否麻精类药品；true 时双人核对字段必填。 */
+      narcotic: boolean
+      /** @description 第二核对人用户标识；麻精类必填，且不得与给药人相同。 */
+      secondCheckerId?: string | null
+      /** @description 第二核对人姓名（演示文本）；麻精类必填。 */
+      secondCheckerName?: string | null
+      /** @description 备注（可选）。 */
+      note?: string | null
+      /**
+       * Format: date-time
+       * @description 录入时间（服务端时间）。
+       */
+      createdAt: string
+      /** @description 给药人用户标识（当前登录用户）。 */
+      createdBy: string
+    }
+    /** @description 用药记录列表（按给药时间倒序）。 */
+    DrugAdministrationList: {
+      /** @description 用药记录列表。 */
+      items: components['schemas']['DrugAdministration'][]
+    }
+    /** @description 记录用药请求；麻精类（narcotic=true）必须携带双人核对信息。 */
+    AdministerDrugRequest: {
+      /** @description 药品名称（院内字典名）。 */
+      drugName: string
+      /** @description 剂量；必须大于 0。 */
+      dose: number
+      /** @description 剂量单位。 */
+      unit: string
+      /** @description 给药途径。 */
+      route: string
+      /**
+       * Format: date-time
+       * @description 给药时间。
+       */
+      administeredAt: string
+      /** @description 是否麻精类药品。 */
+      narcotic: boolean
+      /** @description 第二核对人用户标识；narcotic=true 时必填且不得与给药人相同。 */
+      secondCheckerId?: string
+      /** @description 第二核对人姓名；narcotic=true 时必填。 */
+      secondCheckerName?: string
+      /** @description 备注（可选）。 */
+      note?: string
+    }
+    /** @description 输液/出入量明细（append-only）。 */
+    FluidRecord: {
+      /** @description 明细标识。 */
+      fluidId: string
+      /** @description 所属麻醉记录单标识。 */
+      recordId: string
+      /**
+       * @description 方向：INTAKE=入量，OUTPUT=出量（尿量/引流量/失血等）。
+       * @enum {string}
+       */
+      direction: 'INTAKE' | 'OUTPUT'
+      /** @description 液体/出量类型（如晶体液、胶体液、尿量）。 */
+      fluidType: string
+      /** @description 量（毫升），必须大于 0。 */
+      amountMl: number
+      /**
+       * Format: date-time
+       * @description 记录时间（缺省为服务端时间）。
+       */
+      recordedAt: string
+      /** @description 备注（可选）。 */
+      note?: string | null
+      /**
+       * Format: date-time
+       * @description 落库时间（服务端时间）。
+       */
+      createdAt: string
+      /** @description 录入人用户标识。 */
+      createdBy: string
+    }
+    /** @description 输液/出入量明细列表（按记录时间倒序）。 */
+    FluidRecordList: {
+      /** @description 明细列表。 */
+      items: components['schemas']['FluidRecord'][]
+    }
+    /** @description 记录入量/出量请求。 */
+    RecordFluidRequest: {
+      /**
+       * @description 方向：INTAKE=入量，OUTPUT=出量。
+       * @enum {string}
+       */
+      direction: 'INTAKE' | 'OUTPUT'
+      /** @description 液体/出量类型。 */
+      fluidType: string
+      /** @description 量（毫升），必须大于 0。 */
+      amountMl: number
+      /**
+       * Format: date-time
+       * @description 记录时间；缺省取服务端时间。
+       */
+      recordedAt?: string
+      /** @description 备注（可选）。 */
+      note?: string
+    }
+    /** @description 出入量汇总（服务端按明细计算，balanceMl = intakeMl - outputMl）。 */
+    IntakeOutputSummary: {
+      /** @description 麻醉记录单标识。 */
+      recordId: string
+      /** @description 入量合计（毫升）。 */
+      intakeMl: number
+      /** @description 出量合计（毫升）。 */
+      outputMl: number
+      /** @description 出入量平衡（入量 - 出量），可为负。 */
+      balanceMl: number
+      /** @description 参与汇总的明细条数。 */
+      fluidCount: number
+      /**
+       * Format: date-time
+       * @description 汇总计算时间（服务端时间）。
+       */
+      computedAt: string
+    }
+    /**
+     * @description 生命体征采样点占位结构（M3-M8-01 采集接入后由平台端写入；本期 GET 记录单返回空数组）。
+     *     不包含任何患者直接标识，时点为服务端校准时间。
+     */
+    VitalSignSample: {
+      /**
+       * Format: date-time
+       * @description 采集时刻（服务端校准）。
+       */
+      measuredAt: string
+      /** @description 心率（次/分）。 */
+      heartRate?: number | null
+      /** @description 收缩压（mmHg）。 */
+      systolicBp?: number | null
+      /** @description 舒张压（mmHg）。 */
+      diastolicBp?: number | null
+      /** @description 血氧饱和度（%）。 */
+      spo2?: number | null
+      /** @description 呼气末二氧化碳（mmHg）。 */
+      etco2?: number | null
+      /** @description 体温（摄氏度）。 */
+      temperature?: number | null
+      /** @description 质量标记（如 SIGNAL_LOSS/ARTIFACT）；M3-M8-01 定义取值。 */
+      qualityFlags?: string[]
+      /** @description 数据来源标识（设备类型/网关）。 */
+      source?: string
     }
   }
   responses: {
@@ -2613,6 +3022,471 @@ export interface operations {
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+    }
+  }
+  listAnesthesiaRecords: {
+    parameters: {
+      query: {
+        /** @description 排程台次标识（UUID 字符串）。 */
+        scheduleId: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 该台次的记录单列表（0 或 1 条）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "scheduleId": "90000000-0000-4000-8000-000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "patientNo": "SYNTH-P-0001",
+           *           "patientName": "演示患者",
+           *           "status": "IN_PROGRESS",
+           *           "anesthesiaType": "GENERAL",
+           *           "startedAt": "2026-12-01T08:40:00+08:00",
+           *           "endedAt": null,
+           *           "events": [],
+           *           "vitalSigns": [],
+           *           "threeWayCheckCompleted": false,
+           *           "threeWayCheckTimeOutAt": null,
+           *           "threeWayCheckSignOutAt": null,
+           *           "createdAt": "2026-12-01T08:35:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000001",
+           *           "updatedAt": "2026-12-01T08:46:00+08:00",
+           *           "updatedBy": "10000000-0000-4000-8000-000000000001",
+           *           "version": 2
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['AnesthesiaRecordList']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  createAnesthesiaRecord: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "scheduleId": "90000000-0000-4000-8000-000000000001",
+         *       "anesthesiaType": "GENERAL"
+         *     }
+         */
+        'application/json': components['schemas']['CreateAnesthesiaRecordRequest']
+      }
+    }
+    responses: {
+      /** @description 记录单创建成功（DRAFT）。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "scheduleId": "90000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "patientNo": "SYNTH-P-0001",
+           *       "patientName": "演示患者",
+           *       "status": "DRAFT",
+           *       "anesthesiaType": "GENERAL",
+           *       "startedAt": null,
+           *       "endedAt": null,
+           *       "events": [],
+           *       "vitalSigns": [],
+           *       "threeWayCheckCompleted": false,
+           *       "threeWayCheckTimeOutAt": null,
+           *       "threeWayCheckSignOutAt": null,
+           *       "createdAt": "2026-12-01T08:35:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
+           *       "updatedAt": "2026-12-01T08:35:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['AnesthesiaRecord']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
+  listRecordEvents: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 时间轴事件列表（按时间有序）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "eventId": "13000000-0000-4000-8000-000000000001",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "seq": 1,
+           *           "eventType": "ANESTHESIA_START",
+           *           "occurredAt": "2026-12-01T08:40:00+08:00",
+           *           "source": "MANUAL",
+           *           "note": "演示麻醉开始（合成数据）",
+           *           "entryReason": null,
+           *           "recordedAt": "2026-12-01T08:41:00+08:00",
+           *           "recordedBy": "10000000-0000-4000-8000-000000000001",
+           *           "createdAt": "2026-12-01T08:41:00+08:00"
+           *         },
+           *         {
+           *           "eventId": "13000000-0000-4000-8000-000000000002",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "seq": 2,
+           *           "eventType": "INDUCTION",
+           *           "occurredAt": "2026-12-01T08:45:00+08:00",
+           *           "source": "MANUAL",
+           *           "note": "演示诱导（合成数据）",
+           *           "entryReason": null,
+           *           "recordedAt": "2026-12-01T08:46:00+08:00",
+           *           "recordedBy": "10000000-0000-4000-8000-000000000001",
+           *           "createdAt": "2026-12-01T08:46:00+08:00"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['RecordEventList']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  appendRecordEvent: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "eventType": "INTUBATION",
+         *       "occurredAt": "2026-12-01T08:55:00+08:00",
+         *       "note": "演示插管事件（合成数据）",
+         *       "source": "MANUAL"
+         *     }
+         */
+        'application/json': components['schemas']['CreateRecordEventRequest']
+      }
+    }
+    responses: {
+      /** @description 事件追加成功（返回服务端分配的 seq 与录入时间）。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "eventId": "13000000-0000-4000-8000-000000000003",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "seq": 3,
+           *       "eventType": "INTUBATION",
+           *       "occurredAt": "2026-12-01T08:55:00+08:00",
+           *       "source": "MANUAL",
+           *       "note": "演示插管事件（合成数据）",
+           *       "entryReason": null,
+           *       "recordedAt": "2026-12-01T08:56:00+08:00",
+           *       "recordedBy": "10000000-0000-4000-8000-000000000001",
+           *       "createdAt": "2026-12-01T08:56:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['RecordEvent']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  listDrugAdministrations: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 用药记录列表。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "drugId": "14000000-0000-4000-8000-000000000001",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "drugName": "丙泊酚（演示）",
+           *           "dose": 120,
+           *           "unit": "mg",
+           *           "route": "IV",
+           *           "administeredAt": "2026-12-01T08:45:00+08:00",
+           *           "narcotic": false,
+           *           "secondCheckerId": null,
+           *           "secondCheckerName": null,
+           *           "note": "演示诱导用药（合成数据）",
+           *           "createdAt": "2026-12-01T08:46:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000001"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['DrugAdministrationList']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  recordDrugAdministration: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "drugName": "舒芬太尼（演示）",
+         *       "dose": 10,
+         *       "unit": "ug",
+         *       "route": "IV",
+         *       "administeredAt": "2026-12-01T09:10:00+08:00",
+         *       "narcotic": true,
+         *       "secondCheckerId": "10000000-0000-4000-8000-000000000002",
+         *       "secondCheckerName": "演示麻醉护士（合成）",
+         *       "note": "演示麻精双人核对（合成数据）"
+         *     }
+         */
+        'application/json': components['schemas']['AdministerDrugRequest']
+      }
+    }
+    responses: {
+      /** @description 用药记录创建成功。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "drugId": "14000000-0000-4000-8000-000000000002",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "drugName": "舒芬太尼（演示）",
+           *       "dose": 10,
+           *       "unit": "ug",
+           *       "route": "IV",
+           *       "administeredAt": "2026-12-01T09:10:00+08:00",
+           *       "narcotic": true,
+           *       "secondCheckerId": "10000000-0000-4000-8000-000000000002",
+           *       "secondCheckerName": "演示麻醉护士（合成）",
+           *       "note": "演示麻精双人核对（合成数据）",
+           *       "createdAt": "2026-12-01T09:11:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001"
+           *     }
+           */
+          'application/json': components['schemas']['DrugAdministration']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  listFluidRecords: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 输液/出入量明细列表。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "fluidId": "16000000-0000-4000-8000-000000000001",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "direction": "INTAKE",
+           *           "fluidType": "复方氯化钠（演示）",
+           *           "amountMl": 500,
+           *           "recordedAt": "2026-12-01T09:00:00+08:00",
+           *           "note": "演示术中输液（合成数据）",
+           *           "createdAt": "2026-12-01T09:01:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000001"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['FluidRecordList']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  recordFluidRecord: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "direction": "INTAKE",
+         *       "fluidType": "复方氯化钠（演示）",
+         *       "amountMl": 500,
+         *       "recordedAt": "2026-12-01T09:00:00+08:00",
+         *       "note": "演示术中输液（合成数据）"
+         *     }
+         */
+        'application/json': components['schemas']['RecordFluidRequest']
+      }
+    }
+    responses: {
+      /** @description 入量/出量明细创建成功。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "fluidId": "16000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "direction": "INTAKE",
+           *       "fluidType": "复方氯化钠（演示）",
+           *       "amountMl": 500,
+           *       "recordedAt": "2026-12-01T09:00:00+08:00",
+           *       "note": "演示术中输液（合成数据）",
+           *       "createdAt": "2026-12-01T09:01:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001"
+           *     }
+           */
+          'application/json': components['schemas']['FluidRecord']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  getIntakeOutputSummary: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 出入量汇总。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "intakeMl": 1500,
+           *       "outputMl": 400,
+           *       "balanceMl": 1100,
+           *       "fluidCount": 3,
+           *       "computedAt": "2026-12-01T10:30:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['IntakeOutputSummary']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
     }
   }
   listFollowUps: {

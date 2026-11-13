@@ -30,7 +30,7 @@ source "$ROOT/scripts/env.sh" >/dev/null
 CONTRACTS_DIR="$ROOT/packages/contracts"
 OUT_DIR="$CONTRACTS_DIR/generated/typescript"
 JAVA_DIR="$ROOT/apps/api/api-contracts/target/generated-sources/openapi"
-DOMAINS=(auth patient scheduling anesthesia)
+DOMAINS=(auth patient scheduling anesthesia device)
 MODE="ts"
 
 for arg in "$@"; do
