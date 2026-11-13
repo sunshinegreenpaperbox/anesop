@@ -1,11 +1,12 @@
 # M2 麻醉信息管理（模块说明）
 
 > 状态：M2-M4-01「术前访视与评估」+ M2-M5-01「知情同意与三方核查」+ M3-M2-01
-> 「麻醉记录单与时间轴」落地版（2026-11-14）。
-> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.5.0；
+> 「麻醉记录单与时间轴」+ M3-M2-02「术中预警规则与抢救记录」落地版（2026-11-14）。
+> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.6.0；
 > 迁移：`db/migration/V10__m2_preop_assessment.sql`、
 > `db/migration/V11__m2_consent_threeway.sql`、
-> `db/migration/V13__m2_anesthesia_record.sql`；
+> `db/migration/V13__m2_anesthesia_record.sql`、
+> `db/migration/V15__m2_alert_rescue.sql`；
 > 方案书：§2.4.3（M2 术前访视/知情同意/三方核查/麻醉计划）、§3.4.2（麻醉记录单与访视实体）、
 > §3.4.3（审计字段/乐观锁/逻辑删除）、§3.9.2（RBAC/数据权限）、§3.9.3（脱敏）、
 > §3.9.4（CA 签名；EXT-05 CA 不可用，本期为占位/自签哈希）。
@@ -388,9 +389,17 @@ GET                   → items（版本倒序）+ completed（最新版本是�
 | `m2:threeway:read` | 同上 | 三方核查查询与完成标记 |
 | `m2:threeway:write` | 同上 | 三方核查录入（新增版本） |
 | `m2:record:read` | 同上 | 记录单列表/详情、时间轴/用药/出入量列表、出入量汇总 |
-| `m2:record:write` | 同上 | 创建记录单、保存记录单、追加事件、用药、输液/出入量 |
+| `m2:record:write` | 同上 | 创建记录单、保存记录单、追加事件、用药、输液/出入量、手动评估告警 |
+| `m2:alert:read` | SYS_ADMIN、SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST | 预警规则列表、记录单告警列表 |
+| `m2:alert:ack` | SYS_ADMIN、SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST | 告警确认/忽略（临床处置） |
+| `m2:alert:configure` | **仅 SYS_ADMIN** | 预警规则配置（代录临床顾问确认后的阈值） |
+| `m2:rescue:write` | SYS_ADMIN、SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST | 抢救记录书写（append-only） |
 
-V10/V11/V13 只新增权限点与授权，不改写 V2 既有角色/权限数据。
+V10/V11/V13/V15 只新增权限点与授权，不改写 V2 既有角色/权限数据。`m2:alert:configure`
+**仅授 SYS_ADMIN**（“信息科代录 + 临床顾问确认”的配置入口）；SYS_ADMIN 同时持有
+ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能授予自身已具备的权限，
+否则无法创建麻醉医师/护士账号，详见 V15 注释）。如需科主任直接维护规则，须新迁移显式授权
+并同步本文档。
 
 ## 8. 测试
 
@@ -629,3 +638,165 @@ anesop:
 - vitals 分页按**采样帧**计数（一帧可展开多条指标行），前端展示需按需聚合；
   波形数据不在本域（方案书 §3.6.3），后续单独设计。
 - `room_id` 未做术间存在性校验（逻辑外键）：术间台账变更由 M1 负责，M3 记录单关联时再校验。
+
+## 13. 术中预警与抢救记录（M3-M2-02）
+
+### 13.1 接口与权限（契约 anesthesia 0.7.0，V15 + V16）
+
+| 端点 | 权限 | 说明 |
+|---|---|---|
+| `GET /v1/anesthesia/alert-rules` | `m2:alert:read` | 每个规则编码的当前版本、阈值、严重度、启用状态、`pendingConfirmation` |
+| `GET /v1/anesthesia/alert-rules/{ruleId}/versions` | `m2:alert:read` | **0.7.0 additive**：按 code 返回历史版本（version 倒序），供 `ruleVersion` 追溯 |
+| `PUT /v1/anesthesia/alert-rules/{ruleId}` | `m2:alert:configure` | 保存规则 = 生成 `version+1` 新版本并停用旧版本；`name` 可改；阈值按指标范围校验；过期/非当前版本 409 |
+| `GET /v1/anesthesia/records/{recordId}/alerts` | `m2:alert:read` | **只读**告警列表（实时评估已由采集事件落库） |
+| `POST /v1/anesthesia/records/{recordId}/alerts/evaluate` | `m2:record:write` | 手动/调试评估：按水位只处理新采样，不重评历史窗口 |
+| `POST /v1/anesthesia/alerts/{alertId}/acknowledge` | `m2:alert:ack` | `CONFIRMED`/`IGNORED` + 必填 reason；只允许一次流转（409） |
+| `GET /v1/anesthesia/records/{recordId}/resuscitations` | `m2:record:read` | 抢救记录列表（复用记录单可见性，不新增只读权限点） |
+| `POST /v1/anesthesia/records/{recordId}/resuscitations` | `m2:rescue:write` | 新增抢救记录（append-only、时间窗校验、负责人/参与人员必填） |
+
+数据范围沿用记录单/台次可见性：记录单或台次不可见统一 **404**（不泄露存在性）；方法级
+无权限 **403**。V15 新增预警/抢救表与权限；V16（评审修复）只新增列/表/索引/回填，不改 V1–V15
+既有语义。
+
+### 13.2 触发入口（评审 B-1 / ADR-0017）
+
+告警以“采集落库后领域事件”为主、前端轮询兜底、手动评估仅调试：
+
+1. `AcquisitionServiceImpl.ingest` 在同一事务内完成批次/行级幂等落库后发布
+   `VitalsIngestedEvent`；`@TransactionalEventListener(AFTER_COMMIT)` 的
+   `VitalIngestAlertListener` 在提交后调用 `AlertIngestTrigger`（独立 `REQUIRES_NEW` 事务）。
+   采集回滚不产生告警；评估失败只记 WARN，不影响采集响应。
+2. 记录单创建时经 m1-api `Schedule.roomId` 快照 `anesthesia_record.room_id`（V16）；事件按
+   `device_registry.room_id` → `room_id` 匹配 **`status=ONGOING 且 started_at IS NOT NULL、
+   ended_at IS NULL`** 的记录。不跨模块读 m1 表。
+3. 记录页每 8s 轮询 `GET /records/{id}/alerts`（权限隔离：无 `m2:alert:read` 不请求）；
+   “手动评估”按钮调用 evaluate，仅用于联调/补偿与页面兜底。
+4. 读取告警列表**不评估**：不会出现“打开旧记录时按当前规则追溯生成历史告警”。
+
+### 13.3 规则口径与间歇指标（评审 B-2）
+
+- 指标：`HR`（bpm）、`SPO2`（%）、`MAP`（mmHg，由无创血压推导 `dia + (sys − dia)/3`，
+  V4 只落收缩/舒张压）、`ETCO2`（mmHg）、`TEMP`（℃）。
+- 算子：`LT` = `value < thresholdLow`；`GT` = `value > thresholdHigh`；
+  `OUT_OF_RANGE` = 低于下限或高于上限。**等于阈值不触发**（严格不等）。
+- 持续时长只用**该指标非空样本**的测量时间衡量：该指标空帧（如 NIBP 两次袖带测量之间）与
+  质量码 ≥2 的帧**跳过且不重置窗口**；相邻有效测量的间隔超过该指标容忍才切新窗口。
+- 每类指标独立间隔容忍（默认值【待确认】，配置见 §13.9）：
+
+| 指标 | 类型 | 默认 gap | 说明 |
+|---|---|---:|---|
+| HR | 连续波形 | 10s | 1 Hz 波形；间隔 >10s 视为断连 |
+| SPO2 | 连续波形 | 10s | 同上 |
+| MAP（NIBP） | 间歇测量 | 300s | 袖带测量间隔；>300s 视为新窗口 |
+| ETCO2 | 间歇/波形 | 300s | 默认按间歇口径，临床确认后可调 |
+| TEMP | 间歇测量 | 300s | 体温探头测量间隔 |
+
+- **重复值不累加**：间歇指标在 gap 容忍内重复上报同一测得值时，视为同一次测量的重复帧，
+  不推进窗口、不累加持续时长（避免监护仪重复上报同一条 NIBP 造成“持续低血压”假告警）；
+  达到 gap 边界（如 300s）视为新一次测量，可推进并触发。
+- 质量码：`quality ≥ 2`（缺失/超时）不参与判定；`quality = 1`（可疑）仍参与。
+- **默认种子阈值全部【待确认】**：SpO2 < 90（CRITICAL，立即）、HR < 50 / > 120（WARN，30s）、
+  MAP < 65（WARN，60s）、EtCO2 超出 30–50（WARN，30s）。仅演示引擎与页面，**不是临床决策依据**。
+
+### 13.4 水位增量与 DRAFT（评审 B-1/B-3）
+
+- `alert_watermark.evaluated_through` = 该记录单已评估到的最大 `measured_at`；每次评估：
+  - 采样窗口 = `max(startedAt, 水位 − 回看窗口) .. (endedAt 或 now)`，回看窗口 =
+    最大规则时长 3600s + 最大指标 gap；只用于保持跨事件越界窗口连续；
+  - 只落库 `triggeredAt > 水位` 的判定，**不用当前规则回评历史窗口**；评估后水位推进到本次
+    读到的最大 `measured_at`（只增，`GREATEST`）。
+- 长台次不再受单次 20000 样本截断影响：水位 + 回看窗口保证早于水位的窗口起点仍参与本窗口
+  连续计算（例：首轮 0–20s 未满 30s，水位 20s；新样本 30s 时窗口起点仍是 0s）。
+- **DRAFT/未开始不评估**：`status != ONGOING` 或 `started_at == null` 一律返回空；
+  评估窗口一律从 `startedAt` 起，**禁止 createdAt 兜底**，避免把同术间上一台次患者体征算入
+  本记录。V16 把迁移前已存在记录单的水位初始化为迁移时刻，从迁移后新采样开始评估。
+- `createdAt` 仅作为记录创建留痕，不参与告警窗口。
+
+### 13.5 去重窗口与幂等
+
+- `dedupe_key = recordId:ruleCode:窗口起始秒`（越界窗口首个有效测量时间），唯一索引
+  `uk_alert_dedupe` 兜底；`INSERT ... ON CONFLICT DO NOTHING`。
+- 重复事件/重复评估同一窗口不重复插入；处置后**复发的新窗口**（起始时间不同）生成新告警。
+- 规则快照：告警行保存 `rule_id/rule_code/rule_version`，规则升级后新告警使用新版本，
+  历史告警不被追溯修改。
+
+### 13.6 规则治理（评审 S-2/S-4/S-5）
+
+- 规则不可原地修改：保存 = 同一 code 插入 `version+1` 新行并停用旧行（触发器只允许
+  “启用→停用”，DELETE/TRUNCATE 拒绝 55000；部分唯一索引保证同一 code 仅一个启用版本）。
+- `name` 可随新版本更新；阈值/持续时长按指标物理范围校验（SpO2 0–100、HR 0–300、
+  MAP 0–250、EtCO2 0–150、TEMP 25–45），越界 400（不臆造临床阈值，只做范围校验）。
+- `pendingConfirmation`：阈值或持续时长较上一版本变化时置 true；仅名称/严重度/启用变化沿用
+  上一版本；默认种子阈值全部【待确认】。清除标记须临床顾问确认后由 M5 复核流程写入。
+- 历史版本查询端点（additive）供告警 `ruleVersion` 追溯“当时依据哪一版规则”。
+- 规则变更需第二人/临床复核：当前由线下流程保证，M5 权限细化承接“临床提交 + 医务处审批”。
+
+### 13.7 抢救留痕（append-only + 人员，评审 B-4）
+
+- `resuscitation_record` 只 INSERT/查询，触发器拒绝 UPDATE/DELETE/TRUNCATE（55000）；
+  更正只能新增记录并在事件摘要说明。
+- 时间窗：`startedAt ≥ 记录单开始`、`endedAt ≥ startedAt`、`endedAt ≤ 记录单结束`（未结束时
+  `≤ now + anesop.m2.record.time-tolerance-seconds`），违反 400（字段级）。
+- **人员留痕（V16）**：`leader` 为 `{userId?, name}` 对象且 name 必填；`rescuers` 为
+  `[{userId?, name}]` 数组且至少 1 人（≤20）；缺失/空 400。姓名只落库，日志/审计只记
+  `leaderUserId` 与 `rescuerCount`，不写姓名原文。
+- 结构化：`eventSummary = {summary, interventions[]}`（摘要 ≤2000 字、干预 ≤50 条）、
+  `drugs = [{drugName,dose,unit,route,administeredAt}]`（≤50 条，剂量 > 0，给药时间须在抢救
+  时间窗内）；表内不存患者标识。
+- 类型/转归枚举为【待确认】临床口径，仅演示。
+
+### 13.8 审计与无 PHI
+
+| 动作 | 资源（resourceType/resourceId） | detail 白名单 |
+|---|---|---|
+| `ALERT_TRIGGERED` | `ALERT` / **告警主键** | alertId/recordId/ruleCode/ruleVersion/metric/value/severity/triggeredAt/triggerSource |
+| `ALERT_ACK` | `ALERT` / 告警主键 | alertId/recordId/ruleCode/ruleVersion/metric/severity/decision/status |
+| `ALERT_RULE_UPDATE` | `ALERT_RULE` / 规则版本行主键 | ruleId/code/fromVersion/toVersion/name/metric/operator/thresholds/duration/severity/enabled/pendingConfirmation |
+| `RESCUE_RECORD` | `RESUSCITATION_RECORD` / 抢救记录主键 | recordId/resuscitationId/resusType/startedAt/endedAt/outcome/drugCount/interventionCount/leaderUserId/rescuerCount |
+
+不含患者姓名/证件号/住院号/手机号，不含处理原因（`acknowledge_reason`）与事件摘要/药品明细/
+人员姓名原文。自动评估的 `ALERT_TRIGGERED` actor 为空（`actorName=alert-engine`）；
+手工评估记录调用人（S-1）。
+
+### 13.9 配置
+
+```yaml
+anesop:
+  m2:
+    alert:
+      hr-gap-seconds: 10        # 连续波形：HR 相邻有效采样最大间隔，1–3600
+      spo2-gap-seconds: 10      # 连续波形：SpO2
+      map-gap-seconds: 300      # NIBP 推导 MAP 的测量间隔
+      etco2-gap-seconds: 300    # EtCO2
+      temp-gap-seconds: 300     # 体温
+      max-samples: 20000        # 单设备单次评估采样上限，100–200000
+```
+
+### 13.10 测试
+
+- 单测：`AlertRuleEngineTest`（等于阈值不触发、GT/LT/OUT_OF_RANGE、持续时长、空帧不重置、
+  NIBP 重复值不累加、300s/301s 边界、波形 10s 切窗、水位 emitAfter）；`AlertEvaluatorTest`
+  （DRAFT 空、无 startedAt 空、水位增量与只增、审计 alertId/actor）；`AlertRuleServiceImplTest`
+  （版本化、名称更新、pendingConfirmation、指标范围 400、历史版本、409）；
+  `AlertServiceImplTest`（只读列表、手动评估委托、状态机）；`ResuscitationServiceImplTest`
+  （时间窗、用药、负责人/参与人员必填、审计无姓名）。
+- 集成（`AlertRescueApiIntegrationTest`，真实嵌入式 PG）：V15/V16 结构/索引/触发器/权限/种子；
+  **ingest 事件实时触发**（无需手动 evaluate）、**水位增量保留早期窗口起点**、
+  **DRAFT + 同术间上一台次体征不评估**、规则版本化/名称/范围/历史版本、告警状态机 409、
+  抢救人员必填与 append-only、审计关联 alert 主键、403/404。
+- 前端：`RecordView.spec.ts`（轮询/手动评估/权限隔离/抢救人员表单）、
+  `AlertRuleConfigView.spec.ts`（列表/待确认/新版本）、`apps/web/e2e/m2-alerts.spec.ts`。
+
+### 13.11 局限、待确认与升级路径
+
+1. **待确认 Q（必须回写）**：Q-1 quality=1（可疑）帧是否可触发 CRITICAL；Q-2 ACK 后是否按
+   N 分钟升级再提醒；Q-3 默认阈值与各指标 gap；Q-4 抢救负责人/参与人员是否必须绑定当前登录
+   用户与 CA 签名（M5/M3-M2-03）。
+2. 规则配置无独立审批流：阈值变更由 SYS_ADMIN 代录，`pendingConfirmation` 只做标记，清除与
+   第二人复核由 M5 权限细化承接。
+3. 告警无通知渠道（短信/大屏/声音），通知去重/升级策略未设计。
+4. 告警处置不可撤销（一次性流转），如需更正处置须新增更正记录（后续版本）。
+5. 采集事件评估为同步 AFTER_COMMIT（每批一次增量查询）；高并发多设备/多术间时如出现延迟，
+   升级路径为事件异步化（RabbitMQ）+ 批量合并，接口与水位语义不变。
+6. DRAFT 不评估是临床安全选择；若未来需要“术前预警”，应新增独立规则集与契约，不在本记录
+   窗口内扩展。

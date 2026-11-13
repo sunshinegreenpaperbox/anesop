@@ -20,7 +20,7 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 |---|---|---|---|---|
 | M3-M2-01 | 麻醉记录单、时间轴、用药/输液/出入量 | `anesthesia.yaml`、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V13*` | M2-M4-01/M2-M5-01 | Review（2026-11-14，独立评审 blocking B-1/B-2/S-1…S-5 已修复，待复审 + 全量 verify） |
 | M3-M8-01 | 采集接入平台端（网关→平台体征、质量标记、幂等） | `services/device-gateway/**`、`db/migration/V14*`、`apps/api/modules/m2/**`、契约 device.yaml/anesthesia | S0-09 | Review（2026-11-14，独立评审 blocking B-1/S-1…S-6 已修复，待复审 + 全量 verify） |
-| M3-M2-02 | 术中预警规则与抢救记录 | m2 契约/模块、前端 | M3-M2-01 | Blocked |
+| M3-M2-02 | 术中预警规则与抢救记录 | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，契约 0.7.0 + V15/V16；独立评审 B-1～B-4 与 S-1～S-6 已修复：ingest 领域事件实时触发、水位增量、DRAFT 不评估、间歇指标 gap、规则待确认/历史版本、抢救 leader/rescuers、审计 alertId；待复审 + 全量 verify） |
 | M3-M2-03 | 锁单/修订/CA 签名（签名模拟） | m2 契约/模块、前端 | M3-M2-01 | Blocked |
 | M3-M10-01 | 复苏记录与转出（Aldrete、交接） | m2 契约/模块、前端 | M3-M2-01 | Blocked |
 | M3-M11-01 | 术后随访与镇痛（24/48h、PCA、并发症） | m2 契约/模块、前端 | M3-M10-01 | Blocked |
@@ -49,6 +49,13 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 ### M3-M2-02 术中预警与抢救记录
 - 规则可配置（阈值/持续时间/规则版本）、告警留痕（触发/确认/忽略）、抢救记录（人员/用药/事件）、
   生命体征触发（来自采集）；临床阈值【待确认】、规则版本化。
+- 评审修复（2026-11-14）：采集 ingest 提交后领域事件实时评估（`AFTER_COMMIT`，按记录单
+  `room_id` 快照匹配 ONGOING）；`alert_watermark` 水位增量、不回评历史窗口；DRAFT/未开始
+  不评估、禁止 `createdAt` 兜底；间歇指标（NIBP/EtCO2/TEMP）空帧不重置且重复值不累加，
+  指标独立 gap；抢救记录 `leader`/`rescuers` 必填；规则 `name` 可改、`pendingConfirmation`
+  待确认、历史版本端点、阈值按指标范围校验；审计 ALERT_TRIGGERED 以告警主键为 resourceId。
+- 待确认：Q-1 可疑帧是否可触发 CRITICAL；Q-2 ACK 后升级提醒；Q-3 默认阈值/gap；
+  Q-4 抢救人员是否绑定登录用户与 CA（M5/M3-M2-03）。
 ### M3-M2-03 锁单/修订/CA 签名
 - 锁单前置：三方核查完成 + 记录完整性；锁单后不可改，只能新修订版本（原值/修改人/时间/原因，
   可比对）；CA 签名占位（EXT-05，自签 hash）；E2E-03。
