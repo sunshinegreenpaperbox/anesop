@@ -16,6 +16,8 @@ export class ApiError extends Error {
   readonly code: string
   readonly traceId: string
   readonly details: ErrorDetail[]
+  /** 原始错误响应体：域模块可据此解析契约扩展字段（如排程 409 的 conflicts[]）。 */
+  readonly rawBody: unknown
 
   constructor(params: {
     kind?: ApiErrorKind
@@ -24,6 +26,7 @@ export class ApiError extends Error {
     message: string
     traceId?: string
     details?: ErrorDetail[]
+    rawBody?: unknown
   }) {
     super(params.message)
     this.name = 'ApiError'
@@ -32,6 +35,7 @@ export class ApiError extends Error {
     this.code = params.code
     this.traceId = params.traceId ?? ''
     this.details = params.details ?? []
+    this.rawBody = params.rawBody ?? null
   }
 
   /** 已认证但无权限，或数据范围不足。 */
@@ -321,6 +325,7 @@ async function execute<T>(path: string, options: RequestOptions): Promise<Reques
       message: normalized?.message ?? `请求失败（HTTP ${response.status}）`,
       traceId: normalized?.traceId || responseTraceId,
       details: normalized?.details ?? [],
+      rawBody: body,
     })
   }
 

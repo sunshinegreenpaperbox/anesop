@@ -5,6 +5,7 @@ import ChangePasswordView from '../modules/m0/views/ChangePasswordView.vue'
 import SessionsView from '../modules/m0/views/SessionsView.vue'
 import ApplicationListView from '../modules/m1/views/ApplicationListView.vue'
 import ApplicationDetailView from '../modules/m1/views/ApplicationDetailView.vue'
+import ScheduleBoardView from '../modules/m1/views/ScheduleBoardView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -56,6 +57,12 @@ export const routes: RouteRecordRaw[] = [
           permissions: ['m1:application:read'],
           menu: false,
         },
+      },
+      {
+        path: 'm1/schedule',
+        name: 'm1-schedule',
+        component: ScheduleBoardView,
+        meta: menuMeta('/m1/schedule'),
       },
       {
         path: 'm0/sessions',

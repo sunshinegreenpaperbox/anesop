@@ -16,6 +16,19 @@ export type CancelSurgeryApplicationRequest =
 export type ApplicationStatus = SurgeryApplication['status']
 export type ApplicationUrgency = SurgeryApplication['urgency']
 
+/** 排程工作台（scheduling.yaml 0.4.0）：术间、台次、冲突。 */
+export type OperatingRoom = schedulingComponents['schemas']['OperatingRoom']
+export type OperatingRoomList = schedulingComponents['schemas']['OperatingRoomList']
+export type OperatingRoomType = NonNullable<OperatingRoom['roomType']>
+export type Schedule = schedulingComponents['schemas']['Schedule']
+export type SchedulePage = schedulingComponents['schemas']['SchedulePage']
+export type CreateScheduleRequest = schedulingComponents['schemas']['CreateScheduleRequest']
+export type UpdateScheduleRequest = schedulingComponents['schemas']['UpdateScheduleRequest']
+export type CancelScheduleRequest = schedulingComponents['schemas']['CancelScheduleRequest']
+export type ConflictCheckRequest = schedulingComponents['schemas']['ConflictCheckRequest']
+export type ConflictCheckResult = schedulingComponents['schemas']['ConflictCheckResult']
+export type ScheduleConflict = ConflictCheckResult['conflicts'][number]
+
 /** 患者摘要（patient.yaml 0.3.0）：不含证件号与手机号。 */
 export type PatientSummary = patientComponents['schemas']['PatientSummary']
 export type PatientPage = patientComponents['schemas']['PatientPage']
@@ -73,4 +86,44 @@ export function cancelApplication(
  */
 export function searchPatients(payload: PatientSearchRequest): Promise<PatientPage> {
   return http.post<PatientPage>('/v1/patients/search', payload)
+}
+
+/** 术间列表（受数据范围约束：DEPT 本科室 / ROOM 绑定术间）。 */
+export function listRooms(): Promise<OperatingRoomList> {
+  return http.get<OperatingRoomList>('/v1/scheduling/rooms')
+}
+
+/** 按日期（必填）与术间查询日排程。 */
+export function listSchedules(date: string, roomId?: string): Promise<SchedulePage> {
+  const query = new URLSearchParams({ date })
+  if (roomId) query.set('roomId', roomId)
+  return http.get<SchedulePage>(`/v1/scheduling/schedules?${query.toString()}`)
+}
+
+/** 创建台次；冲突时后端返回 409 + conflicts[]。 */
+export function createSchedule(payload: CreateScheduleRequest): Promise<Schedule> {
+  return http.post<Schedule>('/v1/scheduling/schedules', payload)
+}
+
+/** 调整台次（时间/术间/台次序号），必须回传 version。 */
+export function updateSchedule(
+  scheduleId: string,
+  payload: UpdateScheduleRequest,
+): Promise<Schedule> {
+  return http.put<Schedule>(`/v1/scheduling/schedules/${scheduleId}`, payload)
+}
+
+/** 取消/停台（写原因与审计）。 */
+export function cancelSchedule(
+  scheduleId: string,
+  payload: CancelScheduleRequest,
+): Promise<{ id: string }> {
+  return http.post<{ id: string }>(`/v1/scheduling/schedules/${scheduleId}/cancel`, payload)
+}
+
+/** 冲突即时预检（只读，不落库），供工作台提交前提示。 */
+export function checkScheduleConflicts(
+  payload: ConflictCheckRequest,
+): Promise<ConflictCheckResult> {
+  return http.post<ConflictCheckResult>('/v1/scheduling/schedules/conflicts', payload)
 }

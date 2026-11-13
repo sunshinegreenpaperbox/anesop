@@ -27,6 +27,12 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m1:application:read'],
   },
   {
+    path: '/m1/schedule',
+    title: '排程工作台',
+    icon: 'sessions',
+    permissions: ['m1:schedule:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',
