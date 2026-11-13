@@ -303,7 +303,9 @@
             1024m 足以跑 Max effort 全量分析，同时避免默认值在容器/CI 小内存下被 OOM 杀掉；
             不降低 effort/threshold，检测强度不变。
           -->
-          <maxHeapSize>1024m</maxHeapSize>
+          <maxHeap>2048</maxHeap>
+          <!-- 注：spotbugs-maven-plugin 4.x 的堆参数名是 maxHeap（默认 512MB）；
+               api-contracts 生成类增多后 512MB 会 OOM 退出（Java returned: 1）。 -->
           <excludeFilterFile>${anesop.root}/config/spotbugs/exclude.xml</excludeFilterFile>
           <includeTests>false</includeTests>
           <xmlOutput>true</xmlOutput>
