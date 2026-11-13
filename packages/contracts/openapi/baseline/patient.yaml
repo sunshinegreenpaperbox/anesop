@@ -23,12 +23,15 @@ paths:
   /v1/patients:
     get:
       operationId: listPatients
+      deprecated: true
       tags:
         - 患者与手术申请
-      summary: 分页查询患者
+      summary: 分页查询患者（已弃用，改用 POST /v1/patients/search）
       description: |
+        已弃用：查询参数可能包含姓名/住院号等 PHI，会进入 Nginx/代理访问日志，生产环境禁用，
+        仅保留用于兼容旧调用方；新代码必须使用 `POST /v1/patients/search`（条件放 JSON 请求体）。
         按患者编号、姓名、住院号或科室检索患者主索引。姓名支持模糊匹配但受数据权限约束；
-        返回证件号与手机号均为脱敏值，完整值不出接口。
+        返回证件号与手机号均为兼容占位字段（空字符串），不返回真实值。
       parameters:
         - name: patientNo
           in: query
@@ -86,12 +89,14 @@ paths:
                 $ref: '#/components/schemas/PatientPage'
               example:
                 items:
-                  - patientId: '5000000000000000001'
+                  - patientId: '50000000-0000-4000-8000-000000000001'
                     patientNo: SYNTH-P-0001
                     hisPatientNo: SYNTH-HIS-P-0001
                     name: 演示患者
                     gender: FEMALE
                     age: 47
+                    idCardMasked: ''
+                    phoneMasked: ''
                     inpatientNoMasked: SYNT****0001
                     departmentId: '2000000000000000001'
                     departmentName: 演示外科
@@ -112,6 +117,67 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /v1/patients/search:
+    post:
+      operationId: searchPatients
+      tags:
+        - 患者与手术申请
+      summary: 检索患者（POST，条件在请求体）
+      description: |
+        医学检索统一使用 POST：姓名/住院号/HIS 患者号等检索条件放 JSON 请求体，
+        避免 PHI 进入 URL 查询串与 Nginx/代理访问日志。授权与数据范围约束同列表接口。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatientSearchRequest'
+            example:
+              hisPatientNo: SYNTH-HIS-P-0001
+              name: 演示患者
+              inpatientNo: SYNTH-ZY-0001
+              departmentId: '2000000000000000001'
+              page: 1
+              size: 20
+      responses:
+        '200':
+          description: 患者分页列表；兼容字段 idCardMasked/phoneMasked 为空字符串，不返回真实值。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatientPage'
+              example:
+                items:
+                  - patientId: '50000000-0000-4000-8000-000000000001'
+                    patientNo: SYNTH-P-0001
+                    hisPatientNo: SYNTH-HIS-P-0001
+                    name: 演示患者
+                    gender: FEMALE
+                    age: 47
+                    idCardMasked: ''
+                    phoneMasked: ''
+                    inpatientNoMasked: SYNT****0001
+                    departmentId: '2000000000000000001'
+                    departmentName: 演示外科
+                    ward: 演示外科病区
+                    bedNo: '12'
+                    siteId: '3000000000000000001'
+                    createdAt: '2026-11-01T09:00:00+08:00'
+                    createdBy: '1000000000000000001'
+                    updatedAt: '2026-11-10T15:30:00+08:00'
+                    updatedBy: '1000000000000000001'
+                    version: 3
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/patients/{patientId}:
     get:
       operationId: getPatient
@@ -122,7 +188,7 @@ paths:
       parameters:
         - name: patientId
           in: path
-          description: 患者标识（雪花 ID 字符串）。
+          description: 患者标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -134,13 +200,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/Patient'
               example:
-                patientId: '5000000000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 hisPatientNo: SYNTH-HIS-P-0001
                 name: 演示患者
                 gender: FEMALE
                 birthDate: '1978-03-15'
                 age: 47
+                idCardMasked: ''
+                phoneMasked: ''
+                inpatientNo: ''
                 inpatientNoMasked: SYNT****0001
                 departmentId: '2000000000000000001'
                 departmentName: 演示外科
@@ -169,7 +238,7 @@ paths:
       parameters:
         - name: patientId
           in: path
-          description: 患者标识（雪花 ID 字符串）。
+          description: 患者标识（UUID 字符串）。
           required: true
           schema:
             type: string
@@ -201,7 +270,7 @@ paths:
                 items:
                   - applicationId: '6000000000000000001'
                     applicationNo: SYNTH-HIS-APP-0001
-                    patientId: '5000000000000000001'
+                    patientId: '50000000-0000-4000-8000-000000000001'
                     patientNo: SYNTH-P-0001
                     patientName: 演示患者
                     diagnosis: 演示诊断（膝关节退行性病变）
@@ -236,7 +305,8 @@ paths:
         - 患者与手术申请
       summary: 接收手术申请
       description: |
-        接收 HIS 手术申请，以 applicationNo（HIS 申请号）为幂等键；重复提交返回首次结果，
+        已弃用（0.3.0 deprecated；计划 1.0.0 下线）：接收 HIS 手术申请，以 applicationNo（HIS 申请号）为幂等键；
+        重复提交返回首次结果，
         不重复创建。必填项校验与术式/诊断匹配提醒在此完成（§2.4.1、§2.4.2）。
       requestBody:
         required: true
@@ -246,7 +316,7 @@ paths:
               $ref: '#/components/schemas/CreateSurgeryApplicationRequest'
             example:
               applicationNo: SYNTH-HIS-APP-0001
-              patientId: '5000000000000000001'
+              patientId: '50000000-0000-4000-8000-000000000001'
               diagnosis: 演示诊断（膝关节退行性病变）
               procedureName: 演示术式（全膝关节置换术）
               plannedSurgeryDate: '2026-12-01'
@@ -263,7 +333,7 @@ paths:
               example:
                 applicationId: '6000000000000000001'
                 applicationNo: SYNTH-HIS-APP-0001
-                patientId: '5000000000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 diagnosis: 演示诊断（膝关节退行性病变）
@@ -294,7 +364,7 @@ paths:
       tags:
         - 患者与手术申请
       summary: 查询手术申请详情
-      description: 按申请标识返回手术申请详情，供排程与访视任务引用。
+      description: 已弃用（0.3.0 deprecated；计划 1.0.0 下线）：按申请标识返回手术申请详情，供排程与访视任务引用。
       parameters:
         - name: applicationId
           in: path
@@ -312,7 +382,7 @@ paths:
               example:
                 applicationId: '6000000000000000001'
                 applicationNo: SYNTH-HIS-APP-0001
-                patientId: '5000000000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 diagnosis: 演示诊断（膝关节退行性病变）
@@ -341,7 +411,7 @@ paths:
       tags:
         - 患者与手术申请
       summary: 取消手术申请
-      description: 取消未被排程或已释放排程的手术申请；必须选择原因码并写变更记录。
+      description: 已弃用（0.3.0 deprecated；计划 1.0.0 下线）：取消未被排程或已释放排程的手术申请；必须选择原因码并写变更记录。
       parameters:
         - name: applicationId
           in: path
@@ -577,6 +647,9 @@ components:
             - gender
             - birthDate
             - age
+            - idCardMasked
+            - phoneMasked
+            - inpatientNo
             - inpatientNoMasked
             - departmentId
             - departmentName
@@ -584,10 +657,13 @@ components:
           properties:
             patientId:
               type: string
-              description: 患者标识（雪花 ID 字符串）。
+              description: 患者标识（UUID 字符串）。
             patientNo:
               type: string
-              description: 院内患者编号；示例统一使用 SYNTH-P-xxxx。
+              deprecated: true
+              description: |
+                已弃用：编号口径统一为 `hisPatientNo`，本字段仅为兼容 0.2.0 调用方保留并回填
+                hisPatientNo；计划 1.0.0 major 删除。
             hisPatientNo:
               type: string
               description: HIS 患者号；HIS 申请导入时按此匹配患者快照。
@@ -604,12 +680,36 @@ components:
             birthDate:
               type: string
               format: date
-              description: 出生日期；与年龄/科室组合可能重识别，仅详情返回。
+              description: 出生日期；与年龄/科室组合可能重识别，仅详情返回。HIS 缺失时拒绝创建/导入（400），不得用 now() 伪造。
             age:
               type: integer
               description: 年龄（岁），由出生日期计算；列表与详情均返回。
               minimum: 0
               maximum: 150
+            idCardMasked:
+              type: string
+              deprecated: true
+              description: |
+                M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+                字段只增不删；计划 1.0.0 major 删除。
+              examples:
+                - ''
+            phoneMasked:
+              type: string
+              deprecated: true
+              description: |
+                M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+                字段只增不删；计划 1.0.0 major 删除。
+              examples:
+                - ''
+            inpatientNo:
+              type: string
+              deprecated: true
+              description: |
+                M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+                字段只增不删；计划 1.0.0 major 删除。
+              examples:
+                - ''
             inpatientNoMasked:
               type: string
               description: 脱敏住院号（前 4 + 4 个 * + 后 4）；明文与哈希均不出接口。
@@ -644,6 +744,8 @@ components:
             - name
             - gender
             - age
+            - idCardMasked
+            - phoneMasked
             - inpatientNoMasked
             - departmentId
             - departmentName
@@ -651,10 +753,13 @@ components:
           properties:
             patientId:
               type: string
-              description: 患者标识（雪花 ID 字符串）。
+              description: 患者标识（UUID 字符串）。
             patientNo:
               type: string
-              description: 院内患者编号；示例统一使用 SYNTH-P-xxxx。
+              deprecated: true
+              description: |
+                已弃用：编号口径统一为 `hisPatientNo`，本字段仅为兼容 0.2.0 调用方保留并回填
+                hisPatientNo；计划 1.0.0 major 删除。
             hisPatientNo:
               type: string
               description: HIS 患者号；HIS 申请导入时按此匹配患者快照。
@@ -673,6 +778,22 @@ components:
               description: 年龄（岁），由出生日期计算。
               minimum: 0
               maximum: 150
+            idCardMasked:
+              type: string
+              deprecated: true
+              description: |
+                M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+                字段只增不删；计划 1.0.0 major 删除。
+              examples:
+                - ''
+            phoneMasked:
+              type: string
+              deprecated: true
+              description: |
+                M2 起不再返回（实现固定返回空字符串，不返回真实值），保留字段定义以满足
+                字段只增不删；计划 1.0.0 major 删除。
+              examples:
+                - ''
             inpatientNoMasked:
               type: string
               description: 脱敏住院号（前 4 + 4 个 * + 后 4）；列表不返回住院号明文。
@@ -693,6 +814,39 @@ components:
             siteId:
               type: string
               description: 院区标识（多院区维度）。
+    PatientSearchRequest:
+      type: object
+      description: |
+        患者检索条件（POST 请求体）。姓名/住院号/HIS 患者号等 PHI 只放请求体，
+        不进入 URL 查询串，避免被 Nginx/代理访问日志记录。
+      properties:
+        hisPatientNo:
+          type: string
+          description: HIS 患者号，精确匹配；新代码统一使用该编号口径。
+        patientNo:
+          type: string
+          deprecated: true
+          description: 已弃用：等同 hisPatientNo，仅为兼容旧调用方保留。
+        name:
+          type: string
+          description: 患者姓名关键字；服务端不记录请求体原文。
+        inpatientNo:
+          type: string
+          description: 住院号，精确匹配；服务端只按哈希匹配，明文不落库/不落日志。
+        departmentId:
+          type: string
+          description: 科室标识；同时受当前用户数据范围约束。
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+          description: 页码，从 1 开始。
+        size:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 20
+          description: 每页条数。
     PatientPage:
       type: object
       description: 患者分页结果。
@@ -739,7 +893,8 @@ components:
               description: 患者标识。
             patientNo:
               type: string
-              description: 院内患者编号。
+              deprecated: true
+              description: 已弃用：编号口径统一为 hisPatientNo；1.0.0 major 删除。
             patientName:
               type: string
               description: 患者姓名；示例统一使用“演示患者”。

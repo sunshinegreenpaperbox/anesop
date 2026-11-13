@@ -68,7 +68,7 @@ packages/contracts/
   `idCardMasked`/`phoneMasked`/`inpatientNo` 三个响应字段并标 `deprecated: true`，实现固定返回
   空字符串（不返回真实值），计划 1.0.0 major 删除。
 - 编号口径统一 `hisPatientNo`：`patientNo` 在 patient 契约保留但标记 `deprecated` 并回填
-  `hisPatientNo`；scheduling 的 `PatientSnapshot` 不再返回 `patientNo`。`patientId` 统一为 UUID 字符串。
+  `hisPatientNo`；scheduling 的 `PatientSnapshot` 中 `patientNo` 标记 `deprecated` 并回填 `hisPatientNo`（1.0.0 删除）。`patientId` 统一为 UUID 字符串。
 - 创建/导入无资源路径参数，未知患者按语义返回 **422**；单对象查询（患者/申请详情）仍返回 404；
   导入接口不声明不可达的 422，保留 400/403/409。
 - 历史 `/v1/surgery-applications*` 端点标记 `deprecated`，由 scheduling 同名能力取代，计划 1.0.0 下线。
@@ -125,7 +125,14 @@ packages/contracts/
 | `inpatientNoMasked` | 列表/详情 | 前 4 + `****` + 后 4，如 `SYNT****0001`；住院号明文与哈希均不出接口 |
 | `idCard*` / `phone*` / `inpatientNo` | 兼容占位（空字符串） | M2 起不返回真实值；字段仅为“只增不删”保留并标 `deprecated`，计划 1.0.0 删除 |
 
-## 7. 版本与破坏性变更流程
+## 7. 兼容性检查（含 HEAD baseline）
+
+- `scripts/contract-check.sh` 第 2 步：工作区 baseline → 当前契约；
+- 第 3 步（ADR-0011）：用 **HEAD 中的 baseline 快照** → 当前契约复跑 oasdiff，防止在同一个
+  未评审变更里覆盖 baseline "自证兼容"；git 不可用或首次落地时跳过并提示。
+- 第 4 步：生成物漂移校验（重新生成 TS 后 `git diff` 必须为空）。
+
+ 版本与破坏性变更流程
 
 - **契约兼容性：0.3.0 为 additive（仅新增端点/字段；删除类变更推迟到 1.0.0 并走 major+ADR）。**
   已删除的安全字段以 `deprecated: true` 兼容占位恢复，实现不返回真实值；历史端点同样只标

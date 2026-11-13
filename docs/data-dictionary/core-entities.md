@@ -75,62 +75,91 @@
 
 ## 2. M1 手术排程
 
-### 2.1 手术申请 `surgery_application`
+> 已实现：V7（2026-11-13）落地 `m1_sched.patient_snapshot`、`surgery_application`、
+> `application_status_history` 三表，对应契约 `scheduling.yaml` / `patient.yaml` 0.3.0。
+> 排程/台次（`schedule`）与排程变更仍待 M2-M2-01，下表保留方案书建议口径。
+
+### 2.1 患者排程快照 `m1_sched.patient_snapshot`（V7 已实现）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | uuid | 是 | 主键（gen_random_uuid） |
+| `his_patient_no` | varchar(64) | 是 | HIS 患者号，唯一（入站幂等键）；编号统一口径 |
+| `name` | varchar(100) | 是 | 患者姓名（展示用；仅 SYNTHETIC 测试数据） |
+| `gender` | varchar(16) | 是 | MALE/FEMALE/UNKNOWN（CHECK） |
+| `birth_date` | date | 否 | 出生日期；HIS 缺失时拒绝创建/导入（400），不用 now() 伪造 |
+| `age` | integer | 否 | 年龄 0–150；只取 HIS 值，缺失保持 null |
+| `inpatient_no_masked` | varchar(64) | 是 | 脱敏住院号（前 4 + **** + 后 4），明文禁止入库 |
+| `inpatient_no_hash` | varchar(128) | 是 | 住院号 HMAC-SHA-256，唯一；pepper 走 `ANESOP_INPATIENT_PEPPER` |
+| `dept_name` | varchar(100) | 是 | 患者所属科室名称 |
+| `dept_id` | uuid | 否 | 逻辑外键 → `m0_platform.sys_org.id`（DEPT 数据范围，不建物理外键） |
+| `ward` / `bed_no` | varchar | 否 | 病区 / 床号 |
+| `site_id` | uuid | 否 | 逻辑外键 → `m0_platform.sys_org.id`（SITE 数据范围） |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by/version/deleted` |
+
+约束：`uk_patient_snapshot_his_patient_no`、`uk_patient_snapshot_inpatient_no_hash` 唯一；
+`dept_id`/`site_id`/`deleted` 建索引；不存身份证、手机号（含脱敏值）。
+
+### 2.2 手术申请 `m1_sched.surgery_application`（V7 已实现）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | uuid | 是 | 主键 |
+| `his_application_no` | varchar(64) | 是 | HIS 申请号，唯一（`uk_surgery_application_his_no`，入站幂等键） |
+| `patient_id` | uuid | 是 | FK → `m1_sched.patient_snapshot.id`（同 schema 物理外键，ON DELETE RESTRICT） |
+| `surgery_name` | varchar(200) | 是 | 拟施术式 |
+| `surgery_code` | varchar(64) | 否 | 术式编码 |
+| `urgency` | varchar(16) | 是 | ELECTIVE/URGENT/EMERGENCY（CHECK） |
+| `planned_duration_min` | integer | 是 | 预计时长 1–1440（CHECK） |
+| `dept_name` | varchar(100) | 是 | 申请科室名称（取自患者快照） |
+| `dept_id` / `site_id` | uuid | 否 | 逻辑外键 → `m0_platform.sys_org.id`（数据范围，不建物理外键） |
+| `surgeon_name` | varchar(100) | 否 | 术者（演示文本） |
+| `preop_diagnosis` | varchar(500) | 否 | 术前诊断；不得入日志/审计 |
+| `status` | varchar(16) | 是 | SUBMITTED/ACCEPTED/SCHEDULED/CANCELLED/REJECTED（CHECK） |
+| `submitted_at` | timestamptz | 是 | 提交时间（列表默认倒序） |
+| `source` | varchar(16) | 是 | HIS / MANUAL（CHECK） |
+| `remark` | varchar(500) | 否 | 备注（演示文本） |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by/version/deleted` |
+
+约束/索引：患者/状态/紧急度/科室/院区/提交时间/状态+提交时间/deleted 索引；
+状态机 `SUBMITTED → ACCEPTED → SCHEDULED`，`CANCELLED/REJECTED` 终态。
+
+### 2.3 申请状态历史 `m1_sched.application_status_history`（V7 已实现，append-only）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | uuid | 是 | 主键 |
+| `application_id` | uuid | 是 | FK → `m1_sched.surgery_application.id`（ON DELETE RESTRICT） |
+| `from_status` | varchar(16) | 否 | 变更前状态；首次创建为 null |
+| `to_status` | varchar(16) | 是 | 变更后状态（CHECK） |
+| `reason_code` | varchar(64) | 否 | 原因码（字典值）；取消时必填，创建/导入为空 |
+| `reason` | varchar(500) | 否 | 原因说明；与 `reason_code` 分列，避免拼接超长 |
+| `operator_id` | uuid | 否 | 逻辑外键 → `m0_platform.sys_user.id` |
+| `occurred_at` | timestamptz | 是 | 状态变更时间 |
+
+append-only：无 `updated_at/updated_by/deleted`；`trg_application_status_history_no_update/
+no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能追加新事件。
+索引：`(application_id, occurred_at)`、`occurred_at DESC`。
+
+### 2.4 排程/台次 `schedule`（待 M2-M2-01，未建表）
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `application_id` | bigint | 是 | 主键 | §3.4.2 |
-| `application_no` | varchar | 是 | HIS 申请号，入站幂等键 | §3.5.1、§3.5.3 I-01b |
-| `patient_id` | bigint | 是 | 患者 | §3.4.2 |
-| `diagnosis` | varchar/text | 是 | 术前诊断 | §2.4.2、§3.5.3 I-01b |
-| `procedure_name` | varchar | 是 | 拟施术式 | §2.4.2 |
-| `planned_surgery_date` | date | 是 | 拟手术日期 | §3.5.3 I-01b |
-| `urgency` | varchar | 是 | 急缓：择期/急诊 | §2.4.2；枚举值以契约 `ELECTIVE/EMERGENCY` 为准 |
-| `status` | varchar | 是 | 申请状态 | 契约 `RECEIVED/VALIDATED/SCHEDULED/CANCELLED`；完整状态机【待确认】 |
-| `department_id` | bigint | 是 | 申请科室 | §2.4.2 |
-| `site_id` | bigint | 是 | 院区 | §3.4.5 |
-| `tenant_id` | bigint | 是 | 租户 | §3.4.5 |
-| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
-| `deleted_at` | timestamptz | 否 | 软删除 | §3.4.3 |
-
-说明：`(tenant_id, application_no)` 唯一，重复提交返回首次结果（§3.5.1）。术前检查完整性、术式与诊断匹配作为接收校验（§2.4.2）。
-
-### 2.2 排程/台次 `schedule`
-
-| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
-|---|---|---|---|---|
-| `schedule_id` | bigint | 是 | 主键 | §3.4.2 |
-| `application_id` | bigint | 是 | 手术申请 | §3.4.2 |
-| `room_id` | bigint | 是 | 术间 | §3.4.2 |
+| `schedule_id` | uuid | 是 | 主键（按 V7 口径 UUID，替代雪花 bigint 建议） | §3.4.2 |
+| `application_id` | uuid | 是 | 手术申请 | §3.4.2 |
+| `room_id` | uuid | 是 | 术间 | §3.4.2 |
 | `sequence_no` | smallint | 是 | 台次序号 | §3.4.2；唯一约束【待确认】 |
-| `planned_start` | timestamptz | 是 | 计划开始 | §3.4.2 |
-| `planned_end` | timestamptz | 是 | 计划结束 | §3.4.2 |
-| `actual_start` | timestamptz | 否 | 实际开始 | §3.4.2 |
-| `actual_end` | timestamptz | 否 | 实际结束 | §3.4.2 |
+| `planned_start` / `planned_end` | timestamptz | 是 | 计划起止 | §3.4.2 |
+| `actual_start` / `actual_end` | timestamptz | 否 | 实际起止 | §3.4.2 |
 | `status` | varchar | 是 | 排程状态 | 契约枚举；状态机【待确认】 |
-| `priority` | varchar | 是 | 优先级：择期/紧急/急诊 | §2.4.2；急诊优先于择期 |
+| `priority` | varchar | 是 | 择期/紧急/急诊 | §2.4.2；急诊优先于择期 |
 | `change_reason` | varchar | 否 | 最近改台/停台原因 | §3.4.2 |
 | `version` | integer | 是 | 乐观锁 | §3.4.3 |
 | 审计字段 | — | 是 | 审计字段 | §3.4.3 |
 | `deleted_at` | timestamptz | 否 | 软删除 | §3.4.3 |
 
 约束：同术间时段不得重叠；冲突不得强行保存，覆盖须审批留痕（§3.4.1、§2.4.2）。
-
-### 2.3 排程变更 `schedule_change`
-
-| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
-|---|---|---|---|---|
-| `change_id` | bigint | 是 | 主键 | 建议表，是否独立【待确认】 |
-| `schedule_id` | bigint | 是 | 排程 | §2.4.2 |
-| `change_type` | varchar | 是 | 停台/改台/换台/并台/急诊加台 | §2.4.2；枚举【待确认】 |
-| `reason_code` | varchar | 是 | 原因码，来自字典 | §2.4.2 |
-| `reason` | varchar | 否 | 原因说明 | §2.4.2 |
-| `before_value` | jsonb | 否 | 变更前快照 | §3.9.1 审计思路 |
-| `after_value` | jsonb | 否 | 变更后快照 | §3.9.1 审计思路 |
-| `operator_id` | bigint | 是 | 操作人 | §3.9.1 |
-| `occurred_at` | timestamptz | 是 | 变更时间 | §3.9.1 |
-
-说明：也可由审计日志承载；是否单表【待确认】。
+排程变更 `schedule_change` 仍为建议表，是否独立【待确认】。
 
 ## 3. M2 麻醉信息
 

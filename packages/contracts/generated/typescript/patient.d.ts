@@ -104,7 +104,8 @@ export interface paths {
     /**
      * 接收手术申请
      * @deprecated
-     * @description 接收 HIS 手术申请，以 applicationNo（HIS 申请号）为幂等键；重复提交返回首次结果，
+     * @description 已弃用（0.3.0 deprecated；计划 1.0.0 下线）：接收 HIS 手术申请，以 applicationNo（HIS 申请号）为幂等键；
+     *     重复提交返回首次结果，
      *     不重复创建。必填项校验与术式/诊断匹配提醒在此完成（§2.4.1、§2.4.2）。
      */
     post: operations['createSurgeryApplication']
@@ -124,7 +125,7 @@ export interface paths {
     /**
      * 查询手术申请详情
      * @deprecated
-     * @description 按申请标识返回手术申请详情，供排程与访视任务引用。
+     * @description 已弃用（0.3.0 deprecated；计划 1.0.0 下线）：按申请标识返回手术申请详情，供排程与访视任务引用。
      */
     get: operations['getSurgeryApplication']
     put?: never
@@ -147,7 +148,7 @@ export interface paths {
     /**
      * 取消手术申请
      * @deprecated
-     * @description 取消未被排程或已释放排程的手术申请；必须选择原因码并写变更记录。
+     * @description 已弃用（0.3.0 deprecated；计划 1.0.0 下线）：取消未被排程或已释放排程的手术申请；必须选择原因码并写变更记录。
      */
     post: operations['cancelSurgeryApplication']
     delete?: never
@@ -238,7 +239,7 @@ export interface components {
       gender: 'MALE' | 'FEMALE' | 'UNKNOWN'
       /**
        * Format: date
-       * @description 出生日期；与年龄/科室组合可能重识别，仅详情返回。
+       * @description 出生日期；与年龄/科室组合可能重识别，仅详情返回。HIS 缺失时拒绝创建/导入（400），不得用 now() 伪造。
        */
       birthDate: string
       /** @description 年龄（岁），由出生日期计算；列表与详情均返回。 */

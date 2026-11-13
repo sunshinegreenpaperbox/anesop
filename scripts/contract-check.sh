@@ -6,8 +6,8 @@
 #   3) 生成物漂移：重跑 gen:ts，git diff 检查 generated/typescript 是否同步
 #
 # 用法：
-#   bash scripts/contract-check.sh                 # lint + breaking + 漂移
-#   bash scripts/contract-check.sh --breaking-only # 仅 breaking（供 pnpm check:breaking）
+#   bash scripts/contract-check.sh                 # lint + breaking（含 HEAD baseline）+ 漂移
+#   bash scripts/contract-check.sh --breaking-only # 仅 breaking（含 HEAD baseline；供 pnpm check:breaking）
 #   bash scripts/contract-check.sh --lint-only     # 仅 lint
 #
 # 基线更新流程：契约经人工评审通过且确认兼容后，将当前 yaml 复制到
@@ -61,7 +61,7 @@ fi
 
 if [ "$MODE" != "lint" ]; then
   hr
-  echo "[contract-check] 2/3 破坏性变更检测（baseline → 当前）"
+  echo "[contract-check] 2/4 破坏性变更检测（baseline → 当前）"
   for domain in "${DOMAINS[@]}"; do
     current="$CONTRACTS_DIR/openapi/${domain}.yaml"
     baseline="$CONTRACTS_DIR/openapi/baseline/${domain}.yaml"
@@ -94,9 +94,43 @@ if [ "$MODE" != "lint" ]; then
   fi
 fi
 
+# ADR-0011：评审纪律要求用“上个已发布 baseline（HEAD 版本）”复跑，防止
+# 同一未评审变更里覆盖 baseline 自证兼容。此处自动执行，git 不可用/首次提交时跳过。
+if [ "$MODE" != "lint" ] && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  hr
+  echo "[contract-check] 3/4 HEAD baseline 兼容检查（ADR-0011）"
+  head_ok=0
+  head_skip=0
+  for domain in "${DOMAINS[@]}"; do
+    current="$CONTRACTS_DIR/openapi/${domain}.yaml"
+    [ -f "$current" ] || continue
+    if ! git -C "$ROOT" cat-file -e "HEAD:packages/contracts/openapi/baseline/${domain}.yaml" 2>/dev/null; then
+      head_skip=1
+      continue
+    fi
+    tmp="$(mktemp)"
+    git -C "$ROOT" show "HEAD:packages/contracts/openapi/baseline/${domain}.yaml" > "$tmp"
+    if out="$(cd "$CONTRACTS_DIR" && pnpm exec oasdiff breaking "$tmp" "openapi/${domain}.yaml" --fail-on WARN 2>&1)"; then
+      head_ok=$((head_ok + 1))
+    else
+      echo "  FAIL ${domain}：相对 HEAD baseline 存在破坏性变更（ADR-0011）"
+      printf '%s\n' "$out" | sed 's/^/    /'
+      fail=1
+    fi
+    rm -f "$tmp"
+  done
+  if [ "$fail" -eq 0 ]; then
+    if [ "$head_skip" -eq 1 ] && [ "$head_ok" -eq 0 ]; then
+      echo "  SKIP：HEAD 中无 baseline 快照（首次落地）"
+    else
+      echo "  PASS：${head_ok} 域相对 HEAD baseline 无破坏性变更"
+    fi
+  fi
+fi
+
 if [ "$MODE" = "all" ]; then
   hr
-  echo "[contract-check] 3/3 生成物漂移校验（重新生成 → git diff）"
+  echo "[contract-check] 4/4 生成物漂移校验（重新生成 → git diff）"
   if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     # 对比“重生成前/后”的 git diff：干净树上等价于 git diff --exit-code；
     # 工作区已有未提交契约改动时，可区分“生成物已同步”与“生成物漂移”。

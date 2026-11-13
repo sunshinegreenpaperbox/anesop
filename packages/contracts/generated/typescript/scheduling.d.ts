@@ -485,6 +485,12 @@ export interface components {
     PatientSnapshot: {
       /** @description 患者标识（UUID 字符串）。 */
       patientId: string
+      /**
+       * @deprecated
+       * @description 已弃用：编号口径统一为 hisPatientNo，本字段仅作 0.3.0 兼容回填（值等于 hisPatientNo）；
+       *     计划 1.0.0 major 删除。
+       */
+      patientNo: string
       /** @description HIS 患者号；患者编号统一口径，patientNo 仅作为历史兼容字段在 patient 契约保留。 */
       hisPatientNo: string
       /** @description 患者姓名；示例统一使用“演示患者”。 */
@@ -496,7 +502,7 @@ export interface components {
       gender: 'MALE' | 'FEMALE' | 'UNKNOWN'
       /**
        * Format: date
-       * @description 出生日期；与年龄/科室组合可能重识别，按最小必要返回。
+       * @description 出生日期；与年龄/科室组合可能重识别，按最小必要返回。HIS 缺失时拒绝创建/导入（400），不得用 now() 伪造。
        */
       birthDate?: string
       /** @description 年龄（岁）。 */
@@ -1191,6 +1197,7 @@ export interface operations {
            *           "hisApplicationNo": "SYNTH-HIS-APP-0001",
            *           "patient": {
            *             "patientId": "50000000-0000-4000-8000-000000000001",
+           *             "patientNo": "SYNTH-P-0001",
            *             "hisPatientNo": "SYNTH-HIS-P-0001",
            *             "name": "演示患者",
            *             "gender": "FEMALE",
@@ -1276,6 +1283,7 @@ export interface operations {
            *       "hisApplicationNo": "SYNTH-MANUAL-APP-0001",
            *       "patient": {
            *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "patientNo": "SYNTH-P-0001",
            *         "hisPatientNo": "SYNTH-HIS-P-0001",
            *         "name": "演示患者",
            *         "gender": "FEMALE",
@@ -1394,6 +1402,7 @@ export interface operations {
            *       "hisApplicationNo": "SYNTH-HIS-APP-0001",
            *       "patient": {
            *         "patientId": "50000000-0000-4000-8000-000000000001",
+           *         "patientNo": "SYNTH-P-0001",
            *         "hisPatientNo": "SYNTH-HIS-P-0001",
            *         "name": "演示患者",
            *         "gender": "FEMALE",

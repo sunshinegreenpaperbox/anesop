@@ -136,7 +136,7 @@ paths:
                 items:
                   - scheduleId: '8000000000000000001'
                     applicationId: '6000000000000000001'
-                    patientId: '5000000000000000001'
+                    patientId: '50000000-0000-4000-8000-000000000001'
                     patientNo: SYNTH-P-0001
                     patientName: 演示患者
                     roomId: '7000000000000000001'
@@ -194,7 +194,7 @@ paths:
               example:
                 scheduleId: '8000000000000000001'
                 applicationId: '6000000000000000001'
-                patientId: '5000000000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 roomId: '7000000000000000001'
@@ -246,7 +246,7 @@ paths:
               example:
                 scheduleId: '8000000000000000001'
                 applicationId: '6000000000000000001'
-                patientId: '5000000000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
                 patientNo: SYNTH-P-0001
                 patientName: 演示患者
                 roomId: '7000000000000000001'
@@ -467,7 +467,7 @@ paths:
                   - applicationId: '6000000000000000001'
                     hisApplicationNo: SYNTH-HIS-APP-0001
                     patient:
-                      patientId: '5000000000000000001'
+                      patientId: '50000000-0000-4000-8000-000000000001'
                       patientNo: SYNTH-P-0001
                       hisPatientNo: SYNTH-HIS-P-0001
                       name: 演示患者
@@ -525,7 +525,7 @@ paths:
               $ref: '#/components/schemas/SurgeryApplicationCreateRequest'
             example:
               hisApplicationNo: SYNTH-MANUAL-APP-0001
-              patientId: '5000000000000000001'
+              patientId: '50000000-0000-4000-8000-000000000001'
               surgeryName: 演示术式（腹腔镜胆囊切除术）
               surgeryCode: SYNTH-OP-0002
               urgency: URGENT
@@ -544,7 +544,7 @@ paths:
                 applicationId: '6000000000000000002'
                 hisApplicationNo: SYNTH-MANUAL-APP-0001
                 patient:
-                  patientId: '5000000000000000001'
+                  patientId: '50000000-0000-4000-8000-000000000001'
                   patientNo: SYNTH-P-0001
                   hisPatientNo: SYNTH-HIS-P-0001
                   name: 演示患者
@@ -629,8 +629,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '422':
-          $ref: '#/components/responses/UnprocessableEntity'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/scheduling/applications/{applicationId}:
     get:
       operationId: getSchedulingApplication
@@ -656,7 +656,7 @@ paths:
                 applicationId: '6000000000000000001'
                 hisApplicationNo: SYNTH-HIS-APP-0001
                 patient:
-                  patientId: '5000000000000000001'
+                  patientId: '50000000-0000-4000-8000-000000000001'
                   patientNo: SYNTH-P-0001
                   hisPatientNo: SYNTH-HIS-P-0001
                   name: 演示患者
@@ -1018,7 +1018,9 @@ components:
               description: 患者标识。
             patientNo:
               type: string
-              description: 院内患者编号；示例统一使用 SYNTH-P-0001。
+              deprecated: true
+              description: |
+                已弃用：编号口径统一为 hisPatientNo；本字段仅为兼容 0.2.0 保留，计划 1.0.0 major 删除。
             patientName:
               type: string
               description: 患者姓名；示例统一使用“演示患者”。
@@ -1283,13 +1285,16 @@ components:
       properties:
         patientId:
           type: string
-          description: 患者标识。
+          description: 患者标识（UUID 字符串）。
         patientNo:
           type: string
-          description: 院内患者编号。
+          deprecated: true
+          description: |
+            已弃用：编号口径统一为 hisPatientNo，本字段仅作 0.3.0 兼容回填（值等于 hisPatientNo）；
+            计划 1.0.0 major 删除。
         hisPatientNo:
           type: string
-          description: HIS 患者号。
+          description: HIS 患者号；患者编号统一口径，patientNo 仅作为历史兼容字段在 patient 契约保留。
         name:
           type: string
           description: 患者姓名；示例统一使用“演示患者”。
@@ -1303,7 +1308,7 @@ components:
         birthDate:
           type: string
           format: date
-          description: 出生日期；与年龄/科室组合可能重识别，按最小必要返回。
+          description: 出生日期；与年龄/科室组合可能重识别，按最小必要返回。HIS 缺失时拒绝创建/导入（400），不得用 now() 伪造。
         age:
           type: integer
           description: 年龄（岁）。
@@ -1357,9 +1362,14 @@ components:
             - SCHEDULED
             - CANCELLED
             - REJECTED
+        reasonCode:
+          type: string
+          description: 变更原因码（字典值，≤64 字符）；取消时必填，创建/导入为空。
+          maxLength: 64
         reason:
           type: string
-          description: 变更原因（演示文本），不含患者标识。
+          description: 变更原因说明（演示文本，≤500 字符），不含患者标识。
+          maxLength: 500
         operatorId:
           type: string
           description: 操作人用户标识。
@@ -1514,13 +1524,13 @@ components:
           maxLength: 500
     ImportSurgeryApplicationsRequest:
       type: object
-      description: 模拟 HIS 拉取请求；count 限制 1–5，seed 用于可复现的 SYNTHETIC 生成。
+      description: 模拟 HIS 拉取请求；count 严格 1–5（请求多少返回多少），seed 用于可复现的 SYNTHETIC 生成。
       required:
         - count
       properties:
         count:
           type: integer
-          description: 拉取条数（1–5）；服务端默认生成 3–5 条演示申请。
+          description: 拉取条数，严格 1–5：请求 N 条即返回 N 条（不足时返回可用数量并在 message 说明），越界返回 400。
           minimum: 1
           maximum: 5
         seed:
