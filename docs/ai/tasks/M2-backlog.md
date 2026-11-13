@@ -27,7 +27,7 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
 | M2-M1-01 | 手术申请接收与校验 | `packages/contracts/openapi/{patient,scheduling}.yaml`、`apps/api/modules/m1/**`、`apps/web/src/modules/m1/**`、`db/migration/V7*` | M2-M0-01 | Review（blocking/建议已修：B-1/B-2/B-3 + S-1…S-9 + Q-1…Q-3；待复审） |
 | M2-M2-01 | 排程工作台与冲突检测 | 同上（scheduling/m1） | M2-M1-01 | Review（独立评审 blocking B-1…B-4 与 S-1…S-9 已修，待复审） |
 | M2-M2-02 | 停改台与急诊加台 | m1 契约/模块、通知模拟 | M2-M2-01 | Review（独立评审 B-1/B-2 + S-1…S-7 + Q-1…Q-3 已修；待复审） |
-| M2-M4-01 | 术前访视与评估 | `anesthesia.yaml` 扩展、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V8*` | M2-M1-01 | Blocked |
+| M2-M4-01 | 术前访视与评估 | `anesthesia.yaml` 扩展、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V10*` | M2-M1-01 | Review（契约 0.3.0 + V10 + m2 后端/前端 + 测试；待独立 review） |
 | M2-M5-01 | 知情同意与三方核查 | anesthesia 契约（三方核查已定义）、m2 模块 | M2-M4-01 | Blocked |
 | M2-M6-01 | 排程分析（利用率/准点/取消） | m1 读模型、M6 报表引擎或 m1 分析接口 | M2-M2-01 | Blocked |
 
@@ -172,6 +172,27 @@ M2-M0-04 (ratchet/漏洞例外清理，可与任意任务并行)
   评分项与阈值口径待临床确认（标【待确认】，不硬编码）。
 - 验收：访视单创建/更新/查询；评分计算可测（正常/边界/缺项）；麻醉计划与术式关联；越权 403；
   E2E 主流程；契约扩展 + baseline/TS/Java 同步；临床规则需人工逐行（AGENTS 高风险）。
+
+- 落地说明（Review）：契约 anesthesia **0.3.0**（additive）：新增
+  `GET/POST /v1/anesthesia/preop-assessments`、`GET/PUT /{assessmentId}`、
+  `POST /{assessmentId}/finalize`（operationId list/create/get/update/finalizePreopAssessment），
+  `PreopAssessment`/`PreopScoreInput`/`PreopScores`/`PreopAirwayAssessment`/`PreopPlan`/
+  `PreopApplicationSummary` 等 schema；旧 `preop-visits` 骨架保留（ADR-0011 弃用窗口）；
+  baseline/TS/Java 同步，contract-check（lint/baseline/HEAD baseline/drift）全 PASS。
+  V10 `m2_anes.preop_assessment`（申请物理 FK、患者快照/气道/评分输入/评分结果 jsonb、
+  四项分数与风险列、DRAFT/FINALIZED、最终化人/时间、审计/version/deleted；同一申请最多一份
+  草稿的部分唯一索引；中文注释 + 回滚说明）+ 权限 `m2:preop:read|write`
+  （SYS_ADMIN/SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）。后端：`m2-api` 服务接口与异常、
+  `m2-impl` `PreopScoreCalculator`（RCRI 6/Apfel 4/STOP-BANG 8/DASI 12 项 0–58.2，公开文献
+  Javadoc，阈值【待确认】）+ `PreopAssessmentServiceImpl`（事务、M1 申请可见性复用、乐观锁、
+  最终化锁定、PREOP_CREATE/UPDATE/FINALIZE 审计无 PHI）、bootstrap 控制器与 400/409/422 映射。
+  前端：`/m2/preop/:applicationId` 术前访视页（病史/气道/ASA/评分勾选/计划、实时预览、二次确认
+  最终化、403/404 权限态）+ 菜单入口 `/m2/preop`（`m2:preop:read`）+ API client。
+  测试：m2-impl 52（评分表驱动 28 + 服务 24，覆盖率 LINE 94.96%/BRANCH 74.67% ≥80/70）、
+  api-bootstrap 集成 4（主流程/400-422-409/403-404/V10 结构）、Vitest 6、E2E 2；
+  `mvn verify`、契约门禁、`pnpm test:unit`/`build`/`lint`/`e2e` 全绿。
+  已知限制：SYS_ANESTHESIOLOGIST 种子为 SELF 数据范围，HIS 申请需 DEPT/ALL 或 M3 任务分派范围
+  （模块 README §9 登记）；评分阈值配置表【待确认】。
 
 ### M2-M5-01 知情同意与三方核查
 - 目标：模板与版本、签署状态（模拟 CA，EXT-05）、Time-out 记录、三方核查（已定义契约）与锁单前置联动。

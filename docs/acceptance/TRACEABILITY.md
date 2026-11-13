@@ -26,3 +26,4 @@
 | 登录提交 E2E | ACCEPTANCE C | auth.yaml | m0/auth | 登录页 | apps/web/e2e/auth.spec.ts | 已实现（M2-M0-03，API 拦截） |
 | 手术申请接收/导入/取消 | 2.4.2 | scheduling.yaml 0.3.0 | m1/application + HIS 适配器 | m1 列表/详情 | SurgeryApplicationApiIntegrationTest / m1-applications.spec.ts | 已实现（M2-M1-01，review 清障） |
 | 患者摘要与脱敏检索 | 2.4.2/3.9.3 | patient.yaml 0.3.0 | m1/patient | m1 列表 | SurgeryApplicationApiIntegrationTest（masked） | 已实现（M2-M1-01） |
+| 术前访视与风险评分 | 2.4.3 | anesthesia.yaml 0.3.0 | m2/preop | 术前访视页 | PreopScoreCalculatorTest / PreopAssessmentApiIntegrationTest | 已实现（M2-M4-01，review PASS；阈值待临床确认） |
