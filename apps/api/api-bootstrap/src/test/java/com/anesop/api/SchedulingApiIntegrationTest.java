@@ -81,6 +81,15 @@ class SchedulingApiIntegrationTest extends AbstractApiIntegrationTest {
         SyntheticAccounts.ensureSurgeon(jdbcTemplate);
         SyntheticAccounts.ensureRoomUser(jdbcTemplate);
         grantRoomUserSchedulePermissions();
+        // V9 起 change_request/outbox 引用 schedule：清理顺序不可颠倒；审批留痕为 append-only，
+        // 测试夹具临时 DISABLE TRIGGER USER 清理后立即恢复（生产路径不得使用该开关）。
+        jdbcTemplate.update("DELETE FROM m1_sched.notification_outbox");
+        jdbcTemplate.execute("ALTER TABLE m1_sched.schedule_change_request DISABLE TRIGGER USER");
+        try {
+            jdbcTemplate.update("DELETE FROM m1_sched.schedule_change_request");
+        } finally {
+            jdbcTemplate.execute("ALTER TABLE m1_sched.schedule_change_request ENABLE TRIGGER USER");
+        }
         jdbcTemplate.update("DELETE FROM m1_sched.schedule");
         jdbcTemplate.execute("ALTER TABLE m1_sched.application_status_history DISABLE TRIGGER USER");
         try {
@@ -721,6 +730,8 @@ class SchedulingApiIntegrationTest extends AbstractApiIntegrationTest {
         body.put("sequenceNo", sequence);
         if (version != null) {
             body.put("version", version);
+            // Q-1：改台原因码必填（契约 0.5.0 / 方案书 §2.4.2）。
+            body.put("reasonCode", "SCHEDULE_ADJUST");
             body.put("reason", "演示调整");
         } else if (applicationId != null) {
             body.put("priority", "ELECTIVE");

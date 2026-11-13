@@ -12,10 +12,14 @@ import com.anesop.contracts.scheduling.model.CancelScheduleRequest;
 import com.anesop.contracts.scheduling.model.ConflictCheckRequest;
 import com.anesop.contracts.scheduling.model.ConflictCheckResult;
 import com.anesop.contracts.scheduling.model.CreateScheduleRequest;
+import com.anesop.contracts.scheduling.model.EmergencyAddRequest;
+import com.anesop.contracts.scheduling.model.EmergencyAddResult;
 import com.anesop.contracts.scheduling.model.IdResponse;
 import com.anesop.contracts.scheduling.model.OperatingRoomList;
 import com.anesop.contracts.scheduling.model.Schedule;
+import com.anesop.contracts.scheduling.model.ScheduleChangeList;
 import com.anesop.contracts.scheduling.model.SchedulePage;
+import com.anesop.contracts.scheduling.model.StopScheduleRequest;
 import com.anesop.contracts.scheduling.model.UpdateScheduleRequest;
 import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m0.api.security.AuthPrincipal;
@@ -24,16 +28,20 @@ import com.anesop.m0.api.security.DataScope;
 import com.anesop.m0.api.security.DataScopeAssignment;
 import com.anesop.m0.api.security.DataScopeAssignments;
 import com.anesop.m0.api.security.DataScopeResolver;
+import com.anesop.m1.api.notification.NotificationEvent;
+import com.anesop.m1.api.notification.NotificationPort;
 import com.anesop.m1.api.schedule.ScheduleUnprocessableException;
 import com.anesop.m1.api.schedule.SchedulingConflictException;
 import com.anesop.m1.api.schedule.SchedulingValidationException;
 import com.anesop.m1.impl.persistence.entity.OperatingRoomEntity;
 import com.anesop.m1.impl.persistence.entity.PatientSnapshotEntity;
+import com.anesop.m1.impl.persistence.entity.ScheduleChangeRequestEntity;
 import com.anesop.m1.impl.persistence.entity.ScheduleEntity;
 import com.anesop.m1.impl.persistence.entity.ScheduleOverlapRow;
 import com.anesop.m1.impl.persistence.entity.SurgeryApplicationEntity;
 import com.anesop.m1.impl.persistence.mapper.OperatingRoomMapper;
 import com.anesop.m1.impl.persistence.mapper.PatientSnapshotMapper;
+import com.anesop.m1.impl.persistence.mapper.ScheduleChangeRequestMapper;
 import com.anesop.m1.impl.persistence.mapper.ScheduleMapper;
 import com.anesop.m1.impl.persistence.mapper.SurgeryApplicationMapper;
 import com.anesop.m1.impl.schedule.rule.PatientConflictRule;
@@ -84,6 +92,8 @@ class SchedulingServiceImplTest {
     @Mock
     private ScheduleMapper scheduleMapper;
     @Mock
+    private ScheduleChangeRequestMapper changeRequestMapper;
+    @Mock
     private SurgeryApplicationMapper applicationMapper;
     @Mock
     private PatientSnapshotMapper patientSnapshotMapper;
@@ -91,6 +101,8 @@ class SchedulingServiceImplTest {
     private DataScopeResolver dataScopeResolver;
     @Mock
     private AuditWriter auditWriter;
+    @Mock
+    private NotificationPort notificationPort;
 
     private SchedulingServiceImpl service;
     private AuthPrincipal caller;
@@ -100,9 +112,10 @@ class SchedulingServiceImplTest {
         SchedulingRuleRegistry registry = new SchedulingRuleRegistry(List.of(
                 new RoomOverlapRule(), new SurgeonConflictRule(), new PatientConflictRule(),
                 new RoomTypeMatchRule(), new TimeWindowRule()));
-        service = new SchedulingServiceImpl(roomMapper, scheduleMapper, applicationMapper,
-                patientSnapshotMapper, registry, dataScopeResolver, auditWriter,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new SchedulingServiceImpl(roomMapper, scheduleMapper, changeRequestMapper,
+                applicationMapper, patientSnapshotMapper, registry, dataScopeResolver, auditWriter,
+                notificationPort, Clock.fixed(NOW, ZoneOffset.UTC),
+                "急诊加台抢占择期台次（系统自动）");
         caller = new AuthPrincipal(USER_ID, "demo_admin", "jti", NOW.plusSeconds(900), "sid");
         when(dataScopeResolver.resolve(USER_ID))
                 .thenReturn(DataScopeAssignments.of(List.of(new DataScopeAssignment(DataScope.ALL, List.of()))));
@@ -168,12 +181,14 @@ class SchedulingServiceImplTest {
     private ScheduleOverlapRow overlap(UUID roomId) {
         ScheduleOverlapRow row = new ScheduleOverlapRow();
         row.setId(UUID.fromString("80000000-0000-4000-8000-000000000002"));
+        row.setApplicationId(APP_ID);
         row.setRoomId(roomId);
         row.setRoomNo("OR-01");
         row.setRoomType("GENERAL");
         row.setStartAt(START.plusMinutes(30).toInstant());
         row.setEndAt(END.toInstant());
         row.setSequence(1);
+        row.setPriority(0);
         row.setStatus("PLANNED");
         row.setPatientId(UUID.fromString("50000000-0000-4000-8000-000000000002"));
         row.setSurgeonName("其他术者");
@@ -355,6 +370,7 @@ class SchedulingServiceImplTest {
         request.setPlannedEnd(END.plusHours(2));
         request.setSequenceNo(2);
         request.setVersion(1);
+        request.setReasonCode("SCHEDULE_ADJUST");
         request.setReason("演示调整");
 
         Schedule updated = service.reschedule(SCHEDULE_ID.toString(), request, caller,
@@ -386,8 +402,11 @@ class SchedulingServiceImplTest {
     @Test
     void 取消台次写入状态原因与审计() {
         when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
         when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
         when(scheduleMapper.updateById(any(ScheduleEntity.class))).thenReturn(1);
+        when(changeRequestMapper.insert(any(ScheduleChangeRequestEntity.class))).thenReturn(1);
+        when(notificationPort.publish(any(NotificationEvent.class))).thenReturn(UUID.randomUUID());
         CancelScheduleRequest request = new CancelScheduleRequest();
         request.setReasonCode("PATIENT_CONDITION");
         request.setReason("演示停台原因（合成数据）");
@@ -403,11 +422,20 @@ class SchedulingServiceImplTest {
         assertThat(captor.getValue().getReason()).isEqualTo("演示停台原因（合成数据）");
         verify(auditWriter).record(eq("SCHEDULE_CANCEL"), eq("SCHEDULE"), any(), eq(true),
                 any(), eq(USER_ID), eq("demo_admin"), any());
+        // S-1：0.4.0 兼容取消端点同样写变更记录与 outbox，不绕过变更历史。
+        ArgumentCaptor<ScheduleChangeRequestEntity> changeCaptor =
+                ArgumentCaptor.forClass(ScheduleChangeRequestEntity.class);
+        verify(changeRequestMapper).insert(changeCaptor.capture());
+        assertThat(changeCaptor.getValue().getChangeType()).isEqualTo("STOP");
+        ArgumentCaptor<NotificationEvent> eventCaptor = ArgumentCaptor.forClass(NotificationEvent.class);
+        verify(notificationPort).publish(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().eventType()).isEqualTo("SCHEDULE_STOPPED");
     }
 
     @Test
     void 已开始台次不允许取消() {
         when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
         when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
         CancelScheduleRequest request = new CancelScheduleRequest();
         request.setReasonCode("PATIENT_CONDITION");
@@ -612,6 +640,7 @@ class SchedulingServiceImplTest {
         request.setPlannedEnd(END);
         request.setSequenceNo(1);
         request.setVersion(1);
+        request.setReasonCode("SCHEDULE_ADJUST");
 
         assertThatThrownBy(() -> service.reschedule(SCHEDULE_ID.toString(), request, caller,
                 AuthRequestContext.empty()))
@@ -621,6 +650,7 @@ class SchedulingServiceImplTest {
     @Test
     void 取消参数或版本非法时拒绝() {
         when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 2));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 2));
         when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
         CancelScheduleRequest request = new CancelScheduleRequest();
         request.setReasonCode("PATIENT_CONDITION");
@@ -735,6 +765,7 @@ class SchedulingServiceImplTest {
     @Test
     void 停台原因码非法返回字段校验错误() {
         when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
         when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
         CancelScheduleRequest request = new CancelScheduleRequest();
         request.setReasonCode("patient condition");
@@ -764,6 +795,7 @@ class SchedulingServiceImplTest {
                                 .isEqualTo("VERSION_CONFLICT"));
 
         when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
         CancelScheduleRequest cancel = new CancelScheduleRequest();
         cancel.setReasonCode("SCHEDULE_CHANGE");
         cancel.setReason("演示停台原因");
@@ -808,5 +840,396 @@ class SchedulingServiceImplTest {
 
         assertThatThrownBy(() -> service.listRooms(caller))
                 .isInstanceOf(AccessDeniedException.class);
+    }
+
+    private StopScheduleRequest stopRequest(String reasonCode, Integer version) {
+        StopScheduleRequest request = new StopScheduleRequest();
+        request.setReasonCode(reasonCode);
+        request.setReason("演示停台原因（合成数据）");
+        request.setVersion(version);
+        return request;
+    }
+
+    private EmergencyAddRequest emergencyRequest(String reasonCode) {
+        EmergencyAddRequest request = new EmergencyAddRequest();
+        request.setApplicationId(APP_ID.toString());
+        request.setRoomId(ROOM_ID.toString());
+        request.setReasonCode(reasonCode);
+        request.setReason("演示急诊加台（合成数据）");
+        request.setExpectedStart(START);
+        request.setExpectedEnd(END);
+        request.setSequenceNo(1);
+        return request;
+    }
+
+    private ScheduleOverlapRow preemptOverlap() {
+        ScheduleOverlapRow row = overlap(ROOM_ID);
+        row.setPriority(0);
+        row.setStatus("PLANNED");
+        row.setPatientId(UUID.fromString("50000000-0000-4000-8000-000000000003"));
+        row.setSurgeonName("择期术者");
+        return row;
+    }
+
+    private ScheduleEntity preemptScheduleEntity() {
+        ScheduleEntity entity = schedule("PLANNED", 1);
+        entity.setId(UUID.fromString("80000000-0000-4000-8000-000000000002"));
+        entity.setPriority(0);
+        return entity;
+    }
+
+    private void stubStopLookups() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(applicationMapper.selectById(APP_ID)).thenReturn(application("ACCEPTED", null));
+        when(patientSnapshotMapper.selectById(PATIENT_ID)).thenReturn(patient());
+        when(scheduleMapper.updateById(any(ScheduleEntity.class))).thenReturn(1);
+        when(changeRequestMapper.insert(any(ScheduleChangeRequestEntity.class))).thenReturn(1);
+        when(notificationPort.publish(any(NotificationEvent.class))).thenReturn(UUID.randomUUID());
+    }
+
+    private void stubEmergencyLookups() {
+        when(applicationMapper.selectById(APP_ID)).thenReturn(application("ACCEPTED", null));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(roomMapper.selectByIdForUpdate(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(scheduleMapper.insert(any(ScheduleEntity.class))).thenReturn(1);
+        when(changeRequestMapper.insert(any(ScheduleChangeRequestEntity.class))).thenReturn(1);
+        when(notificationPort.publish(any(NotificationEvent.class))).thenReturn(UUID.randomUUID());
+    }
+
+    @Test
+    void 计划台次停台直接生效并写变更审计与通知() {
+        stubStopLookups();
+
+        Schedule stopped = service.stop(SCHEDULE_ID.toString(), stopRequest("PATIENT_CONDITION", 1),
+                caller, AuthRequestContext.empty(), false);
+
+        assertThat(stopped.getStatus().getValue()).isEqualTo("CANCELLED");
+        assertThat(stopped.getChangeReason()).isEqualTo("演示停台原因（合成数据）");
+        ArgumentCaptor<ScheduleChangeRequestEntity> changeCaptor =
+                ArgumentCaptor.forClass(ScheduleChangeRequestEntity.class);
+        verify(changeRequestMapper).insert(changeCaptor.capture());
+        assertThat(changeCaptor.getValue().getChangeType()).isEqualTo("STOP");
+        assertThat(changeCaptor.getValue().getStatus()).isEqualTo("APPROVED");
+        assertThat(changeCaptor.getValue().getApprovedBy()).isEqualTo(USER_ID);
+        assertThat(changeCaptor.getValue().getReasonCode()).isEqualTo("PATIENT_CONDITION");
+        verify(auditWriter).record(eq("SCHEDULE_STOP"), eq("SCHEDULE"), any(), eq(true),
+                any(), eq(USER_ID), eq("demo_admin"), any());
+        ArgumentCaptor<NotificationEvent> eventCaptor = ArgumentCaptor.forClass(NotificationEvent.class);
+        verify(notificationPort).publish(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().eventType()).isEqualTo("SCHEDULE_STOPPED");
+        assertThat(eventCaptor.getValue().payload()).containsOnlyKeys(
+                "scheduleId", "applicationId", "roomId", "changeId", "changeType", "reasonCode", "status");
+    }
+
+    @Test
+    void 停台原因码不在白名单返回400且不改状态() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+
+        assertThatThrownBy(() -> service.stop(SCHEDULE_ID.toString(),
+                stopRequest("patient_condition", 1), caller, AuthRequestContext.empty(), true))
+                .isInstanceOf(SchedulingValidationException.class)
+                .hasMessageContaining("白名单");
+        verify(scheduleMapper, never()).updateById(any(ScheduleEntity.class));
+        verify(notificationPort, never()).publish(any(NotificationEvent.class));
+    }
+
+    @Test
+    void 术中停台无审批权限返回403() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+
+        assertThatThrownBy(() -> service.stop(SCHEDULE_ID.toString(),
+                stopRequest("ANESTHESIA_RISK", 1), caller, AuthRequestContext.empty(), false))
+                .isInstanceOf(AccessDeniedException.class);
+        verify(scheduleMapper, never()).updateById(any(ScheduleEntity.class));
+    }
+
+    @Test
+    void 术中停台有审批权限时生效() {
+        stubStopLookups();
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("IN_PROGRESS", 1));
+
+        Schedule stopped = service.stop(SCHEDULE_ID.toString(), stopRequest("ANESTHESIA_RISK", 1),
+                caller, AuthRequestContext.empty(), true);
+
+        assertThat(stopped.getStatus().getValue()).isEqualTo("CANCELLED");
+        verify(auditWriter).record(eq("SCHEDULE_STOP"), eq("SCHEDULE"), any(), eq(true),
+                any(), eq(USER_ID), eq("demo_admin"), any());
+    }
+
+    @Test
+    void 终态台次停台返回409且版本过期返回409() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("COMPLETED", 1));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("COMPLETED", 1));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        assertThatThrownBy(() -> service.stop(SCHEDULE_ID.toString(),
+                stopRequest("PATIENT_CONDITION", 1), caller, AuthRequestContext.empty(), true))
+                .isInstanceOfSatisfying(SchedulingConflictException.class,
+                        exception -> assertThat(exception.conflicts().get(0).getConflictType())
+                                .isEqualTo("STATE_CONFLICT"));
+
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 2));
+        when(scheduleMapper.selectByIdForUpdate(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 2));
+        assertThatThrownBy(() -> service.stop(SCHEDULE_ID.toString(),
+                stopRequest("PATIENT_CONDITION", 1), caller, AuthRequestContext.empty(), true))
+                .isInstanceOfSatisfying(SchedulingConflictException.class,
+                        exception -> assertThat(exception.conflicts().get(0).getConflictType())
+                                .isEqualTo("VERSION_CONFLICT"));
+    }
+
+    @Test
+    void 改台写MODIFY变更并校验原因码白名单() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(roomMapper.selectByIdForUpdate(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(applicationMapper.selectById(APP_ID)).thenReturn(application("ACCEPTED", null));
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(SCHEDULE_ID))).thenReturn(List.of());
+        when(patientSnapshotMapper.selectById(PATIENT_ID)).thenReturn(patient());
+        when(scheduleMapper.updateById(any(ScheduleEntity.class))).thenReturn(1);
+        when(changeRequestMapper.insert(any(ScheduleChangeRequestEntity.class))).thenReturn(1);
+        when(notificationPort.publish(any(NotificationEvent.class))).thenReturn(UUID.randomUUID());
+        UpdateScheduleRequest request = new UpdateScheduleRequest();
+        request.setPlannedStart(START);
+        request.setPlannedEnd(END);
+        request.setSequenceNo(1);
+        request.setVersion(1);
+        request.setReasonCode("SURGEON_UNAVAILABLE");
+
+        service.reschedule(SCHEDULE_ID.toString(), request, caller, AuthRequestContext.empty());
+
+        ArgumentCaptor<ScheduleChangeRequestEntity> captor =
+                ArgumentCaptor.forClass(ScheduleChangeRequestEntity.class);
+        verify(changeRequestMapper).insert(captor.capture());
+        assertThat(captor.getValue().getChangeType()).isEqualTo("MODIFY");
+        assertThat(captor.getValue().getReasonCode()).isEqualTo("SURGEON_UNAVAILABLE");
+        verify(notificationPort).publish(any(NotificationEvent.class));
+
+        UpdateScheduleRequest invalid = new UpdateScheduleRequest();
+        invalid.setPlannedStart(START);
+        invalid.setPlannedEnd(END);
+        invalid.setSequenceNo(1);
+        invalid.setVersion(1);
+        invalid.setReasonCode("NOT_ALLOWED");
+        assertThatThrownBy(() -> service.reschedule(SCHEDULE_ID.toString(), invalid, caller,
+                AuthRequestContext.empty()))
+                .isInstanceOf(SchedulingValidationException.class)
+                .hasMessageContaining("白名单");
+    }
+
+    @Test
+    void 急诊加台无审批权限返回403() {
+        assertThatThrownBy(() -> service.addEmergency(emergencyRequest("EMERGENCY_GREEN_CHANNEL"),
+                caller, AuthRequestContext.empty(), false))
+                .isInstanceOf(AccessDeniedException.class);
+        verify(scheduleMapper, never()).insert(any(ScheduleEntity.class));
+    }
+
+    @Test
+    void 急诊加台成功写入EMERGENCY优先级与审批记录() {
+        stubEmergencyLookups();
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(null))).thenReturn(List.of());
+
+        EmergencyAddResult result = service.addEmergency(
+                emergencyRequest("EMERGENCY_GREEN_CHANNEL"), caller, AuthRequestContext.empty(), true);
+
+        assertThat(result.getAccepted()).isTrue();
+        assertThat(result.getApprovalRequired()).isTrue();
+        assertThat(result.getApproval().getStatus().getValue()).isEqualTo("APPROVED");
+        assertThat(result.getApproval().getChangeType().getValue()).isEqualTo("EMERGENCY");
+        ArgumentCaptor<ScheduleEntity> scheduleCaptor = ArgumentCaptor.forClass(ScheduleEntity.class);
+        verify(scheduleMapper).insert(scheduleCaptor.capture());
+        assertThat(scheduleCaptor.getValue().getPriority()).isEqualTo(2);
+        assertThat(scheduleCaptor.getValue().getStatus()).isEqualTo("PLANNED");
+        ArgumentCaptor<NotificationEvent> eventCaptor = ArgumentCaptor.forClass(NotificationEvent.class);
+        verify(notificationPort).publish(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().eventType()).isEqualTo("EMERGENCY_SCHEDULED");
+        verify(auditWriter).record(eq("SCHEDULE_EMERGENCY_CREATE"), eq("SCHEDULE"), any(),
+                eq(true), any(), eq(USER_ID), eq("demo_admin"), any());
+    }
+
+    @Test
+    void 急诊加台未指定抢占遇冲突返回409且不落库() {
+        stubEmergencyLookups();
+        ScheduleOverlapRow conflictRow = overlap(ROOM_ID);
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(null)))
+                .thenReturn(List.of(conflictRow));
+
+        assertThatThrownBy(() -> service.addEmergency(
+                emergencyRequest("EMERGENCY_GREEN_CHANNEL"), caller, AuthRequestContext.empty(), true))
+                .isInstanceOfSatisfying(SchedulingConflictException.class,
+                        exception -> assertThat(exception.conflicts())
+                                .extracting(conflict -> conflict.getConflictingScheduleId())
+                                .containsExactly(conflictRow.getId().toString()));
+        verify(scheduleMapper, never()).insert(any(ScheduleEntity.class));
+    }
+
+    @Test
+    void 急诊抢占择期台次成功并留痕通知() {
+        stubEmergencyLookups();
+        ScheduleOverlapRow preempted = preemptOverlap();
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(null))).thenReturn(List.of(preempted));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(scheduleMapper.selectByIdForUpdate(preempted.getId()))
+                .thenReturn(preemptScheduleEntity());
+        when(scheduleMapper.updateById(any(ScheduleEntity.class))).thenReturn(1);
+        EmergencyAddRequest request = emergencyRequest("EMERGENCY_PREEMPT");
+        request.setPreemptScheduleId(preempted.getId().toString());
+
+        EmergencyAddResult result = service.addEmergency(request, caller,
+                AuthRequestContext.empty(), true);
+
+        assertThat(result.getApproval().getPreemptScheduleId()).isEqualTo(preempted.getId().toString());
+        ArgumentCaptor<ScheduleEntity> updates = ArgumentCaptor.forClass(ScheduleEntity.class);
+        verify(scheduleMapper).updateById(updates.capture());
+        assertThat(updates.getValue().getStatus()).isEqualTo("CANCELLED");
+        assertThat(updates.getValue().getReason()).isEqualTo("EMERGENCY_PREEMPT");
+
+        ArgumentCaptor<ScheduleChangeRequestEntity> changes =
+                ArgumentCaptor.forClass(ScheduleChangeRequestEntity.class);
+        verify(changeRequestMapper, org.mockito.Mockito.times(2)).insert(changes.capture());
+        assertThat(changes.getAllValues()).extracting(ScheduleChangeRequestEntity::getChangeType)
+                .containsExactly("EMERGENCY", "STOP");
+        assertThat(changes.getAllValues().get(1).getReasonCode()).isEqualTo("EMERGENCY_PREEMPT");
+        assertThat(changes.getAllValues().get(1).getPreemptScheduleId())
+                .isEqualTo(result.getScheduleId() == null ? null
+                        : UUID.fromString(result.getScheduleId()));
+
+        ArgumentCaptor<NotificationEvent> events = ArgumentCaptor.forClass(NotificationEvent.class);
+        verify(notificationPort, org.mockito.Mockito.times(2)).publish(events.capture());
+        assertThat(events.getAllValues()).extracting(NotificationEvent::eventType)
+                .containsExactly("EMERGENCY_SCHEDULED", "SCHEDULE_PREEMPTED");
+        verify(auditWriter).record(eq("SCHEDULE_PREEMPT"), eq("SCHEDULE"), eq(preempted.getId().toString()),
+                eq(true), any(), eq(USER_ID), eq("demo_admin"), any());
+    }
+
+    @Test
+    void 抢占非本次冲突台次返回409() {
+        stubEmergencyLookups();
+        ScheduleOverlapRow conflictRow = overlap(ROOM_ID);
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(null)))
+                .thenReturn(List.of(conflictRow));
+        EmergencyAddRequest request = emergencyRequest("EMERGENCY_PREEMPT");
+        request.setPreemptScheduleId("80000000-0000-4000-8000-0000000000ff");
+
+        assertThatThrownBy(() -> service.addEmergency(request, caller,
+                AuthRequestContext.empty(), true))
+                .isInstanceOf(SchedulingConflictException.class);
+        verify(scheduleMapper, never()).updateById(any(ScheduleEntity.class));
+    }
+
+    @Test
+    void 无冲突时指定抢占返回400且急诊原因码白名单校验() {
+        stubEmergencyLookups();
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(null))).thenReturn(List.of());
+        EmergencyAddRequest request = emergencyRequest("EMERGENCY_GREEN_CHANNEL");
+        request.setPreemptScheduleId("80000000-0000-4000-8000-000000000002");
+        assertThatThrownBy(() -> service.addEmergency(request, caller,
+                AuthRequestContext.empty(), true))
+                .isInstanceOf(SchedulingValidationException.class)
+                .hasMessageContaining("无需抢占");
+
+        EmergencyAddRequest invalid = emergencyRequest("NOT_ALLOWED");
+        assertThatThrownBy(() -> service.addEmergency(invalid, caller,
+                AuthRequestContext.empty(), true))
+                .isInstanceOf(SchedulingValidationException.class)
+                .hasMessageContaining("白名单");
+    }
+
+    @Test
+    void 急诊加台缺目标术间返回400() {
+        when(applicationMapper.selectById(APP_ID)).thenReturn(application("ACCEPTED", null));
+        EmergencyAddRequest request = emergencyRequest("EMERGENCY_GREEN_CHANNEL");
+        request.setRoomId(null);
+        assertThatThrownBy(() -> service.addEmergency(request, caller,
+                AuthRequestContext.empty(), true))
+                .isInstanceOf(SchedulingValidationException.class)
+                .hasMessageContaining("目标术间");
+    }
+
+    @Test
+    void 变更历史按台次返回并按数据范围校验() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("CANCELLED", 2));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        ScheduleChangeRequestEntity stop = new ScheduleChangeRequestEntity();
+        stop.setId(UUID.fromString("90000000-0000-4000-8000-000000000001"));
+        stop.setScheduleId(SCHEDULE_ID);
+        stop.setApplicationId(APP_ID);
+        stop.setChangeType("STOP");
+        stop.setReasonCode("PATIENT_CONDITION");
+        stop.setReason("演示停台原因");
+        stop.setStatus("APPROVED");
+        stop.setRequestedBy(USER_ID);
+        stop.setRequestedAt(NOW);
+        stop.setApprovedBy(USER_ID);
+        stop.setApprovedAt(NOW);
+        stop.setVersion(1L);
+        when(changeRequestMapper.selectCount(any())).thenReturn(1L);
+        when(changeRequestMapper.selectList(any())).thenReturn(List.of(stop));
+
+        ScheduleChangeList changes = service.listChanges(SCHEDULE_ID.toString(), caller, 1, 50);
+
+        assertThat(changes.getItems()).hasSize(1);
+        assertThat(changes.getItems().get(0).getChangeType().getValue()).isEqualTo("STOP");
+        assertThat(changes.getItems().get(0).getStatus().getValue()).isEqualTo("APPROVED");
+        assertThat(changes.getItems().get(0).getPreemptScheduleId()).isNull();
+
+        when(dataScopeResolver.resolve(USER_ID)).thenReturn(DataScopeAssignments.denied());
+        assertThatThrownBy(() -> service.listChanges(SCHEDULE_ID.toString(), caller, 1, 50))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void 改台缺少原因码返回400且不落库() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(schedule("PLANNED", 1));
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(roomMapper.selectByIdForUpdate(ROOM_ID)).thenReturn(room(ROOM_ID, DEPT_ID, "GENERAL"));
+        when(applicationMapper.selectById(APP_ID)).thenReturn(application("ACCEPTED", null));
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(SCHEDULE_ID))).thenReturn(List.of());
+        UpdateScheduleRequest request = new UpdateScheduleRequest();
+        request.setPlannedStart(START);
+        request.setPlannedEnd(END);
+        request.setSequenceNo(1);
+        request.setVersion(1);
+
+        assertThatThrownBy(() -> service.reschedule(SCHEDULE_ID.toString(), request, caller,
+                AuthRequestContext.empty()))
+                .isInstanceOfSatisfying(SchedulingValidationException.class,
+                        exception -> assertThat(exception.getMessage()).contains("不能为空"));
+        verify(scheduleMapper, never()).updateById(any(ScheduleEntity.class));
+        verify(changeRequestMapper, never()).insert(any(ScheduleChangeRequestEntity.class));
+    }
+
+    @Test
+    void 抢占目标锁定后复检已变化返回PREEMPT_CONFLICT且不误停() {
+        stubEmergencyLookups();
+        ScheduleOverlapRow preempted = preemptOverlap();
+        when(scheduleMapper.selectOverlaps(any(), any(), eq(null))).thenReturn(List.of(preempted));
+        ScheduleEntity changed = preemptScheduleEntity();
+        changed.setStatus("CANCELLED");
+        when(scheduleMapper.selectByIdForUpdate(preempted.getId())).thenReturn(changed);
+        EmergencyAddRequest request = emergencyRequest("EMERGENCY_PREEMPT");
+        request.setPreemptScheduleId(preempted.getId().toString());
+
+        assertThatThrownBy(() -> service.addEmergency(request, caller,
+                AuthRequestContext.empty(), true))
+                .isInstanceOfSatisfying(SchedulingConflictException.class,
+                        exception -> assertThat(exception.conflicts().get(0).getConflictType())
+                                .isEqualTo("PREEMPT_CONFLICT"));
+        verify(scheduleMapper, never()).updateById(any(ScheduleEntity.class));
+        verify(scheduleMapper, never()).insert(any(ScheduleEntity.class));
+    }
+
+    @Test
+    void 停台排程不存在返回404() {
+        when(scheduleMapper.selectById(SCHEDULE_ID)).thenReturn(null);
+        assertThatThrownBy(() -> service.stop(SCHEDULE_ID.toString(),
+                stopRequest("PATIENT_CONDITION", 1), caller, AuthRequestContext.empty(), true))
+                .isInstanceOf(NoSuchElementException.class);
     }
 }

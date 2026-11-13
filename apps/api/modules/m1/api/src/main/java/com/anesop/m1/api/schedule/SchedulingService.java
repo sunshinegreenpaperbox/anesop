@@ -4,10 +4,14 @@ import com.anesop.contracts.scheduling.model.CancelScheduleRequest;
 import com.anesop.contracts.scheduling.model.ConflictCheckRequest;
 import com.anesop.contracts.scheduling.model.ConflictCheckResult;
 import com.anesop.contracts.scheduling.model.CreateScheduleRequest;
+import com.anesop.contracts.scheduling.model.EmergencyAddRequest;
+import com.anesop.contracts.scheduling.model.EmergencyAddResult;
 import com.anesop.contracts.scheduling.model.IdResponse;
 import com.anesop.contracts.scheduling.model.OperatingRoomList;
 import com.anesop.contracts.scheduling.model.Schedule;
+import com.anesop.contracts.scheduling.model.ScheduleChangeList;
 import com.anesop.contracts.scheduling.model.SchedulePage;
+import com.anesop.contracts.scheduling.model.StopScheduleRequest;
 import com.anesop.contracts.scheduling.model.UpdateScheduleRequest;
 import com.anesop.m0.api.security.AuthPrincipal;
 import com.anesop.m0.api.security.AuthRequestContext;
@@ -44,9 +48,37 @@ public interface SchedulingService {
     Schedule reschedule(String scheduleId, UpdateScheduleRequest request, AuthPrincipal caller,
             AuthRequestContext context);
 
-    /** 取消/停台：写原因与审计；已开始/已结束/已取消 409。 */
+    /**
+     * 取消/停台（0.4.0 兼容端点）：与 {@link #stop} 复用同一留痕路径（变更记录 + 审计 +
+     * 通知 outbox）；已开始/已结束/已取消 409。
+     *
+     * @deprecated 0.5.0 起请用 {@link #stop}；计划 1.0.0 收敛。
+     */
+    @Deprecated
     IdResponse cancel(String scheduleId, CancelScheduleRequest request, AuthPrincipal caller,
             AuthRequestContext context);
+
+    /**
+     * 停台状态机（M2-M2-02）：PLANNED/PUBLISHED/DELAYED 直接停台；IN_PROGRESS 需审批权限。
+     * 原因为白名单原因码，写变更记录、审计与通知 outbox；返回 CANCELLED 的台次。
+     *
+     * @param canApprove 调用方是否持 {@code m1:schedule:approve}（术中停台/急诊加台）
+     */
+    Schedule stop(String scheduleId, StopScheduleRequest request, AuthPrincipal caller,
+            AuthRequestContext context, boolean canApprove);
+
+    /**
+     * 急诊加台（M2-M2-02）：需审批权限；可选抢占冲突中的择期台次（置 CANCELLED 并留痕），
+     * 插入 priority=EMERGENCY 台次；未指定抢占且冲突时 409 + conflicts[]。
+     */
+    EmergencyAddResult addEmergency(EmergencyAddRequest request, AuthPrincipal caller,
+            AuthRequestContext context, boolean canApprove);
+
+    /**
+     * 台次变更历史（停台/改台/急诊审批），受数据范围约束；不存在/越界 404。
+     * 分页参数 additive（page 从 1 开始，size 上限 200），按 requestedAt 倒序。
+     */
+    ScheduleChangeList listChanges(String scheduleId, AuthPrincipal caller, int page, int size);
 
     /** 冲突即时检测（只读预检，不落库），返回结构化冲突。 */
     ConflictCheckResult checkConflicts(ConflictCheckRequest request, AuthPrincipal caller);

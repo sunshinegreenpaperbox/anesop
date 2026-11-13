@@ -49,10 +49,10 @@ class M1MigrationTest {
                 WHERE table_schema = 'm1_sched' AND table_type = 'BASE TABLE'
                 ORDER BY table_name
                 """, String.class);
-        // V8（M2-M2-01）在同一 schema 追加术间与排程台次两表。
+        // V8（M2-M2-01）追加术间与排程台次；V9（M2-M2-02）追加变更记录与通知 outbox。
         assertThat(tables).containsExactly(
-                "application_status_history", "operating_room", "patient_snapshot", "schedule",
-                "surgery_application");
+                "application_status_history", "notification_outbox", "operating_room",
+                "patient_snapshot", "schedule", "schedule_change_request", "surgery_application");
 
         assertThat(jdbc.queryForObject("""
                 SELECT indexdef FROM pg_indexes
@@ -195,6 +195,125 @@ class M1MigrationTest {
         assertThat(writeRoles).containsExactly("SYS_ADMIN", "SYS_OR_MANAGER");
         System.out.printf("[M2-M2-01][v8-migration] rooms=%d readRoles=%s writeRoles=%s%n",
                 rooms.size(), readRoles, writeRoles);
+    }
+
+
+    @Test
+    void v9ChangeRequestAndNotificationOutboxStructure() {
+        migrateToLatest();
+
+        assertThat(jdbc.queryForObject("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conname = 'ck_change_request_approval'
+                """, String.class)).contains("CHECK", "approved_by", "approved_at");
+        assertThat(jdbc.queryForObject("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conname = 'ck_change_request_type'
+                """, String.class)).contains("STOP", "MODIFY", "EMERGENCY");
+        assertThat(jdbc.queryForObject("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conname = 'ck_notification_outbox_no_phi'
+                """, String.class)).contains("payload", "patientName", "hisPatientNo");
+
+        List<String> indexes = jdbc.queryForList("""
+                SELECT indexname FROM pg_indexes WHERE schemaname = 'm1_sched'
+                """, String.class);
+        assertThat(indexes).contains("idx_change_request_schedule",
+                "idx_change_request_application_id", "idx_change_request_preempt",
+                "idx_notification_outbox_pending", "idx_notification_outbox_event_type");
+
+        List<String> approveRoles = jdbc.queryForList("""
+                SELECT r.code FROM m0_platform.sys_permission p
+                JOIN m0_platform.sys_role_permission rp ON rp.permission_id = p.id
+                JOIN m0_platform.sys_role r ON r.id = rp.role_id
+                WHERE p.code = 'm1:schedule:approve' ORDER BY r.code
+                """, String.class);
+        assertThat(approveRoles).containsExactly("SYS_ADMIN", "SYS_OR_MANAGER");
+        assertThat(jdbc.queryForList("""
+                SELECT p.path FROM m0_platform.sys_permission p WHERE p.code = 'm1:schedule:approve'
+                """, String.class)).containsExactly("/api/v1/scheduling/emergency-cases");
+
+        // 两张新表均必须有中文表/列注释（与 m1_sched 既有约定一致）。
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE n.nspname = 'm1_sched' AND c.relkind = 'r'
+                  AND (obj_description(c.oid, 'pg_class') IS NULL
+                       OR btrim(obj_description(c.oid, 'pg_class')) = '')
+                """, Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_attribute a
+                JOIN pg_class c ON a.attrelid = c.oid
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE n.nspname = 'm1_sched' AND c.relkind = 'r'
+                  AND a.attnum > 0 AND NOT a.attisdropped
+                  AND (col_description(c.oid, a.attnum) IS NULL
+                       OR btrim(col_description(c.oid, a.attnum)) = '')
+                """, Integer.class)).isZero();
+
+        // payload 含 PHI 键时被 CHECK 拒绝（无 PHI 兜底）。
+        Throwable failure = catchThrowable(() -> jdbc.update("""
+                INSERT INTO m1_sched.notification_outbox (event_type, payload)
+                VALUES ('SCHEDULE_STOPPED', '{"patientName":"演示患者"}'::jsonb)
+                """));
+        assertThat(failure).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        // 值级兜底：18 位身份证号即使换用中性键也被拒绝。
+        Throwable valueFailure = catchThrowable(() -> jdbc.update("""
+                INSERT INTO m1_sched.notification_outbox (event_type, payload)
+                VALUES ('SCHEDULE_STOPPED', '{"ref":"110101199001011234"}'::jsonb)
+                """));
+        assertThat(valueFailure).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        System.out.printf("[M2-M2-02][v9-migration] approveRoles=%s indexes=%d outboxNoPhi=OK%n",
+                approveRoles, indexes.size());
+    }
+
+    @Test
+    void changeRequestIsAppendOnly() {
+        migrateToLatest();
+
+        String patientId = "51000000-0000-4000-8000-0000000000b1";
+        String applicationId = "61000000-0000-4000-8000-0000000000b1";
+        String scheduleId = "81000000-0000-4000-8000-0000000000b1";
+        String changeId = "91000000-0000-4000-8000-0000000000b1";
+        jdbc.update("""
+                INSERT INTO m1_sched.patient_snapshot
+                    (id, his_patient_no, name, gender, birth_date, age, inpatient_no_masked,
+                     inpatient_no_hash, dept_name)
+                VALUES (?::uuid, 'SYNTH-HIS-P-9201', '演示患者乙', 'MALE', DATE '1972-05-20', 54,
+                        'SYNT****9201', 'hash-9201', '麻醉科（合成）')
+                """, patientId);
+        jdbc.update("""
+                INSERT INTO m1_sched.surgery_application
+                    (id, his_application_no, patient_id, surgery_name, urgency,
+                     planned_duration_min, dept_name, source)
+                VALUES (?::uuid, 'SYNTH-HIS-APP-9201', ?::uuid, '演示术式', 'ELECTIVE',
+                        90, '麻醉科（合成）', 'HIS')
+                """, applicationId, patientId);
+        jdbc.update("""
+                INSERT INTO m1_sched.schedule
+                    (id, application_id, room_id, start_at, end_at, sequence, priority, status)
+                VALUES (?::uuid, ?::uuid, 'f2000000-0000-4000-8000-0000000000c1'::uuid,
+                        '2026-12-10T08:00:00+08:00'::timestamptz,
+                        '2026-12-10T09:00:00+08:00'::timestamptz, 1, 0, 'PLANNED')
+                """, scheduleId, applicationId);
+        jdbc.update("""
+                INSERT INTO m1_sched.schedule_change_request
+                    (id, schedule_id, application_id, change_type, reason_code, status,
+                     requested_by, approved_by, approved_at)
+                VALUES (?::uuid, ?::uuid, ?::uuid, 'STOP', 'PATIENT_CONDITION', 'APPROVED',
+                        gen_random_uuid(), gen_random_uuid(), now())
+                """, changeId, scheduleId, applicationId);
+
+        assertMutationRejected(() -> jdbc.update(
+                "UPDATE m1_sched.schedule_change_request SET reason = 'TAMPERED' WHERE id = ?::uuid",
+                changeId));
+        assertMutationRejected(() -> jdbc.update(
+                "DELETE FROM m1_sched.schedule_change_request WHERE id = ?::uuid", changeId));
+        assertMutationRejected(() -> jdbc.execute("TRUNCATE m1_sched.schedule_change_request"));
+
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM m1_sched.schedule_change_request", Integer.class)).isEqualTo(1);
+        System.out.println(
+                "[M2-M2-02][v9-migration] change_request UPDATE/DELETE/TRUNCATE 均被 55000 拒绝");
     }
 
     @Test

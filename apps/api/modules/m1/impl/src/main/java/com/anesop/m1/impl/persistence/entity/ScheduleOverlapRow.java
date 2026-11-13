@@ -19,6 +19,7 @@ public class ScheduleOverlapRow {
     private Instant startAt;
     private Instant endAt;
     private Integer sequence;
+    private Integer priority;
     private String status;
     private UUID patientId;
     private String surgeonName;
@@ -85,6 +86,14 @@ public class ScheduleOverlapRow {
 
     public void setSequence(Integer sequence) {
         this.sequence = sequence;
+    }
+
+    public Integer getPriority() {
+        return priority;
+    }
+
+    public void setPriority(Integer priority) {
+        this.priority = priority;
     }
 
     public String getStatus() {

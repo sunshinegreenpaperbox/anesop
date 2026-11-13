@@ -11,6 +11,9 @@ anesop:
     inpatient-pepper:
       # 自动化测试不注入真实 pepper：进程内随机生成（每个测试上下文独立）。
       allow-dev-generated: true
+    notification:
+      # 用例内显式调用 NotificationDispatcher.drainOnce() 断言 SENT，关闭定时竞争。
+      scheduler-enabled: false
     his:
       mock:
         # 自动化测试：模拟 HIS 申请统一落入演示麻醉科（V100 SYNTHETIC 组织），

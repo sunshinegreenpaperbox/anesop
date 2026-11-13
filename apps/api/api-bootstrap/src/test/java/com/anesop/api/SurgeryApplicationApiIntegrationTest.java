@@ -63,12 +63,19 @@ class SurgeryApplicationApiIntegrationTest extends AbstractApiIntegrationTest {
         // 状态历史是 append-only（S-4 触发器）：测试夹具临时 DISABLE TRIGGER USER 清理，
         // 随后立即恢复；生产路径不得使用该开关。
         jdbcTemplate.execute("ALTER TABLE m1_sched.application_status_history DISABLE TRIGGER USER");
+        jdbcTemplate.execute("ALTER TABLE m1_sched.schedule_change_request DISABLE TRIGGER USER");
         try {
+            // V8/V9 起 schedule/change_request 引用申请：先清子表再删申请。
+            // 审批留痕为 append-only，测试夹具临时 DISABLE TRIGGER USER 清理后立即恢复。
+            jdbcTemplate.update("DELETE FROM m1_sched.notification_outbox");
+            jdbcTemplate.update("DELETE FROM m1_sched.schedule_change_request");
+            jdbcTemplate.update("DELETE FROM m1_sched.schedule");
             jdbcTemplate.update("DELETE FROM m1_sched.application_status_history");
             jdbcTemplate.update("DELETE FROM m1_sched.surgery_application");
             jdbcTemplate.update("DELETE FROM m1_sched.patient_snapshot");
         } finally {
             jdbcTemplate.execute("ALTER TABLE m1_sched.application_status_history ENABLE TRIGGER USER");
+            jdbcTemplate.execute("ALTER TABLE m1_sched.schedule_change_request ENABLE TRIGGER USER");
         }
         insertPatient(PATIENT_ANES_ID, HIS_PATIENT_ANES, "演示患者甲", "SYNT****9001", "hash-9001",
                 SyntheticAccounts.DEMO_ANES_ORG_ID, "麻醉科（合成）");

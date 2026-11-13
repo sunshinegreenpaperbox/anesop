@@ -38,6 +38,7 @@ public interface ScheduleMapper extends BaseMapper<ScheduleEntity> {
                    s.start_at       AS start_at,
                    s.end_at         AS end_at,
                    s.sequence       AS sequence,
+                   s.priority       AS priority,
                    s.status         AS status,
                    r.room_no        AS room_no,
                    r.room_type      AS room_type,
@@ -59,6 +60,39 @@ public interface ScheduleMapper extends BaseMapper<ScheduleEntity> {
     List<ScheduleOverlapRow> selectOverlaps(@Param("startAt") Instant startAt,
             @Param("endAt") Instant endAt,
             @Param("excludeScheduleId") UUID excludeScheduleId);
+
+    /**
+     * 统计候选窗口内同术间的未取消台次数（急诊缺省台次序号用；按术间过滤，避免把其他术间的
+     * 台次计入序号）。
+     */
+    @Select("""
+            SELECT count(*)
+            FROM m1_sched.schedule s
+            WHERE s.deleted = false
+              AND s.status &lt;&gt; 'CANCELLED'
+              AND s.room_id = #{roomId}
+              AND s.start_at &lt; #{endAt}
+              AND s.end_at &gt; #{startAt}
+            """)
+    int countOverlapsInRoom(@Param("startAt") Instant startAt,
+            @Param("endAt") Instant endAt,
+            @Param("roomId") UUID roomId);
+
+    /**
+     * 事务内锁定台次行（{@code SELECT ... FOR UPDATE}）：急诊抢占在锁内复检状态/优先级/术间/
+     * 时段，避免与并发改台/停台交叉；也会与 {@code updateById} 的乐观锁形成双重保护。
+     *
+     * <p>锁顺序：advisory 人员/患者锁 → 术间行锁 → 被抢占台次行锁；禁止反向获取。
+     * 逻辑删除行不返回（视为不存在）。
+     */
+    @Select("""
+            SELECT id, application_id, room_id, start_at, end_at, sequence, priority, status,
+                   reason, created_at, created_by, updated_at, updated_by, version, deleted
+            FROM m1_sched.schedule
+            WHERE id = #{id} AND deleted = false
+            FOR UPDATE
+            """)
+    ScheduleEntity selectByIdForUpdate(@Param("id") UUID id);
 
     /**
      * 事务级 advisory lock（{@code pg_advisory_xact_lock}）：按人员/患者维度串行化跨术间排程，

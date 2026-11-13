@@ -3,6 +3,7 @@ package com.anesop.api;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * ANESOP 业务应用唯一启动类。
@@ -13,6 +14,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  */
 @SpringBootApplication(scanBasePackages = "com.anesop")
 @MapperScan({"com.anesop.m0.impl.persistence.mapper", "com.anesop.m1.impl.persistence.mapper"})
+@EnableScheduling
 public class ApiApplication {
 
     public static void main(String[] args) {

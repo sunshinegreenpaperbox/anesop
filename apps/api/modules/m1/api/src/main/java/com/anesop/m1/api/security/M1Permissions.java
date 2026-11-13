@@ -23,6 +23,12 @@ public final class M1Permissions {
     /** 排程工作台维护（创建/调整/取消；V8 仅授 SYS_ADMIN/SYS_OR_MANAGER，最小权限）。 */
     public static final String SCHEDULE_WRITE = "m1:schedule:write";
 
+    /**
+     * 停台与急诊加台审批（V9 新增，M2-M2-02）：术中停台、急诊加台/抢占择期台次。
+     * 仅授予 SYS_ADMIN、SYS_OR_MANAGER（与排程维护同权，最小权限；后续双人审批再拆分）。
+     */
+    public static final String SCHEDULE_APPROVE = "m1:schedule:approve";
+
     /** Spring Security 授权表达式中的申请只读权限：{@code PERM_m1:application:read}。 */
     public static final String AUTHORITY_APPLICATION_READ = "PERM_" + APPLICATION_READ;
 
@@ -37,6 +43,9 @@ public final class M1Permissions {
 
     /** Spring Security 授权表达式中的排程维护权限：{@code PERM_m1:schedule:write}。 */
     public static final String AUTHORITY_SCHEDULE_WRITE = "PERM_" + SCHEDULE_WRITE;
+
+    /** Spring Security 授权表达式中的停台/急诊加台审批权限：{@code PERM_m1:schedule:approve}。 */
+    public static final String AUTHORITY_SCHEDULE_APPROVE = "PERM_" + SCHEDULE_APPROVE;
 
     private M1Permissions() {
     }

@@ -51,6 +51,15 @@ anesop:
     inpatient-pepper:
       value: ${ANESOP_INPATIENT_PEPPER:}
       allow-dev-generated: false
+    # 急诊抢占择期台次的 STOP 留痕说明（M2-M2-02/S-2）：可配置、中性文案，禁止写入 PHI。
+    schedule:
+      preempt-reason: ${ANESOP_M1_PREEMPT_REASON:急诊加台抢占择期台次（系统自动）}
+    # 通知 outbox 定时派发（M2-M2-02，模拟端口 SIMULATED；真实通道 EXT 待院方）。
+    # 测试 profile 关闭，避免定时派发与用例内显式 drain 竞争。
+    notification:
+      scheduler-enabled: ${ANESOP_NOTIFICATION_SCHEDULER_ENABLED:true}
+      poll-interval-ms: ${ANESOP_NOTIFICATION_POLL_INTERVAL_MS:30000}
+      initial-delay-ms: ${ANESOP_NOTIFICATION_INITIAL_DELAY_MS:30000}
   security:
     # 默认禁止演示账号；dev/test 的 profile 文件显式置 true（B-2.3）。
     demo-accounts-allowed: false

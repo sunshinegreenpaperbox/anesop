@@ -5,20 +5,27 @@ import com.anesop.contracts.scheduling.model.CancelScheduleRequest;
 import com.anesop.contracts.scheduling.model.ConflictCheckRequest;
 import com.anesop.contracts.scheduling.model.ConflictCheckResult;
 import com.anesop.contracts.scheduling.model.CreateScheduleRequest;
+import com.anesop.contracts.scheduling.model.EmergencyAddRequest;
+import com.anesop.contracts.scheduling.model.EmergencyAddResult;
 import com.anesop.contracts.scheduling.model.IdResponse;
 import com.anesop.contracts.scheduling.model.OperatingRoomList;
 import com.anesop.contracts.scheduling.model.Schedule;
+import com.anesop.contracts.scheduling.model.ScheduleChangeList;
 import com.anesop.contracts.scheduling.model.SchedulePage;
+import com.anesop.contracts.scheduling.model.StopScheduleRequest;
 import com.anesop.contracts.scheduling.model.UpdateScheduleRequest;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m1.api.schedule.SchedulingService;
 import com.anesop.m1.api.security.M1Permissions;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -45,6 +52,8 @@ public class SchedulingController {
 
     private final SchedulingService schedulingService;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+            justification = "Spring 注入的单例服务由容器管理，控制器不修改其内部状态")
     public SchedulingController(SchedulingService schedulingService) {
         this.schedulingService = schedulingService;
     }
@@ -107,6 +116,44 @@ public class SchedulingController {
             @Valid @RequestBody CancelScheduleRequest request,
             AuthRequestContext context) {
         return schedulingService.cancel(scheduleId, request, AuthPrincipals.from(jwt), context);
+    }
+
+    @PostMapping("/schedules/{scheduleId}/stop")
+    @PreAuthorize("hasAuthority('" + M1Permissions.AUTHORITY_SCHEDULE_WRITE + "')")
+    @Operation(operationId = "stopSchedule", summary = "停台（状态机 + 原因码 + 变更留痕）")
+    public Schedule stop(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("scheduleId") String scheduleId,
+            @Valid @RequestBody StopScheduleRequest request,
+            AuthRequestContext context) {
+        return schedulingService.stop(scheduleId, request, AuthPrincipals.from(jwt), context,
+                hasAuthority(M1Permissions.AUTHORITY_SCHEDULE_APPROVE));
+    }
+
+    @GetMapping("/schedules/{scheduleId}/changes")
+    @PreAuthorize("hasAuthority('" + M1Permissions.AUTHORITY_SCHEDULE_READ + "')")
+    @Operation(operationId = "listScheduleChanges", summary = "查询台次变更记录（停台/改台/急诊审批历史）")
+    public ScheduleChangeList listChanges(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("scheduleId") String scheduleId,
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "size", defaultValue = "50") int size) {
+        return schedulingService.listChanges(scheduleId, AuthPrincipals.from(jwt), page, size);
+    }
+
+    @PostMapping("/emergency-cases")
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAuthority('" + M1Permissions.AUTHORITY_SCHEDULE_APPROVE + "')")
+    @Operation(operationId = "addEmergencyCase", summary = "急诊加台（审批 + 抢占择期台次）")
+    public EmergencyAddResult addEmergency(@AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody EmergencyAddRequest request,
+            AuthRequestContext context) {
+        return schedulingService.addEmergency(request, AuthPrincipals.from(jwt), context,
+                hasAuthority(M1Permissions.AUTHORITY_SCHEDULE_APPROVE));
+    }
+
+    private static boolean hasAuthority(String authority) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(granted -> authority.equals(granted.getAuthority()));
     }
 
     @PostMapping("/schedules/conflicts")
