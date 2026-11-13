@@ -49,8 +49,10 @@ class M1MigrationTest {
                 WHERE table_schema = 'm1_sched' AND table_type = 'BASE TABLE'
                 ORDER BY table_name
                 """, String.class);
+        // V8（M2-M2-01）在同一 schema 追加术间与排程台次两表。
         assertThat(tables).containsExactly(
-                "application_status_history", "patient_snapshot", "surgery_application");
+                "application_status_history", "operating_room", "patient_snapshot", "schedule",
+                "surgery_application");
 
         assertThat(jdbc.queryForObject("""
                 SELECT indexdef FROM pg_indexes
@@ -143,6 +145,56 @@ class M1MigrationTest {
                 SELECT p.path FROM m0_platform.sys_permission p WHERE p.code = 'm1:patient:read'
                 """, String.class)).containsExactly("/api/v1/patients");
         System.out.printf("[M2-M1-01][m1-migration] m1:patient:read roles=%s%n", roles);
+    }
+
+    @Test
+    void v8ScheduleRoomStructureAndLeastPrivilege() {
+        migrateToLatest();
+
+        assertThat(jdbc.queryForObject("""
+                SELECT indexdef FROM pg_indexes
+                WHERE schemaname = 'm1_sched' AND indexname = 'uk_schedule_application_active'
+                """, String.class))
+                .contains("UNIQUE", "application_id", "status", "CANCELLED");
+        assertThat(jdbc.queryForObject("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conname = 'ck_schedule_time_window'
+                """, String.class)).contains("CHECK", "end_at > start_at");
+        assertThat(jdbc.queryForObject("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conname = 'ck_schedule_priority'
+                """, String.class)).contains("CHECK", "priority");
+        assertThat(jdbc.queryForObject("""
+                SELECT column_default FROM information_schema.columns
+                WHERE table_schema = 'm1_sched' AND table_name = 'schedule'
+                  AND column_name = 'priority'
+                """, String.class)).contains("0");
+
+        List<String> rooms = jdbc.queryForList("""
+                SELECT room_no || ':' || room_type || ':' || dept_name
+                FROM m1_sched.operating_room ORDER BY room_no
+                """, String.class);
+        assertThat(rooms).containsExactly(
+                "OR-01:GENERAL:麻醉科（合成）", "OR-02:HYBRID:麻醉科（合成）",
+                "OR-03:INTERVENTION:麻醉科（合成）", "OR-04:GENERAL:麻醉科（合成）",
+                "OR-05:GENERAL:手术室（合成）");
+
+        List<String> readRoles = jdbc.queryForList("""
+                SELECT r.code FROM m0_platform.sys_permission p
+                JOIN m0_platform.sys_role_permission rp ON rp.permission_id = p.id
+                JOIN m0_platform.sys_role r ON r.id = rp.role_id
+                WHERE p.code = 'm1:schedule:read' ORDER BY r.code
+                """, String.class);
+        assertThat(readRoles).containsExactly("SYS_ADMIN", "SYS_OR_MANAGER", "SYS_SURGEON");
+        List<String> writeRoles = jdbc.queryForList("""
+                SELECT r.code FROM m0_platform.sys_permission p
+                JOIN m0_platform.sys_role_permission rp ON rp.permission_id = p.id
+                JOIN m0_platform.sys_role r ON r.id = rp.role_id
+                WHERE p.code = 'm1:schedule:write' ORDER BY r.code
+                """, String.class);
+        assertThat(writeRoles).containsExactly("SYS_ADMIN", "SYS_OR_MANAGER");
+        System.out.printf("[M2-M2-01][v8-migration] rooms=%d readRoles=%s writeRoles=%s%n",
+                rooms.size(), readRoles, writeRoles);
     }
 
     @Test

@@ -36,6 +36,7 @@ public final class SyntheticAccounts {
     /** V100 演示种子：SELF 数据范围用户（SYS_ANESTHESIOLOGIST）。 */
     public static final String DEMO_SELF_ID = "e0000000-0000-4000-8000-000000000003";
     public static final String DEMO_SELF_USERNAME = "demo_self";
+    public static final String DEMO_SELF_PASSWORD = "Anesop@2026";
 
     /** V100 演示种子：麻醉科 / 手术室组织（DEPT 范围对象）。 */
     public static final String DEMO_ANES_ORG_ID = "f1000000-0000-4000-8000-000000000002";

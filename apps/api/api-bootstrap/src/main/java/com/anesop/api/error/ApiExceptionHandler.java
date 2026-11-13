@@ -4,15 +4,20 @@ import com.anesop.api.security.AuthPrincipals;
 import com.anesop.api.web.RequestContexts;
 import com.anesop.contracts.auth.model.Error;
 import com.anesop.contracts.auth.model.ErrorDetail;
+import com.anesop.contracts.scheduling.model.Conflict;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m0.api.security.UserConflictException;
 import com.anesop.m0.api.security.UserValidationException;
 import com.anesop.m1.api.application.PatientNotInIndexException;
 import com.anesop.m1.api.application.SurgeryApplicationConflictException;
 import com.anesop.m1.api.application.SurgeryApplicationValidationException;
+import com.anesop.m1.api.schedule.ScheduleUnprocessableException;
+import com.anesop.m1.api.schedule.SchedulingConflictException;
+import com.anesop.m1.api.schedule.SchedulingValidationException;
 import com.anesop.m0.api.audit.AuditWriter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -146,6 +151,47 @@ public class ApiExceptionHandler {
         return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
                 "患者不在本系统患者快照内", request,
                 List.of(ErrorResponses.detail("patientId", "患者主索引未同步或标识不存在")));
+    }
+
+    /**
+     * 排程字段级校验（M2-M2-01）：400 {@code PARAM_INVALID}，field 由服务端固定提供。
+     */
+    @ExceptionHandler(SchedulingValidationException.class)
+    public ResponseEntity<Error> handleSchedulingValidation(SchedulingValidationException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 排程语义拒绝（申请不存在/状态不允许，M2-M2-01）：422 {@code BUSINESS_RULE_VIOLATION}。
+     */
+    @ExceptionHandler(ScheduleUnprocessableException.class)
+    public ResponseEntity<Error> handleScheduleUnprocessable(ScheduleUnprocessableException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
+                "排程业务规则拒绝", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 排程冲突（M2-M2-01）：409 {@code SCHEDULE_CONFLICT}，同时在 {@code conflicts[]} 返回
+     * 结构化冲突（类型/说明/冲突台次），{@code details} 同步便于前端直接展示。
+     */
+    @ExceptionHandler(SchedulingConflictException.class)
+    public ResponseEntity<Object> handleSchedulingConflict(SchedulingConflictException exception,
+            HttpServletRequest request) {
+        List<ErrorDetail> details = new ArrayList<>();
+        for (Conflict conflict : exception.conflicts()) {
+            details.add(ErrorResponses.detail(conflict.getConflictType(), conflict.getMessage()));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("code", "SCHEDULE_CONFLICT");
+        body.put("message", "排程冲突，操作未生效");
+        body.put("traceId", RequestContexts.traceId(request));
+        body.put("details", details);
+        body.put("conflicts", exception.conflicts());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

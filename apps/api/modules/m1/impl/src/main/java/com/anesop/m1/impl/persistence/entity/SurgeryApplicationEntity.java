@@ -23,6 +23,7 @@ public class SurgeryApplicationEntity {
     private String hisApplicationNo;
     private UUID patientId;
     private String surgeryName;
+    private String requiredRoomType;
     private String surgeryCode;
     private String urgency;
     private Integer plannedDurationMin;
@@ -76,6 +77,14 @@ public class SurgeryApplicationEntity {
 
     public void setSurgeryName(String surgeryName) {
         this.surgeryName = surgeryName;
+    }
+
+    public String getRequiredRoomType() {
+        return requiredRoomType;
+    }
+
+    public void setRequiredRoomType(String requiredRoomType) {
+        this.requiredRoomType = requiredRoomType;
     }
 
     public String getSurgeryCode() {

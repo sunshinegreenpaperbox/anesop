@@ -17,6 +17,12 @@ public final class M1Permissions {
     /** 患者摘要只读（Q-3 最小权限：SYS_ADMIN/SYS_SURGEON/SYS_OR_MANAGER）。 */
     public static final String PATIENT_READ = "m1:patient:read";
 
+    /** 排程工作台只读（术间列表/日排程/详情/冲突预检；V8 授 SYS_ADMIN/SYS_OR_MANAGER）。 */
+    public static final String SCHEDULE_READ = "m1:schedule:read";
+
+    /** 排程工作台维护（创建/调整/取消；V8 仅授 SYS_ADMIN/SYS_OR_MANAGER，最小权限）。 */
+    public static final String SCHEDULE_WRITE = "m1:schedule:write";
+
     /** Spring Security 授权表达式中的申请只读权限：{@code PERM_m1:application:read}。 */
     public static final String AUTHORITY_APPLICATION_READ = "PERM_" + APPLICATION_READ;
 
@@ -25,6 +31,12 @@ public final class M1Permissions {
 
     /** Spring Security 授权表达式中的患者摘要只读权限：{@code PERM_m1:patient:read}。 */
     public static final String AUTHORITY_PATIENT_READ = "PERM_" + PATIENT_READ;
+
+    /** Spring Security 授权表达式中的排程只读权限：{@code PERM_m1:schedule:read}。 */
+    public static final String AUTHORITY_SCHEDULE_READ = "PERM_" + SCHEDULE_READ;
+
+    /** Spring Security 授权表达式中的排程维护权限：{@code PERM_m1:schedule:write}。 */
+    public static final String AUTHORITY_SCHEDULE_WRITE = "PERM_" + SCHEDULE_WRITE;
 
     private M1Permissions() {
     }

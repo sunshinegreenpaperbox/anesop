@@ -216,6 +216,8 @@ public class SurgeryApplicationServiceImpl implements SurgeryApplicationService 
         application.setHisApplicationNo(hisApplicationNo);
         application.setPatientId(patient.getId());
         application.setSurgeryName(surgeryName);
+        application.setRequiredRoomType(request.getRequiredRoomType() == null ? null
+                : request.getRequiredRoomType().getValue());
         application.setSurgeryCode(optionalText(request.getSurgeryCode(), "surgeryCode", 64));
         application.setUrgency(urgency);
         application.setPlannedDurationMin(duration);
@@ -524,6 +526,10 @@ public class SurgeryApplicationServiceImpl implements SurgeryApplicationService 
         dto.setHisApplicationNo(application.getHisApplicationNo());
         dto.setPatient(toPatientSnapshot(patient));
         dto.setSurgeryName(application.getSurgeryName());
+        if (application.getRequiredRoomType() != null) {
+            dto.setRequiredRoomType(
+                    SurgeryApplication.RequiredRoomTypeEnum.fromValue(application.getRequiredRoomType()));
+        }
         dto.setSurgeryCode(application.getSurgeryCode());
         dto.setUrgency(SurgeryApplication.UrgencyEnum.fromValue(application.getUrgency()));
         dto.setPlannedDurationMin(application.getPlannedDurationMin());
