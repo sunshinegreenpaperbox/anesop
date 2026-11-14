@@ -375,3 +375,69 @@ export function createResuscitation(
     payload,
   )
 }
+
+/* ---------------------------------------------------------------------------
+ * 锁单、修订与 CA 占位签名（anesthesia.yaml 0.8.0，M3-M2-03）
+ * 锁单前置清单由服务端评估（前端只展示）；锁单后记录只读，修正只能新增修订版本。
+ * CA 不可用（EXT-05）：锁单/修订签名为 SIMULATED 占位，不得表述为真实 CA 有效签名。
+ * ------------------------------------------------------------------------- */
+
+export type RecordLockStatus = anesthesiaComponents['schemas']['RecordLockStatus']
+export type RecordEffectiveView = anesthesiaComponents['schemas']['RecordEffectiveView']
+export type LockPrecondition = anesthesiaComponents['schemas']['LockPrecondition']
+export type LockRecordRequest = anesthesiaComponents['schemas']['LockRecordRequest']
+export type LockRecordResult = anesthesiaComponents['schemas']['LockRecordResult']
+export type CreateRevisionRequest = anesthesiaComponents['schemas']['CreateRevisionRequest']
+export type RecordRevisionSummary = anesthesiaComponents['schemas']['RecordRevisionSummary']
+export type RecordRevisionList = anesthesiaComponents['schemas']['RecordRevisionList']
+export type RecordRevision = anesthesiaComponents['schemas']['RecordRevision']
+export type RevisionDiff = anesthesiaComponents['schemas']['RevisionDiff']
+export type RevisionFieldChange = anesthesiaComponents['schemas']['RevisionFieldChange']
+export type RevisionCorrections = anesthesiaComponents['schemas']['RevisionCorrections']
+export type RevisionReasonCode = RecordRevisionSummary['reasonCode']
+export type RevisionCaStatus = RecordRevisionSummary['caStatus']
+
+/** 修订原因码中文标签（白名单与契约一致）。 */
+export const revisionReasonLabels: Record<string, string> = {
+  ANESTHESIA_TYPE_CHANGE: '更正麻醉方式',
+  OTHER: '其他（须在原因中说明）',
+}
+
+/** 查询锁单状态与前置条件清单（服务端评估；前端不得自行推导）。 */
+export function getRecordLockStatus(recordId: string): Promise<RecordLockStatus> {
+  return http.get<RecordLockStatus>(`/v1/anesthesia/records/${recordId}/lock-status`)
+}
+
+/** 锁单：必须回传 version 并确认前置清单；重复锁单/前置未满足 409（details 列出条件）。 */
+export function lockAnesthesiaRecord(
+  recordId: string,
+  payload: LockRecordRequest,
+): Promise<LockRecordResult> {
+  return http.post<LockRecordResult>(`/v1/anesthesia/records/${recordId}/lock`, payload)
+}
+
+/**
+ * 当前有效记录值（锁单原始值 + 最新修订更正；读时投影，不改原记录行）。
+ * 详情页/打印使用 effective，原记录与历史修订仍保持不可变。
+ */
+export function getEffectiveAnesthesiaRecord(recordId: string): Promise<RecordEffectiveView> {
+  return http.get<RecordEffectiveView>(`/v1/anesthesia/records/${recordId}/effective`)
+}
+
+/** 修订版本列表（revisionNo 升序；未锁单/无修订为空数组）。 */
+export function listRecordRevisions(recordId: string): Promise<RecordRevisionList> {
+  return http.get<RecordRevisionList>(`/v1/anesthesia/records/${recordId}/revisions`)
+}
+
+/** 修订版本详情（快照 + 签名摘要 + 与上一版差异）。 */
+export function getRecordRevision(recordId: string, revisionNo: number): Promise<RecordRevision> {
+  return http.get<RecordRevision>(`/v1/anesthesia/records/${recordId}/revisions/${revisionNo}`)
+}
+
+/** 创建修订版本（锁单后修正唯一入口）：原因码白名单、原因/变更摘要必填。 */
+export function createRecordRevision(
+  recordId: string,
+  payload: CreateRevisionRequest,
+): Promise<RecordRevision> {
+  return http.post<RecordRevision>(`/v1/anesthesia/records/${recordId}/revisions`, payload)
+}

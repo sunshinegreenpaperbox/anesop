@@ -127,6 +127,29 @@ const summary = {
   computedAt: '2026-12-01T10:30:00+08:00',
 }
 
+const effective = {
+  recordId: RECORD_ID,
+  locked: false,
+  lockedAt: null,
+  lockedBy: null,
+  status: 'IN_PROGRESS' as const,
+  currentRevision: 0,
+  original: {
+    anesthesiaType: 'GENERAL',
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+  },
+  effective: {
+    anesthesiaType: 'GENERAL',
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+  },
+  corrections: [],
+  signatureRef: null,
+  signatureHash: null,
+  caStatus: null,
+}
+
 function loadedResponses(overrides: Partial<Record<string, unknown>> = {}) {
   return [
     jsonResponse({ items: [record] }),
@@ -134,6 +157,7 @@ function loadedResponses(overrides: Partial<Record<string, unknown>> = {}) {
     jsonResponse({ items: [drug] }),
     jsonResponse({ items: [fluid] }),
     jsonResponse(overrides.summary ?? summary),
+    jsonResponse(overrides.effective ?? effective),
     jsonResponse(overrides.alerts ?? { items: [alert] }),
     jsonResponse(overrides.resuscitations ?? { items: [resuscitation] }),
   ]
@@ -202,6 +226,7 @@ describe('RecordView 麻醉记录单', () => {
       `/api/v1/anesthesia/records/${RECORD_ID}/drugs`,
       `/api/v1/anesthesia/records/${RECORD_ID}/fluids`,
       `/api/v1/anesthesia/records/${RECORD_ID}/io-summary`,
+      `/api/v1/anesthesia/records/${RECORD_ID}/effective`,
       `/api/v1/anesthesia/records/${RECORD_ID}/alerts`,
       `/api/v1/anesthesia/records/${RECORD_ID}/resuscitations`,
     ])
@@ -239,6 +264,7 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse({ items: [drug] }),
       jsonResponse({ items: [fluid] }),
       jsonResponse(summary),
+      jsonResponse(effective),
       jsonResponse({ items: [alert] }),
       jsonResponse({ items: [resuscitation] }),
     ])
@@ -251,7 +277,9 @@ describe('RecordView 麻醉记录单', () => {
     await wrapper.find('[data-testid="append-event"]').trigger('click')
     await settle()
 
-    const appendCall = queue.calls[7]
+    const appendCall = queue.calls.find(
+      (call) => call.url.endsWith('/events') && call.init?.method === 'POST',
+    )
     expect(appendCall?.url).toBe(`/api/v1/anesthesia/records/${RECORD_ID}/events`)
     expect(appendCall?.init?.method).toBe('POST')
     const body = JSON.parse(String(appendCall?.init?.body)) as Record<string, unknown>
@@ -262,7 +290,7 @@ describe('RecordView 麻醉记录单', () => {
       entryReason: '补录：由麻醉单补记',
     })
     expect(String(body.occurredAt)).toMatch(/T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
-    expect(queue.calls).toHaveLength(15)
+    expect(queue.calls).toHaveLength(17)
   })
 
   it('麻精用药必须双人核对：缺核对人不发请求，补齐后可保存', async () => {
@@ -282,6 +310,7 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse({ items: [drug] }),
       jsonResponse({ items: [fluid] }),
       jsonResponse(summary),
+      jsonResponse(effective),
       jsonResponse({ items: [alert] }),
       jsonResponse({ items: [resuscitation] }),
     ])
@@ -297,7 +326,7 @@ describe('RecordView 麻醉记录单', () => {
 
     expect(warning).toHaveBeenCalledTimes(1)
     expect(String(warning.mock.calls[0]?.[0])).toContain('双人核对')
-    expect(queue.calls).toHaveLength(7)
+    expect(queue.calls).toHaveLength(8)
 
     await wrapper
       .find('[data-testid="drug-second-checker-id"]')
@@ -306,7 +335,9 @@ describe('RecordView 麻醉记录单', () => {
     await wrapper.find('[data-testid="record-drug"]').trigger('click')
     await settle()
 
-    const postCall = queue.calls[7]
+    const postCall = queue.calls.find(
+      (call) => call.url.endsWith('/drugs') && call.init?.method === 'POST',
+    )
     expect(postCall?.url).toBe(`/api/v1/anesthesia/records/${RECORD_ID}/drugs`)
     const body = JSON.parse(String(postCall?.init?.body)) as Record<string, unknown>
     expect(body).toMatchObject({
@@ -326,6 +357,7 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse({ items: [drug] }),
       jsonResponse({ items: [fluid] }),
       jsonResponse({ ...summary, intakeMl: 2000, outputMl: 400, balanceMl: 1600, fluidCount: 4 }),
+      jsonResponse(effective),
       jsonResponse({ items: [alert] }),
       jsonResponse({ items: [resuscitation] }),
     ])
@@ -338,7 +370,9 @@ describe('RecordView 麻醉记录单', () => {
     await wrapper.find('[data-testid="record-fluid"]').trigger('click')
     await settle()
 
-    const postCall = queue.calls[7]
+    const postCall = queue.calls.find(
+      (call) => call.url.endsWith('/fluids') && call.init?.method === 'POST',
+    )
     expect(postCall?.url).toBe(`/api/v1/anesthesia/records/${RECORD_ID}/fluids`)
     const body = JSON.parse(String(postCall?.init?.body)) as Record<string, unknown>
     expect(body).toMatchObject({
@@ -359,6 +393,7 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse({ items: [drug] }),
       jsonResponse({ items: [fluid] }),
       jsonResponse(summary),
+      jsonResponse(effective),
       jsonResponse({ items: [{ ...alert, status: 'ACKNOWLEDGED', version: 2 }] }),
       jsonResponse({ items: [resuscitation] }),
     ])
@@ -380,7 +415,7 @@ describe('RecordView 麻醉记录单', () => {
     await wrapper.find('[data-testid="ack-submit"]').trigger('click')
     await settle()
 
-    const ackCall = queue.calls[7]
+    const ackCall = queue.calls.find((call) => call.url.endsWith('/acknowledge'))
     expect(ackCall?.url).toBe(`/api/v1/anesthesia/alerts/${alert.alertId}/acknowledge`)
     expect(ackCall?.init?.method).toBe('POST')
     const body = JSON.parse(String(ackCall?.init?.body)) as Record<string, unknown>
@@ -399,6 +434,7 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse({ items: [drug] }),
       jsonResponse({ items: [fluid] }),
       jsonResponse(summary),
+      jsonResponse(effective),
       jsonResponse({ items: [] }),
       jsonResponse(resuscitation, 201),
       jsonResponse({ items: [record] }),
@@ -406,6 +442,7 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse({ items: [drug] }),
       jsonResponse({ items: [fluid] }),
       jsonResponse(summary),
+      jsonResponse(effective),
       jsonResponse({ items: [resuscitation] }),
     ])
     configureHttp({ fetchImpl: queue.fetchImpl })
@@ -427,7 +464,9 @@ describe('RecordView 麻醉记录单', () => {
     await wrapper.find('[data-testid="submit-resuscitation"]').trigger('click')
     await settle()
 
-    const postCall = queue.calls[6]
+    const postCall = queue.calls.find(
+      (call) => call.url.endsWith('/resuscitations') && call.init?.method === 'POST',
+    )
     expect(postCall?.url).toBe(`/api/v1/anesthesia/records/${RECORD_ID}/resuscitations`)
     expect(postCall?.init?.method).toBe('POST')
     const body = JSON.parse(String(postCall?.init?.body)) as Record<string, unknown>
@@ -468,6 +507,7 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse({ items: [drug] }),
       jsonResponse({ items: [fluid] }),
       jsonResponse(summary),
+      jsonResponse(effective),
     ])
     configureHttp({ fetchImpl: queue.fetchImpl })
 
@@ -504,11 +544,14 @@ describe('RecordView 麻醉记录单', () => {
     await wrapper.find('[data-testid="alert-evaluate"]').trigger('click')
     await settle()
 
-    const evaluateCall = queue.calls[7]
+    const evaluateCall = queue.calls.find((call) => call.url.endsWith('/alerts/evaluate'))
     expect(evaluateCall?.url).toBe(`/api/v1/anesthesia/records/${RECORD_ID}/alerts/evaluate`)
     expect(evaluateCall?.init?.method).toBe('POST')
-    expect(queue.calls).toHaveLength(9)
-    expect(queue.calls[8]?.url).toBe(`/api/v1/anesthesia/records/${RECORD_ID}/alerts`)
+    expect(queue.calls).toHaveLength(10)
+    const alertCalls = queue.calls.filter(
+      (call) => call.url === `/api/v1/anesthesia/records/${RECORD_ID}/alerts`,
+    )
+    expect(alertCalls.length).toBeGreaterThanOrEqual(2)
     expect(String(wrapper.find('[data-testid="alert-list"]').text())).toContain('血氧饱和度')
   })
 

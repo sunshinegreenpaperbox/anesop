@@ -11,34 +11,48 @@ import {
   alertStatusLabels,
   appendRecordEvent,
   createAnesthesiaRecord,
+  createRecordRevision,
   createResuscitation,
   evaluateRecordAlerts,
+  getEffectiveAnesthesiaRecord,
   getIntakeOutputSummary,
+  getRecordLockStatus,
+  getRecordRevision,
   listAnesthesiaRecords,
   listDrugAdministrations,
   listFluidRecords,
   listRecordAlerts,
   listRecordEvents,
+  listRecordRevisions,
   listResuscitations,
+  lockAnesthesiaRecord,
   recordDrugAdministration,
   recordFluidRecord,
   recordEventLabels,
   resusOutcomeLabels,
   resusTypeLabels,
+  revisionReasonLabels,
   type Alert,
   type AnesthesiaRecordDetail,
   type CreateRecordEventRequest,
   type CreateResuscitationRequest,
+  type CreateRevisionRequest,
   type DrugAdministration,
   type FluidDirection,
   type FluidRecord,
   type IntakeOutputSummary,
+  type LockPrecondition,
+  type RecordEffectiveView,
   type RecordEvent,
   type RecordEventType,
+  type RecordLockStatus,
+  type RecordRevision,
+  type RecordRevisionSummary,
   type ResuscitationDrug,
   type ResuscitationRecord,
   type ResusOutcome,
   type ResusType,
+  type RevisionReasonCode,
 } from '../api/m2'
 
 function nowWithOffset(): string {
@@ -123,6 +137,30 @@ const alertUnavailable = ref(false)
 const resusUnavailable = ref(false)
 const error = ref<ApiError | null>(null)
 
+/* 锁单 / 修订 / 版本历史（M3-M2-03，anesthesia 0.8.0；CA 占位 EXT-05） */
+const lockStatus = ref<RecordLockStatus | null>(null)
+/** 当前有效值投影（锁单原始值 + 最新修订更正；详情页展示用，原行不可变）。 */
+const effective = ref<RecordEffectiveView | null>(null)
+const lockDialog = reactive({
+  visible: false,
+  loading: false,
+  confirm: false,
+})
+const revisions = ref<RecordRevisionSummary[]>([])
+const revisionsLoaded = ref(false)
+const revisionsLoading = ref(false)
+const revisionDialog = reactive({
+  visible: false,
+  reasonCode: 'ANESTHESIA_TYPE_CHANGE' as RevisionReasonCode,
+  reason: '',
+  changes: '',
+  anesthesiaType: '',
+})
+const revisionDetail = ref<RecordRevision | null>(null)
+const revisionDetailVisible = ref(false)
+const revisionDetailLoading = ref(false)
+const revisionUnavailable = ref(false)
+
 /** 告警轮询间隔（评审 B-1：5–10s；实时触发为主，轮询仅兜底）。 */
 const ALERT_POLL_INTERVAL_MS = 8000
 let alertTimer: number | null = null
@@ -161,21 +199,46 @@ const fluidForm = reactive({
 const canWrite = computed(() => auth.hasPermission('m2:record:write'))
 const canAck = computed(() => auth.hasPermission('m2:alert:ack'))
 const canRescue = computed(() => auth.hasPermission('m2:rescue:write'))
+const canLock = computed(() => auth.hasPermission('m2:record:lock'))
+const canRevise = computed(() => auth.hasPermission('m2:record:revise'))
 /** 权限隔离（S-3）：缺 alert:read / rescue 权限时跳过对应请求，不影响时间轴/用药/出入量。 */
 const canAlertRead = computed(() => auth.hasPermission('m2:alert:read'))
 const canRescueView = computed(() => canRescue.value || auth.hasPermission('m2:record:write'))
 const pendingAlertCount = computed(
   () => alerts.value.filter((item) => item.status === 'TRIGGERED').length,
 )
-const editable = computed(() => canWrite.value && record.value !== null)
-const busy = computed(() => loading.value || saving.value)
-const statusLabel = computed(() =>
-  record.value?.status === 'IN_PROGRESS'
-    ? '进行中'
-    : record.value?.status === 'DRAFT'
-      ? '草稿'
-      : '',
+/** 锁单后记录只读：所有书写表单隐藏，修正只能新增修订版本。 */
+const locked = computed(() => record.value?.lockedAt != null)
+/** 当前有效麻醉方式：有修订时取 effective 投影，否则取原记录。 */
+const effectiveAnesthesiaType = computed(
+  () => effective.value?.effective?.anesthesiaType ?? record.value?.anesthesiaType,
 )
+const originalAnesthesiaType = computed(
+  () => effective.value?.original?.anesthesiaType ?? record.value?.anesthesiaType,
+)
+const effectiveCorrection = computed(() =>
+  (effective.value?.corrections ?? []).find((item) => item.field === 'anesthesiaType'),
+)
+const editable = computed(() => canWrite.value && record.value !== null && !locked.value)
+const busy = computed(() => loading.value || saving.value)
+const statusLabel = computed(() => {
+  switch (record.value?.status) {
+    case 'IN_PROGRESS':
+      return '进行中'
+    case 'DRAFT':
+      return '草稿'
+    case 'LOCKED':
+      return '已锁单'
+    case 'REVISED':
+      return '已修订'
+    default:
+      return ''
+  }
+})
+const signatureHashShort = computed(() => {
+  const value = record.value?.signatureHash
+  return value && value.length > 16 ? `${value.slice(0, 16)}…` : (value ?? '—')
+})
 const errorTitle = computed(() => {
   if (!error.value) return ''
   if (error.value.status === 403) return '无权访问麻醉记录（需要 m2:record:read）'
@@ -208,6 +271,7 @@ async function load(): Promise<void> {
       summary.value = null
       alerts.value = []
       resuscitations.value = []
+      effective.value = null
       return
     }
   } catch (cause) {
@@ -223,16 +287,21 @@ async function load(): Promise<void> {
   } catch (cause) {
     handleError(cause)
   }
+  // 锁单后自动加载修订版本（只读；失败不阻断记录单主视图）。
+  if (record.value.lockedAt) {
+    await loadRevisions()
+  }
 }
 
 async function loadRecordDetail(recordId: string): Promise<void> {
   // 权限隔离（S-3）：告警/抢救请求按权限跳过；任一侧失败不阻断时间轴/用药/出入量。
   // 注意：任务在数组内按固定顺序创建，保证请求时序稳定（时间轴→用药→出入量→告警→抢救）。
-  const [eventR, drugR, fluidR, ioR, alertR, resusR] = await Promise.allSettled([
+  const [eventR, drugR, fluidR, ioR, effectiveR, alertR, resusR] = await Promise.allSettled([
     listRecordEvents(recordId),
     listDrugAdministrations(recordId),
     listFluidRecords(recordId),
     getIntakeOutputSummary(recordId),
+    getEffectiveAnesthesiaRecord(recordId),
     canAlertRead.value ? listRecordAlerts(recordId) : Promise.resolve(null),
     canRescueView.value ? listResuscitations(recordId) : Promise.resolve(null),
   ])
@@ -240,6 +309,8 @@ async function loadRecordDetail(recordId: string): Promise<void> {
   if (drugR.status === 'fulfilled') drugs.value = drugR.value.items
   if (fluidR.status === 'fulfilled') fluids.value = fluidR.value.items
   if (ioR.status === 'fulfilled') summary.value = ioR.value
+  // 有效值投影失败不阻断记录单主视图（回退到原记录值展示）。
+  effective.value = effectiveR.status === 'fulfilled' ? effectiveR.value : null
   if (alertR.status === 'fulfilled') {
     alerts.value = alertR.value?.items ?? []
     alertUnavailable.value = false
@@ -325,6 +396,7 @@ async function createRecord(): Promise<void> {
     fluids.value = []
     alerts.value = []
     resuscitations.value = []
+    effective.value = null
     summary.value = {
       recordId: created.recordId,
       intakeMl: 0,
@@ -565,8 +637,161 @@ function directionLabel(direction: string): string {
   return direction === 'INTAKE' ? '入量' : '出量'
 }
 
+function anesthesiaTypeLabel(value: string | undefined): string {
+  if (!value) return '—'
+  return ANESTHESIA_TYPES.find((item) => item.value === value)?.label ?? value
+}
+
 function formatDose(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(3)
+}
+
+/* ---------------------------------------------- 锁单 / 修订 / 版本历史 -- */
+
+/** 打开锁单对话框前先取服务端前置清单（前端不自行推导条件）。 */
+async function openLockDialog(): Promise<void> {
+  if (!record.value) return
+  lockDialog.loading = true
+  lockDialog.confirm = false
+  try {
+    lockStatus.value = await getRecordLockStatus(record.value.recordId)
+    lockDialog.visible = true
+  } catch (cause) {
+    handleError(cause)
+  } finally {
+    lockDialog.loading = false
+  }
+}
+
+/** 锁单：必须二次确认清单；服务端仍会重新校验（409 时逐项列出未满足条件）。 */
+async function submitLock(): Promise<void> {
+  if (!record.value) return
+  if (!lockDialog.confirm) {
+    ElMessage.warning('请先逐项确认锁单前置条件清单')
+    return
+  }
+  if (!lockStatus.value?.canLock) {
+    ElMessage.warning('锁单前置条件未满足，不能锁单')
+    return
+  }
+  saving.value = true
+  try {
+    const result = await lockAnesthesiaRecord(record.value.recordId, {
+      version: record.value.version,
+      signatureRequested: true,
+      confirmChecklist: true,
+    })
+    ElMessage.success(
+      `已锁单：CA 占位签名 ${result.caStatus ?? 'SIMULATED'}（EXT-05，非真实 CA 有效签名）`,
+    )
+    lockDialog.visible = false
+    // refresh() 内会在记录已锁单时自动加载修订版本。
+    await refresh()
+  } catch (cause) {
+    // 409 前置未满足：后端 details 逐项给出条件码，刷新清单供操作人补齐后重试。
+    if (cause instanceof ApiError && cause.status === 409 && cause.details.length > 0) {
+      ElMessage.error(`锁单被拒，未满足：${cause.details.map((detail) => detail.field).join('、')}`)
+      lockStatus.value = await getRecordLockStatus(record.value.recordId).catch(() => null)
+    } else {
+      handleError(cause)
+    }
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 修订版本列表（按 revisionNo 升序；失败不阻断记录单主视图）。 */
+async function loadRevisions(): Promise<void> {
+  if (!record.value) return
+  revisionsLoading.value = true
+  try {
+    const list = await listRecordRevisions(record.value.recordId)
+    revisions.value = list.items
+    revisionsLoaded.value = true
+    revisionUnavailable.value = false
+  } catch {
+    revisions.value = []
+    revisionUnavailable.value = true
+  } finally {
+    revisionsLoading.value = false
+  }
+}
+
+function openRevisionDialog(): void {
+  revisionDialog.reasonCode = 'ANESTHESIA_TYPE_CHANGE'
+  revisionDialog.reason = ''
+  revisionDialog.changes = ''
+  revisionDialog.anesthesiaType = ''
+  revisionDialog.visible = true
+}
+
+/** 创建修订版本：原因码/原因/变更摘要必填；更正只写入修订快照，原记录不变。 */
+async function submitRevision(): Promise<void> {
+  if (!record.value) return
+  if (!revisionDialog.reason.trim()) {
+    ElMessage.warning('请填写修订原因')
+    return
+  }
+  if (!revisionDialog.changes.trim()) {
+    ElMessage.warning('请填写变更摘要')
+    return
+  }
+  const payload: CreateRevisionRequest = {
+    version: record.value.version,
+    reasonCode: revisionDialog.reasonCode,
+    reason: revisionDialog.reason.trim(),
+    changes: revisionDialog.changes.trim(),
+  }
+  if (revisionDialog.anesthesiaType) {
+    payload.corrections = {
+      anesthesiaType: revisionDialog.anesthesiaType as NonNullable<
+        CreateRevisionRequest['corrections']
+      >['anesthesiaType'],
+    }
+  }
+  saving.value = true
+  try {
+    const created = await createRecordRevision(record.value.recordId, payload)
+    ElMessage.success(
+      `修订版本 v${created.revisionNo} 已保存（CA 占位签名 ${created.caStatus}，原记录不变）`,
+    )
+    revisionDialog.visible = false
+    // refresh() 内会在记录已锁单时自动加载修订版本（含刚提交的新版本）。
+    await refresh()
+  } catch (cause) {
+    handleError(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 版本详情：快照 + 签名摘要 + 与上一版差异（首版对比锁单原始记录）。 */
+async function openRevisionDetail(row: RecordRevisionSummary): Promise<void> {
+  if (!record.value) return
+  revisionDetailLoading.value = true
+  revisionDetailVisible.value = true
+  revisionDetail.value = null
+  try {
+    revisionDetail.value = await getRecordRevision(record.value.recordId, row.revisionNo)
+  } catch (cause) {
+    handleError(cause)
+    revisionDetailVisible.value = false
+  } finally {
+    revisionDetailLoading.value = false
+  }
+}
+
+function revisionReasonLabel(code: string): string {
+  return revisionReasonLabels[code] ?? code
+}
+
+function preconditionTagType(precondition: LockPrecondition): 'success' | 'danger' {
+  return precondition.satisfied ? 'success' : 'danger'
+}
+
+/** 快照 JSON 只读预览（避免直接渲染对象）。 */
+function snapshotText(revision: RecordRevision | null): string {
+  return revision ? JSON.stringify(revision.snapshot, null, 2) : ''
 }
 
 onMounted(async () => {
@@ -588,7 +813,36 @@ onUnmounted(stopAlertPolling)
           记录单未锁定时可改（乐观锁版本）。
         </p>
       </div>
-      <el-button data-testid="record-refresh" :loading="loading" @click="load">刷新</el-button>
+      <div class="record__actions">
+        <el-button data-testid="record-refresh" :loading="loading" @click="load">刷新</el-button>
+        <el-button
+          v-if="record && canLock && !locked"
+          data-testid="lock-open"
+          type="warning"
+          :loading="lockDialog.loading"
+          :disabled="busy"
+          @click="openLockDialog"
+        >
+          锁单
+        </el-button>
+        <el-button
+          v-if="record && locked && canRevise"
+          data-testid="revise-open"
+          type="primary"
+          :disabled="busy"
+          @click="openRevisionDialog"
+        >
+          修订
+        </el-button>
+        <el-button
+          v-if="record && locked"
+          data-testid="revision-history"
+          :loading="revisionsLoading"
+          @click="loadRevisions"
+        >
+          版本历史
+        </el-button>
+      </div>
     </header>
 
     <el-alert
@@ -600,6 +854,16 @@ onUnmounted(stopAlertPolling)
       show-icon
       :title="errorTitle"
       :description="`${error.code}：${error.message}${error.traceId ? `（traceId：${error.traceId}）` : ''}`"
+    />
+
+    <el-alert
+      v-if="record && locked"
+      data-testid="lock-banner"
+      type="info"
+      :closable="false"
+      show-icon
+      title="记录单已锁单：内容只读，修正必须新增修订版本（原记录与历史版本不可改）"
+      :description="`锁单时间 ${record.lockedAt ?? '—'}；签名 ${record.signatureRef ?? '—'}（CA 占位 ${record.caStatus ?? 'SIMULATED'} / EXT-05，非真实 CA 有效签名）；摘要 ${record.signatureHash ?? '—'}`"
     />
 
     <el-skeleton v-if="loading && !record" :rows="4" animated />
@@ -640,13 +904,45 @@ onUnmounted(stopAlertPolling)
             {{ statusLabel }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="麻醉方式">
-          {{
-            ANESTHESIA_TYPES.find((item) => item.value === record?.anesthesiaType)?.label ??
-            record.anesthesiaType
-          }}
+        <el-descriptions-item label="麻醉方式（当前有效）">
+          <span data-testid="record-effective-anesthesia">
+            {{ anesthesiaTypeLabel(effectiveAnesthesiaType) }}
+          </span>
+          <el-tag
+            v-if="effectiveCorrection"
+            data-testid="record-effective-revision"
+            type="warning"
+            size="small"
+            class="record__effective-tag"
+          >
+            修订 v{{ effective?.currentRevision }}
+          </el-tag>
+          <div
+            v-if="effectiveCorrection"
+            class="record__hint"
+            data-testid="record-original-anesthesia"
+          >
+            锁单原始值：{{ anesthesiaTypeLabel(originalAnesthesiaType) }}（原记录不可变）
+          </div>
         </el-descriptions-item>
         <el-descriptions-item label="版本">v{{ record.version }}</el-descriptions-item>
+        <el-descriptions-item label="锁定">
+          <el-tag data-testid="record-locked" :type="locked ? 'warning' : 'info'" size="small">
+            {{ locked ? '已锁单' : '未锁单' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="修订版本">
+          <span data-testid="record-revision">v{{ record.currentRevision ?? 0 }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="锁单签名">
+          <span data-testid="record-signature">
+            {{
+              locked
+                ? `${record.signatureRef ?? '—'}（${record.caStatus ?? 'SIMULATED'}，摘要 ${signatureHashShort}）`
+                : '—'
+            }}
+          </span>
+        </el-descriptions-item>
         <el-descriptions-item label="开始时间">{{ record.startedAt ?? '—' }}</el-descriptions-item>
         <el-descriptions-item label="结束时间">{{ record.endedAt ?? '—' }}</el-descriptions-item>
         <el-descriptions-item label="三方核查">
@@ -756,6 +1052,57 @@ onUnmounted(stopAlertPolling)
             </template>
           </el-table-column>
         </el-table>
+      </section>
+
+      <!-- 修订版本（锁单后修正留痕；原记录不变） -->
+      <section v-if="locked" class="record__panel" data-testid="revision-panel">
+        <h2 class="record__panel-title">
+          修订版本（append-only）
+          <el-tag type="info" size="small">CA 占位 SIMULATED / EXT-05</el-tag>
+        </h2>
+        <p class="record__hint">
+          锁单后修正只能新增修订版本：原因码、原因、变更摘要与全量快照留痕，原记录与历史版本不可改。
+          签名摘要为规范化记录 JSON 的 SHA-256 占位，不代表真实 CA 有效签名。
+        </p>
+        <el-alert
+          v-if="revisionUnavailable"
+          data-testid="revision-unavailable"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="修订版本加载失败（不影响记录单只读视图），可稍后刷新"
+        />
+        <el-table :data="revisions" data-testid="revision-list" size="small" border>
+          <el-table-column label="版本" width="80">
+            <template #default="{ row }">v{{ row.revisionNo }}</template>
+          </el-table-column>
+          <el-table-column label="原因码" width="130">
+            <template #default="{ row }">{{ revisionReasonLabel(row.reasonCode) }}</template>
+          </el-table-column>
+          <el-table-column label="原因" prop="reason" />
+          <el-table-column label="变更摘要" prop="changes" />
+          <el-table-column label="签名摘要" width="150">
+            <template #default="{ row }">
+              <code>{{ String(row.signatureHash).slice(0, 12) }}…</code>
+            </template>
+          </el-table-column>
+          <el-table-column label="时间" prop="createdAt" width="210" />
+          <el-table-column label="对比" width="100">
+            <template #default="{ row }">
+              <el-button
+                link
+                type="primary"
+                :data-testid="`revision-detail-${row.revisionNo}`"
+                @click="openRevisionDetail(row)"
+              >
+                查看差异
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <p v-if="revisionsLoaded && revisions.length === 0" data-testid="revision-empty">
+          暂无修订版本（记录单锁单后未发生修正）。
+        </p>
       </section>
 
       <!-- 出入量汇总 -->
@@ -1131,6 +1478,168 @@ onUnmounted(stopAlertPolling)
       </section>
     </template>
 
+    <el-dialog v-model="lockDialog.visible" title="锁单确认（记录将不可修改）" width="680px">
+      <p class="record__hint">
+        锁单后记录内容不可修改，修正只能新增修订版本（保留原值、修改人、时间、原因）。
+        以下前置条件由服务端评估，前端只展示，不能替代服务端校验：
+      </p>
+      <el-table
+        :data="lockStatus?.preconditions ?? []"
+        data-testid="lock-precondition-list"
+        size="small"
+        border
+      >
+        <el-table-column label="前置条件" width="190">
+          <template #default="{ row }">{{ row.label }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="preconditionTagType(row)" size="small">
+              {{ row.satisfied ? '已满足' : '未满足' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前值">
+          <template #default="{ row }">{{ row.detail ?? '—' }}</template>
+        </el-table-column>
+      </el-table>
+      <p class="record__hint">
+        版本 v{{ record?.version }}；CA 不可用（EXT-05）：锁单生成 SIMULATED 占位签名 （signatureRef
+        + SHA-256 摘要），不代表真实 CA 有效签名。
+      </p>
+      <el-checkbox v-model="lockDialog.confirm" data-testid="lock-confirm">
+        我已逐项核对上述前置条件，确认锁单
+      </el-checkbox>
+      <template #footer>
+        <el-button data-testid="lock-cancel" @click="lockDialog.visible = false">取消</el-button>
+        <el-button
+          type="warning"
+          data-testid="lock-submit"
+          :loading="saving"
+          :disabled="!lockStatus?.canLock || !lockDialog.confirm"
+          @click="submitLock"
+        >
+          确认锁单
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="revisionDialog.visible" title="新增修订版本（原记录不变）" width="560px">
+      <el-form label-width="100px" @submit.prevent>
+        <el-form-item label="原因码">
+          <el-select v-model="revisionDialog.reasonCode" data-testid="revision-reason-code">
+            <el-option
+              v-for="(label, value) in revisionReasonLabels"
+              :key="value"
+              :label="label"
+              :value="value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原因">
+          <el-input
+            v-model="revisionDialog.reason"
+            data-testid="revision-reason"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            placeholder="必填；只落库与授权用户可见，不写日志"
+          />
+        </el-form-item>
+        <el-form-item label="变更摘要">
+          <el-input
+            v-model="revisionDialog.changes"
+            data-testid="revision-changes"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            placeholder="必填；用于版本历史与差异对比阅读"
+          />
+        </el-form-item>
+        <el-form-item label="更正麻醉方式">
+          <el-select
+            v-model="revisionDialog.anesthesiaType"
+            data-testid="revision-anesthesia-type"
+            clearable
+            placeholder="不更正则留空"
+          >
+            <el-option
+              v-for="option in ANESTHESIA_TYPES"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <p class="record__hint">
+        仅麻醉方式可经修订更正；时间轴/用药/出入量为 append-only，需以新增事件/记录补录。 修订签名为
+        SIMULATED 占位（EXT-05）。
+      </p>
+      <template #footer>
+        <el-button data-testid="revision-cancel" @click="revisionDialog.visible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          data-testid="revision-submit"
+          :loading="saving"
+          @click="submitRevision"
+        >
+          提交修订
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="revisionDetailVisible" title="修订版本详情与差异" width="760px">
+      <el-skeleton v-if="revisionDetailLoading" :rows="4" animated />
+      <template v-else-if="revisionDetail">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="版本">v{{ revisionDetail.revisionNo }}</el-descriptions-item>
+          <el-descriptions-item label="原因码">
+            {{ revisionReasonLabel(revisionDetail.reasonCode) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="原因">{{ revisionDetail.reason }}</el-descriptions-item>
+          <el-descriptions-item label="变更摘要">{{ revisionDetail.changes }}</el-descriptions-item>
+          <el-descriptions-item label="签名">
+            {{ revisionDetail.signatureRef }}（{{ revisionDetail.caStatus }}）
+          </el-descriptions-item>
+          <el-descriptions-item label="签名摘要">
+            <code>{{ revisionDetail.signatureHash }}</code>
+          </el-descriptions-item>
+        </el-descriptions>
+        <h3 class="record__panel-title">
+          与上一版差异（v{{ revisionDetail.diff.previousRevisionNo }} → v{{
+            revisionDetail.revisionNo
+          }}）
+        </h3>
+        <p data-testid="revision-diff-summary">{{ revisionDetail.diff.summary }}</p>
+        <el-table
+          :data="revisionDetail.diff.changedFields"
+          data-testid="revision-diff"
+          size="small"
+          border
+        >
+          <el-table-column label="字段" prop="field" />
+          <el-table-column label="上一版" width="200">
+            <template #default="{ row }">{{ row.previousValue ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="本版" width="200">
+            <template #default="{ row }">{{ row.newValue ?? '—' }}</template>
+          </el-table-column>
+        </el-table>
+        <h3 class="record__panel-title">快照（只读，含全部子记录与签名摘要）</h3>
+        <pre data-testid="revision-snapshot" class="record__snapshot">{{
+          snapshotText(revisionDetail)
+        }}</pre>
+      </template>
+      <template #footer>
+        <el-button data-testid="revision-detail-close" @click="revisionDetailVisible = false">
+          关闭
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="ackDialog.visible" title="处理告警" width="480px">
       <p class="record__hint">
         {{ ackDialog.decision === 'CONFIRMED' ? '确认告警有效并已处置' : '忽略告警并说明理由' }}
@@ -1221,6 +1730,22 @@ onUnmounted(stopAlertPolling)
   margin-left: 8px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.record__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.record__snapshot {
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .record__empty {
