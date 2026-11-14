@@ -857,6 +857,119 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/anesthesia/pacu-records': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 按麻醉记录单查询复苏记录
+     * @description 按麻醉记录单查询 PACU 复苏记录（创建时间倒序）。数据范围复用记录单/台次可见性：
+     *     记录单不可见时按集合语义返回 403（不返回空列表，不泄露存在性）。
+     *     `recordId` 缺失或非 UUID 字符串返回 400（字段级校验）。
+     */
+    get: operations['listPacuRecords']
+    put?: never
+    /**
+     * 入室（创建复苏记录）
+     * @description 为已开始的麻醉记录单创建 PACU 复苏记录：记录入室时间、生命体征、意识、疼痛评分、
+     *     恶心与气道。服务端校验记录单可见、状态为 ONGOING/LOCKED/REVISED 且已记录麻醉开始
+     *     （DRAFT 或未开始 409）；入室时间不得早于记录开始时间（400），不得晚于服务端当前时间
+     *     + 容差（400）；同一记录单同时最多一条未转出的复苏记录（409，转出后可再次入室）。
+     *     患者标识由记录单解析，不信任客户端。
+     */
+    post: operations['admitPacuRecord']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/pacu-records/{pacuId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询复苏记录详情
+     * @description 返回复苏记录（入室信息、当前状态、最近一次 Aldrete 总分与转出状态）。
+     *     不存在或超出数据范围统一 404（不泄露存在性）。
+     */
+    get: operations['getPacuRecord']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/pacu-records/{pacuId}/assessments': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询 Aldrete 评估时间序列
+     * @description 返回该复苏记录的 Aldrete 评估（按 assessedAt 升序，供评分曲线与达标判定展示）。
+     *     评估 append-only：不提供修改/删除接口，更正只能新增一条评估。
+     */
+    get: operations['listPacuAssessments']
+    put?: never
+    /**
+     * 记录 Aldrete 评估（append-only）
+     * @description 记录一次 Aldrete 评估：activity/respiration/circulation/consciousness/oxygenation
+     *     各 0–2 分（越界/缺项 400），总分由**服务端**计算（0–10，不接受客户端总分）。
+     *     评估 append-only（数据库触发器拒绝 UPDATE/DELETE/TRUNCATE，55000），按 assessedAt
+     *     形成时间序列；已转出（DISCHARGED）后再评估返回 409。评估时间不得早于入室时间、
+     *     不得早于上一条评估、不得晚于服务端当前时间 + 容差（400）。总分达到阈值时状态推进为
+     *     READY，否则 MONITORING（状态推进以 latest 评估为准；READY→MONITORING 是否允许待临床
+     *     确认，见 docs/modules/m2/README.md §15.9 Q-8）。
+     */
+    post: operations['recordPacuAssessment']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/pacu-records/{pacuId}/discharge': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询转出记录
+     * @description 返回转出留痕（转出时间、去向、SBAR 交接、转出时 Aldrete 达标快照）。
+     *     未转出时返回 404（不返回空对象，避免与“已转出但无交接”混淆）。
+     */
+    get: operations['getPacuDischarge']
+    put?: never
+    /**
+     * 转出（校验 Aldrete 阈值与交接）
+     * @description 转出复苏记录：填写去向（`destination`）与 SBAR 交接（`handover`），并显式确认已核对
+     *     转出条件（`criteriaConfirmed=true`，缺省/false 返回 400）。服务端校验前置条件：
+     *     存在最近一次 Aldrete 评估且**五项齐全**、总分 ≥ 转出阈值
+     *     （`anesop.m2.pacu.aldrete-threshold`，默认 9，**院方阈值【待确认】**）；未满足返回
+     *     409，details[] 逐项列出未满足条件（field=条件码）。转出后状态置 DISCHARGED，
+     *     不可再次转出、不可再记录评估（409）；转出记录 append-only，一次一条。
+     *     转出时间取服务端当前时间；SBAR 四段必填（缺失/超长 400）。
+     */
+    post: operations['dischargePacuRecord']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -2620,6 +2733,275 @@ export interface components {
        * @enum {string}
        */
       outcome: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'UNKNOWN'
+    }
+    /**
+     * @description 入室生命体征（可缺项，服务端只做物理范围校验，不做临床阈值判定【待确认】）。
+     *     单位：血压 mmHg、心率 bpm、SpO2 %、呼吸次/分、体温 ℃。
+     */
+    PacuVitalSigns: {
+      /** @description 收缩压（mmHg）。 */
+      systolicBp?: number
+      /** @description 舒张压（mmHg）。 */
+      diastolicBp?: number
+      /** @description 心率（bpm）。 */
+      heartRate?: number
+      /** @description 脉搏血氧饱和度（%）。 */
+      spo2?: number
+      /** @description 呼吸频率（次/分）。 */
+      respiratoryRate?: number
+      /** @description 体温（℃）。 */
+      temperature?: number
+    }
+    /**
+     * @description 入室（创建复苏记录）请求。recordId 为已开始的麻醉记录单；患者标识由记录单解析，
+     *     不信任客户端。入室时间不得早于记录开始时间、不得晚于服务端当前时间 + 容差。
+     */
+    CreatePacuRecordRequest: {
+      /** @description 麻醉记录单标识（必须已开始且可见，否则 422/409）。 */
+      recordId: string
+      /**
+       * Format: date-time
+       * @description 入 PACU 时间（不得早于记录开始时间，不得晚于服务端当前时间 + 容差）。
+       */
+      admittedAt: string
+      vitalSigns: components['schemas']['PacuVitalSigns']
+      /**
+       * @description 入室意识状态（枚举为演示口径【待确认】）。
+       * @enum {string}
+       */
+      consciousness: 'ALERT' | 'DROWSY' | 'SEDATED' | 'UNRESPONSIVE'
+      /** @description 入室疼痛评分 NRS 0–10（量表口径【待确认】）。 */
+      painScore: number
+      /** @description 入室是否存在恶心/呕吐。 */
+      nausea: boolean
+      /**
+       * @description 入室气道方式（枚举为演示口径【待确认】）。
+       * @enum {string}
+       */
+      airway:
+        | 'NATURAL'
+        | 'ORAL_AIRWAY'
+        | 'NASAL_AIRWAY'
+        | 'LARYNGEAL_MASK'
+        | 'ENDOTRACHEAL'
+        | 'TRACHEOSTOMY'
+    }
+    /**
+     * @description PACU 复苏记录（入室信息与当前状态）。`latest*` 字段是最近一次 Aldrete 评估的只读投影，
+     *     便于列表/页面展示；完整时间序列见 GET /pacu-records/{pacuId}/assessments。
+     */
+    PacuRecord: {
+      /** @description 复苏记录标识。 */
+      pacuId: string
+      /** @description 所属麻醉记录单标识。 */
+      recordId: string
+      /** @description 患者标识（由记录单解析，不返回姓名/证件号/住院号明文）。 */
+      patientId: string
+      /**
+       * Format: date-time
+       * @description 入 PACU 时间。
+       */
+      admittedAt: string
+      /**
+       * Format: date-time
+       * @description 转出时间；未转出为 null。
+       */
+      dischargedAt?: string | null
+      /**
+       * @description 复苏状态：ADMITTED=已入室，MONITORING=监测中（最近评估未达阈值），
+       *     READY=已达转出阈值，DISCHARGED=已转出（终态）。状态推进以 latest 评估为准；
+       *     READY 是否允许回落 MONITORING 待临床确认（§15.9 Q-8）。
+       * @enum {string}
+       */
+      status: 'ADMITTED' | 'MONITORING' | 'READY' | 'DISCHARGED'
+      vitalSigns: components['schemas']['PacuVitalSigns']
+      /**
+       * @description 入室意识状态（枚举为演示口径【待确认】）。
+       * @enum {string}
+       */
+      consciousness: 'ALERT' | 'DROWSY' | 'SEDATED' | 'UNRESPONSIVE'
+      /** @description 入室疼痛评分 NRS 0–10。 */
+      painScore: number
+      /** @description 入室是否存在恶心/呕吐。 */
+      nausea: boolean
+      /**
+       * @description 入室气道方式（枚举为演示口径【待确认】）。
+       * @enum {string}
+       */
+      airway:
+        | 'NATURAL'
+        | 'ORAL_AIRWAY'
+        | 'NASAL_AIRWAY'
+        | 'LARYNGEAL_MASK'
+        | 'ENDOTRACHEAL'
+        | 'TRACHEOSTOMY'
+      /** @description 最近一次评估标识；尚未评估为 null。 */
+      latestAssessmentId?: string | null
+      /**
+       * Format: date-time
+       * @description 最近一次评估时间；尚未评估为 null。
+       */
+      latestAssessmentAt?: string | null
+      /** @description 最近一次 Aldrete 总分（0–10，服务端计算）；尚未评估为 null。 */
+      latestAldreteTotal?: number | null
+      /** @description 当前转出阈值（服务端配置 `anesop.m2.pacu.aldrete-threshold`，默认 9，【待确认】）。 */
+      aldreteThreshold: number
+      /**
+       * Format: date-time
+       * @description 创建时间。
+       */
+      createdAt: string
+      /** @description 创建人用户标识。 */
+      createdBy: string
+      /**
+       * Format: date-time
+       * @description 最后更新时间。
+       */
+      updatedAt: string
+      /** @description 最后修改人用户标识。 */
+      updatedBy: string
+      /** @description 乐观锁版本号。 */
+      version: number
+    }
+    /** @description 复苏记录列表（按创建时间倒序）。 */
+    PacuRecordList: {
+      /** @description 复苏记录列表。 */
+      items: components['schemas']['PacuRecord'][]
+    }
+    /**
+     * @description Aldrete 评估请求（分项定义按 1995 修订版原文校准）。五项各 0–2 分，缺项/越界 400；
+     *     **总分由服务端计算**（不接受客户端总分）。评估 append-only：更正只能新增一条评估；
+     *     `assessedAt` 不得早于入室时间，也不得早于上一条评估（否则 400），latest 按
+     *     (assessed_at, created_at, id) 判定。
+     */
+    RecordPacuAssessmentRequest: {
+      /**
+       * Format: date-time
+       * @description 评估时间（不得早于入室时间与上一条评估，不得晚于服务端当前时间 + 容差）。
+       */
+      assessedAt: string
+      /** @description 活动能力（0=不能活动肢体，1=可活动两个肢体，2=可活动四个肢体；自主或遵嘱）。 */
+      activity: number
+      /** @description 呼吸（0=呼吸暂停，1=呼吸困难或呼吸受限，2=能深呼吸并有效咳嗽）。 */
+      respiration: number
+      /** @description 循环（0=血压偏离术前 >50%，1=偏离 20%–50%，2=偏离 <20%）。 */
+      circulation: number
+      /** @description 意识（0=无反应，1=呼之可醒，2=完全清醒）。 */
+      consciousness: number
+      /** @description 氧合（0=吸氧下 SpO2 <90%，1=需吸氧维持 SpO2 >90%，2=空气下 SpO2 >92%）。 */
+      oxygenation: number
+      /** @description 评估备注（≤500 字符；只落库/授权用户可见，不写日志与审计原文）。 */
+      notes?: string
+    }
+    /** @description Aldrete 评估（append-only，时间序列）。 */
+    PacuAssessment: {
+      /** @description 评估标识。 */
+      assessmentId: string
+      /** @description 所属复苏记录标识。 */
+      pacuId: string
+      /**
+       * Format: date-time
+       * @description 评估时间。
+       */
+      assessedAt: string
+      /** @description 活动能力（0=不能活动肢体，1=可活动两个肢体，2=可活动四个肢体）。 */
+      activity: number
+      /** @description 呼吸（0=呼吸暂停，1=呼吸困难或呼吸受限，2=能深呼吸并有效咳嗽）。 */
+      respiration: number
+      /** @description 循环（0=偏离 >50%，1=偏离 20%–50%，2=偏离 <20%）。 */
+      circulation: number
+      /** @description 意识（0=无反应，1=呼之可醒，2=完全清醒）。 */
+      consciousness: number
+      /** @description 氧合（0=吸氧下 SpO2 <90%，1=需吸氧维持 >90%，2=空气下 >92%）。 */
+      oxygenation: number
+      /** @description 总分（服务端计算：五项之和，0–10）。 */
+      aldreteTotal: number
+      /** @description 评估备注。 */
+      notes?: string | null
+      /**
+       * Format: date-time
+       * @description 录入时间（服务端时间）。
+       */
+      createdAt: string
+      /** @description 录入人用户标识。 */
+      createdBy: string
+    }
+    /** @description Aldrete 评估时间序列（assessedAt 升序）。 */
+    PacuAssessmentList: {
+      /** @description 评估列表（assessedAt 升序，同刻按录入时间、标识升序）。 */
+      items: components['schemas']['PacuAssessment'][]
+    }
+    /**
+     * @description SBAR 交接（Situation/Background/Assessment/Recommendation 四段必填）。
+     *     文本只落库与授权用户可见，不写入日志/审计原文；不得包含患者直接标识以外的隐私信息。
+     */
+    PacuHandover: {
+      /** @description S（现状）：当前病情与管道/监护要点。 */
+      situation: string
+      /** @description B（背景）：术式、麻醉方式与重要既往史摘要。 */
+      background: string
+      /** @description A（评估）：Aldrete 评分、疼痛、恶心与风险判断。 */
+      assessment: string
+      /** @description R（建议）：接收科室需继续执行的监测与处置。 */
+      recommendation: string
+    }
+    /** @description 转出时的 Aldrete 达标快照（服务端计算，随转出记录冻结）。 */
+    PacuDischargeCriteria: {
+      /** @description 转出阈值（配置，默认 9，【待确认】）。 */
+      aldreteThreshold: number
+      /** @description 转出时最近一次评估总分。 */
+      aldreteTotal: number
+      /** @description 总分是否达到阈值。 */
+      meetsThreshold: boolean
+      /** @description 五项是否齐全（服务端按非空校验）。 */
+      itemsComplete: boolean
+      /** @description 达标所依据的评估标识。 */
+      latestAssessmentId: string
+      /**
+       * Format: date-time
+       * @description 达标所依据的评估时间。
+       */
+      latestAssessmentAt: string
+    }
+    /**
+     * @description 转出请求。服务端校验最近一次 Aldrete 评估存在且五项齐全、总分 ≥ 阈值，否则 409
+     *     （details[] 逐项列出条件码）；`criteriaConfirmed` 缺省/false 返回 400（不能替代校验）。
+     */
+    PacuDischargeRequest: {
+      /**
+       * @description 转出去向（枚举为演示口径【待确认】）。
+       * @enum {string}
+       */
+      destination: 'WARD' | 'ICU' | 'HDU' | 'DAY_SURGERY' | 'HOME'
+      handover: components['schemas']['PacuHandover']
+      /** @description 是否已逐项确认转出条件（前端二次确认）；false/缺省 400，服务端仍重新校验。 */
+      criteriaConfirmed: boolean
+    }
+    /** @description 转出留痕（append-only，一次一条）。 */
+    PacuDischarge: {
+      /** @description 转出记录标识。 */
+      dischargeId: string
+      /** @description 所属复苏记录标识。 */
+      pacuId: string
+      /**
+       * Format: date-time
+       * @description 转出时间（服务端时间）。
+       */
+      dischargedAt: string
+      /**
+       * @description 转出去向。
+       * @enum {string}
+       */
+      destination: 'WARD' | 'ICU' | 'HDU' | 'DAY_SURGERY' | 'HOME'
+      handover: components['schemas']['PacuHandover']
+      criteria: components['schemas']['PacuDischargeCriteria']
+      /**
+       * Format: date-time
+       * @description 录入时间（服务端时间）。
+       */
+      createdAt: string
+      /** @description 转出操作人用户标识。 */
+      createdBy: string
     }
   }
   responses: {
@@ -6051,6 +6433,439 @@ export interface operations {
            *     }
            */
           'application/json': components['schemas']['ApplicationThreeWayCheck']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  listPacuRecords: {
+    parameters: {
+      query: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 该记录单的复苏记录列表（0/1 条；转出后可再次入室时返回多条）。' */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "pacuId": "19000000-0000-4000-8000-000000000001",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "admittedAt": "2026-12-01T11:05:00+08:00",
+           *           "dischargedAt": null,
+           *           "status": "MONITORING",
+           *           "vitalSigns": {
+           *             "systolicBp": 118,
+           *             "diastolicBp": 72,
+           *             "heartRate": 82,
+           *             "spo2": 97,
+           *             "respiratoryRate": 14,
+           *             "temperature": 36.5
+           *           },
+           *           "consciousness": "ALERT",
+           *           "painScore": 3,
+           *           "nausea": false,
+           *           "airway": "NATURAL",
+           *           "latestAssessmentId": "1a000000-0000-4000-8000-000000000002",
+           *           "latestAssessmentAt": "2026-12-01T11:30:00+08:00",
+           *           "latestAldreteTotal": 8,
+           *           "aldreteThreshold": 9,
+           *           "createdAt": "2026-12-01T11:05:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000002",
+           *           "updatedAt": "2026-12-01T11:30:00+08:00",
+           *           "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *           "version": 2
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['PacuRecordList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  admitPacuRecord: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "recordId": "12000000-0000-4000-8000-000000000001",
+         *       "admittedAt": "2026-12-01T11:05:00+08:00",
+         *       "vitalSigns": {
+         *         "systolicBp": 118,
+         *         "diastolicBp": 72,
+         *         "heartRate": 82,
+         *         "spo2": 97,
+         *         "respiratoryRate": 14,
+         *         "temperature": 36.5
+         *       },
+         *       "consciousness": "ALERT",
+         *       "painScore": 3,
+         *       "nausea": false,
+         *       "airway": "NATURAL"
+         *     }
+         */
+        'application/json': components['schemas']['CreatePacuRecordRequest']
+      }
+    }
+    responses: {
+      /** @description 已创建复苏记录（ADMITTED）。' */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "pacuId": "19000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "admittedAt": "2026-12-01T11:05:00+08:00",
+           *       "dischargedAt": null,
+           *       "status": "ADMITTED",
+           *       "vitalSigns": {
+           *         "systolicBp": 118,
+           *         "diastolicBp": 72,
+           *         "heartRate": 82,
+           *         "spo2": 97,
+           *         "respiratoryRate": 14,
+           *         "temperature": 36.5
+           *       },
+           *       "consciousness": "ALERT",
+           *       "painScore": 3,
+           *       "nausea": false,
+           *       "airway": "NATURAL",
+           *       "latestAssessmentId": null,
+           *       "latestAssessmentAt": null,
+           *       "latestAldreteTotal": null,
+           *       "aldreteThreshold": 9,
+           *       "createdAt": "2026-12-01T11:05:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T11:05:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['PacuRecord']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
+  getPacuRecord: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 复苏记录标识（UUID 字符串）。 */
+        pacuId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 复苏记录详情。' */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "pacuId": "19000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "admittedAt": "2026-12-01T11:05:00+08:00",
+           *       "dischargedAt": null,
+           *       "status": "MONITORING",
+           *       "vitalSigns": {
+           *         "systolicBp": 118,
+           *         "diastolicBp": 72,
+           *         "heartRate": 82,
+           *         "spo2": 97,
+           *         "respiratoryRate": 14,
+           *         "temperature": 36.5
+           *       },
+           *       "consciousness": "ALERT",
+           *       "painScore": 3,
+           *       "nausea": false,
+           *       "airway": "NATURAL",
+           *       "latestAssessmentId": "1a000000-0000-4000-8000-000000000002",
+           *       "latestAssessmentAt": "2026-12-01T11:30:00+08:00",
+           *       "latestAldreteTotal": 8,
+           *       "aldreteThreshold": 9,
+           *       "createdAt": "2026-12-01T11:05:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002",
+           *       "updatedAt": "2026-12-01T11:30:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000002",
+           *       "version": 2
+           *     }
+           */
+          'application/json': components['schemas']['PacuRecord']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  listPacuAssessments: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 复苏记录标识（UUID 字符串）。 */
+        pacuId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 评估时间序列（assessedAt 升序）。' */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "assessmentId": "1a000000-0000-4000-8000-000000000001",
+           *           "pacuId": "19000000-0000-4000-8000-000000000001",
+           *           "assessedAt": "2026-12-01T11:15:00+08:00",
+           *           "activity": 1,
+           *           "respiration": 2,
+           *           "circulation": 2,
+           *           "consciousness": 2,
+           *           "oxygenation": 1,
+           *           "aldreteTotal": 8,
+           *           "notes": "演示：入室 10 分钟评估（合成数据）",
+           *           "createdAt": "2026-12-01T11:15:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000002"
+           *         },
+           *         {
+           *           "assessmentId": "1a000000-0000-4000-8000-000000000002",
+           *           "pacuId": "19000000-0000-4000-8000-000000000001",
+           *           "assessedAt": "2026-12-01T11:30:00+08:00",
+           *           "activity": 2,
+           *           "respiration": 2,
+           *           "circulation": 2,
+           *           "consciousness": 2,
+           *           "oxygenation": 2,
+           *           "aldreteTotal": 10,
+           *           "notes": null,
+           *           "createdAt": "2026-12-01T11:30:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000002"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['PacuAssessmentList']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  recordPacuAssessment: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 复苏记录标识（UUID 字符串）。 */
+        pacuId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "assessedAt": "2026-12-01T11:30:00+08:00",
+         *       "activity": 2,
+         *       "respiration": 2,
+         *       "circulation": 2,
+         *       "consciousness": 2,
+         *       "oxygenation": 2,
+         *       "notes": "演示：转出前评估（合成数据）"
+         *     }
+         */
+        'application/json': components['schemas']['RecordPacuAssessmentRequest']
+      }
+    }
+    responses: {
+      /** @description 已记录评估（总分由服务端计算）。' */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "assessmentId": "1a000000-0000-4000-8000-000000000002",
+           *       "pacuId": "19000000-0000-4000-8000-000000000001",
+           *       "assessedAt": "2026-12-01T11:30:00+08:00",
+           *       "activity": 2,
+           *       "respiration": 2,
+           *       "circulation": 2,
+           *       "consciousness": 2,
+           *       "oxygenation": 2,
+           *       "aldreteTotal": 10,
+           *       "notes": "演示：转出前评估（合成数据）",
+           *       "createdAt": "2026-12-01T11:30:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002"
+           *     }
+           */
+          'application/json': components['schemas']['PacuAssessment']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  getPacuDischarge: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 复苏记录标识（UUID 字符串）。 */
+        pacuId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 转出记录（append-only，一次）。' */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "dischargeId": "1b000000-0000-4000-8000-000000000001",
+           *       "pacuId": "19000000-0000-4000-8000-000000000001",
+           *       "dischargedAt": "2026-12-01T12:10:00+08:00",
+           *       "destination": "WARD",
+           *       "handover": {
+           *         "situation": "演示：全麻腹腔镜胆囊切除术后，PACU 观察 65 分钟（合成数据）",
+           *         "background": "演示：ASA II，术中生命体征平稳（合成数据）",
+           *         "assessment": "演示：Aldrete 10 分，无恶心呕吐，疼痛 NRS 2（合成数据）",
+           *         "recommendation": "演示：返病房继续监测，按需镇痛（合成数据）"
+           *       },
+           *       "criteria": {
+           *         "aldreteThreshold": 9,
+           *         "aldreteTotal": 10,
+           *         "meetsThreshold": true,
+           *         "itemsComplete": true,
+           *         "latestAssessmentId": "1a000000-0000-4000-8000-000000000002",
+           *         "latestAssessmentAt": "2026-12-01T11:30:00+08:00"
+           *       },
+           *       "createdAt": "2026-12-01T12:10:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002"
+           *     }
+           */
+          'application/json': components['schemas']['PacuDischarge']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  dischargePacuRecord: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 复苏记录标识（UUID 字符串）。 */
+        pacuId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "destination": "WARD",
+         *       "criteriaConfirmed": true,
+         *       "handover": {
+         *         "situation": "演示：全麻腹腔镜胆囊切除术后，PACU 观察 65 分钟（合成数据）",
+         *         "background": "演示：ASA II，术中生命体征平稳（合成数据）",
+         *         "assessment": "演示：Aldrete 10 分，无恶心呕吐，疼痛 NRS 2（合成数据）",
+         *         "recommendation": "演示：返病房继续监测，按需镇痛（合成数据）"
+         *       }
+         *     }
+         */
+        'application/json': components['schemas']['PacuDischargeRequest']
+      }
+    }
+    responses: {
+      /** @description 转出成功（状态 DISCHARGED，写入 append-only 转出留痕）。' */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "dischargeId": "1b000000-0000-4000-8000-000000000001",
+           *       "pacuId": "19000000-0000-4000-8000-000000000001",
+           *       "dischargedAt": "2026-12-01T12:10:00+08:00",
+           *       "destination": "WARD",
+           *       "handover": {
+           *         "situation": "演示：全麻腹腔镜胆囊切除术后，PACU 观察 65 分钟（合成数据）",
+           *         "background": "演示：ASA II，术中生命体征平稳（合成数据）",
+           *         "assessment": "演示：Aldrete 10 分，无恶心呕吐，疼痛 NRS 2（合成数据）",
+           *         "recommendation": "演示：返病房继续监测，按需镇痛（合成数据）"
+           *       },
+           *       "criteria": {
+           *         "aldreteThreshold": 9,
+           *         "aldreteTotal": 10,
+           *         "meetsThreshold": true,
+           *         "itemsComplete": true,
+           *         "latestAssessmentId": "1a000000-0000-4000-8000-000000000002",
+           *         "latestAssessmentAt": "2026-12-01T11:30:00+08:00"
+           *       },
+           *       "createdAt": "2026-12-01T12:10:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000002"
+           *     }
+           */
+          'application/json': components['schemas']['PacuDischarge']
         }
       }
       400: components['responses']['BadRequest']

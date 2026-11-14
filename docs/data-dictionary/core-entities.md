@@ -374,20 +374,68 @@ UPDATE/DELETE/TRUNCATE 由触发器拒绝（SQLSTATE 55000）。
 
 说明：生命体征按天分区，热分区 90 天在线（§3.4.4）；波形不与数值同表，按 D-04 二选一（TimescaleDB 或分区表 + MinIO），最终方案【待确认】。采样间隔默认 5 分钟、抢救时加密（§2.4.3）。
 
-### 3.6 复苏记录 `pacu_record`
+### 3.6 复苏记录 `m2_anes.pacu_record`（V18 已实现，M3-M10-01）
+
+一条麻醉记录单同时最多一条未转出记录（部分唯一索引 `uk_pacu_record_active`）；入室信息与
+身份列写入后不可改，`DISCHARGED` 为终态（`READY→MONITORING` 回落是否允许待临床确认，
+见 `docs/modules/m2/README.md` §15.9 Q-8）。
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `pacu_id` | bigint | 是 | 主键 | 契约暂未单列；§2.7.1 |
-| `record_id` | bigint | 是 | 麻醉记录单 | §2.7.1 |
-| `admission_at` | timestamptz | 是 | 入 PACU 时间 | §2.4.3 |
-| `aldrete_score` | smallint | 是 | Aldrete 评分 | §2.4.3、glossary |
-| `complications` | text | 否 | 并发症处理 | §2.4.3 |
-| `discharge_at` | timestamptz | 否 | 转出时间 | §2.4.3 |
-| `disposition` | varchar | 否 | 转归（病房/ICU 等） | §2.4.3；枚举【待确认】 |
-| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
+| `id` | uuid | 是 | 主键（gen_random_uuid） | 契约 `PacuRecord.pacuId` |
+| `anesthesia_record_id` | uuid | 是 | 所属麻醉记录单（FK，写入后不可改） | §2.4.3；数据范围沿记录单 |
+| `patient_id` | uuid | 是 | 患者标识（由记录单解析，不存姓名/证件号/住院号明文） | §3.9.3 |
+| `admitted_at` | timestamptz | 是 | 入 PACU 时间（≥ 记录 startedAt） | 服务层 400 |
+| `discharged_at` | timestamptz | 否 | 转出时间（写一次，与 DISCHARGED 同置） | CHECK `ck_pacu_record_discharged_state` |
+| `status` | varchar(16) | 是 | `ADMITTED/MONITORING/READY/DISCHARGED` | 契约 `status` |
+| `admitted_vital_signs` | jsonb | 是 | 入室生命体征对象（可缺项） | 契约 `PacuVitalSigns` |
+| `consciousness` | varchar(16) | 是 | `ALERT/DROWSY/SEDATED/UNRESPONSIVE`（演示口径【待确认】） | 契约 `consciousness` |
+| `pain_score` | smallint | 是 | NRS 0–10（量表口径【待确认】） | CHECK 0–10 |
+| `nausea` | boolean | 是 | 入室恶心/呕吐 | 契约 `nausea` |
+| `airway` | varchar(24) | 是 | `NATURAL/ORAL_AIRWAY/NASAL_AIRWAY/LARYNGEAL_MASK/ENDOTRACHEAL/TRACHEOSTOMY`（演示口径【待确认】） | 契约 `airway` |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by/version/deleted` | §3.4.3 |
 
-说明：Steward 评分、转出阈值校验等字段在 M2 细化【待确认】。
+说明：入室生命体征/意识/疼痛/恶心/气道与身份列不可改（DB 守卫 55000），入室信息有误须重新
+入室；状态推进/转出使用条件更新（`WHERE id=? AND version=? AND status<>'DISCHARGED'`），
+0 行即 409。DELETE/TRUNCATE 拒绝（55000）。
+
+### 3.6.1 Aldrete 评估 `m2_anes.pacu_assessment`（V18 已实现，append-only）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键（gen_random_uuid） | 契约 `PacuAssessment.assessmentId` |
+| `pacu_id` | uuid | 是 | 所属复苏记录（FK；父记录已转出后拒插 55000） | — |
+| `assessed_at` | timestamptz | 是 | 评估时间（不得早于入室时间与上一条评估） | 服务层 400 |
+| `aldrete_activity` | smallint | 是 | 活动能力 0–2（0 不能活动肢体 / 1 可活动两个肢体 / 2 可活动四个肢体） | CHECK |
+| `aldrete_respiration` | smallint | 是 | 呼吸 0–2（0 呼吸暂停 / 1 呼吸困难或受限 / 2 能深呼吸并有效咳嗽） | CHECK |
+| `aldrete_circulation` | smallint | 是 | 循环 0–2（血压偏离术前 >50% / 20%–50% / <20%） | CHECK |
+| `aldrete_consciousness` | smallint | 是 | 意识 0–2（0 无反应 / 1 呼之可醒 / 2 完全清醒） | CHECK |
+| `aldrete_oxygenation` | smallint | 是 | 氧合 0–2（0 吸氧下 <90% / 1 需吸氧 >90% / 2 空气下 >92%） | CHECK |
+| `aldrete_total` | smallint | 是 | 总分 0–10，**等于五项之和**（服务端计算） | CHECK `ck_pacu_assessment_total_sum` |
+| `notes` | varchar(500) | 否 | 评估备注（只落库/授权用户可见，不写日志/审计原文） | 契约 `notes` |
+| `created_at` / `created_by` | timestamptz / uuid | 是 | 录入时间与录入人 | §3.4.3 |
+
+说明：append-only（UPDATE/DELETE/TRUNCATE 由触发器拒绝，55000），更正只能新增评估；时间序列
+按 `assessed_at ASC, created_at ASC, id ASC` 稳定排序，latest 按
+`(assessed_at, created_at, id)` 倒序取 1 条。总分达到配置阈值（`anesop.m2.pacu.aldrete-threshold`，
+默认 9，院方阈值【待确认】）时推进 `pacu_record.status=READY`，否则 `MONITORING`；状态推进
+以 latest 为准，`READY→MONITORING` 回落是否允许待临床确认（§15.9 Q-8）。
+
+### 3.6.2 转出交接 `m2_anes.pacu_discharge`（V18 已实现，append-only）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键（gen_random_uuid） | 契约 `PacuDischarge.dischargeId` |
+| `pacu_id` | uuid | 是 | 所属复苏记录（FK，**唯一**：每条最多一条转出） | `uk_pacu_discharge_pacu` |
+| `discharged_at` | timestamptz | 是 | 转出时间（服务端时间） | — |
+| `destination` | varchar(16) | 是 | `WARD/ICU/HDU/DAY_SURGERY/HOME`（演示口径【待确认】） | CHECK |
+| `handover` | jsonb | 是 | SBAR：`{situation,background,assessment,recommendation}`（四段必填 ≤2000） | 契约 `PacuHandover` |
+| `criteria_snapshot` | jsonb | 是 | 转出时 Aldrete 达标快照：`{aldreteThreshold,aldreteTotal,meetsThreshold,itemsComplete,latestAssessmentId,latestAssessmentAt}` | 阈值调整后可追溯当时依据 |
+| `created_at` / `created_by` | timestamptz / uuid | 是 | 转出时间与操作人 | §3.4.3 |
+
+说明：append-only（55000）；转出前置由服务端评估（存在评估、五项齐全、总分 ≥ 阈值），未满足
+409 并逐项列出条件码；SBAR 原文与评估备注不写日志/审计。未处理严重告警是否阻断转出【待确认】
+（未实现）。
 
 ### 3.7 随访记录 `follow_up`
 
@@ -502,6 +550,9 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 | `ResuscitationRecord`、`ResuscitationRecordList`、`CreateResuscitationRequest`、`ResuscitationDrug`、`ResuscitationEventSummary`、`ResuscitationParticipant` | `m2_anes.resuscitation_record` | 抢救记录 append-only、时间窗校验、负责人/参与人员（V16）；锁单后冻结（V17） |
 | `RecordRevision`、`RecordRevisionSummary`、`RecordRevisionList`、`CreateRevisionRequest`、`RevisionCorrections`、`RevisionDiff` | `m2_anes.record_revision` | 锁单后修订 append-only、版本链签名、差异（V17） |
 | `RecordEffectiveView`、`RecordEffectiveValues`、`RecordEffectiveCorrection` | 读时投影（无新表） | `original` + 最新修订 `corrections` 的当前有效值；详情/打印使用，原行不变（0.8.1） |
+| `PacuRecord` | `m2_anes.pacu_record` | 复苏记录：入室信息、状态机、阈值展示（V18） |
+| `PacuAssessment`、`PacuAssessmentList`、`RecordPacuAssessmentRequest` | `m2_anes.pacu_assessment` | Aldrete 五项/总分 append-only 时间序列（V18） |
+| `PacuDischarge`、`PacuDischargeRequest`、`PacuDischargeCriteria`、`PacuHandover` | `m2_anes.pacu_discharge` | 转出留痕、SBAR 交接与达标快照（V18） |
 | `FollowUp` | `follow_up` | 24/48 小时随访 |
 | `CurrentUser`、`DataScope` | `sys_user`、`sys_role_data_scope` 等 | 权限投影，不是单表 |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
@@ -522,7 +573,8 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
    `OMISSION`/`TIMING_CORRECTION` 原因码需结构化更正能力（M3-QA 前，Q-17）；锁单后抢救
    补录是否开放走下一修订版本待临床确认（Q-18）。
 8. 生命体征指标编码、单位、采样间隔、波形存储（D-04）。
-9. 复苏记录评分项与转出阈值、随访量表口径。
+9. 复苏记录：Aldrete 转出阈值（默认 9）、入室意识/气道/转出去向枚举、未处理严重告警是否
+   阻断转出（Q-1/Q-3/Q-4）待临床确认；随访量表口径待 M3-M11-01。
 10. 术中预警默认阈值（SpO2<90、HR<50/>120、MAP<65、EtCO2 30–50）与持续时长全部【待确认】，
     须临床顾问逐条确认；抢救类型/转归枚举（`CPR/AIRWAY/VASOPRESSOR/DEFIBRILLATION/OTHER`、
     `SUCCESS/PARTIAL/FAILED/UNKNOWN`）同为【待确认】。

@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟）
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.8.1`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR）
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.9.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -27,9 +27,9 @@ packages/contracts/
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
 | `scheduling.yaml` | 17 | 20 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史、排程分析（利用率/准点/取消率/CSV 导出） | §2.4.2、§2.3.2、§2.7.2、§3.4.2 |
-| `anesthesia.yaml` | 32 | 46 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、预警规则版本化/告警评估与确认忽略/抢救记录 append-only（0.6.0）、实时触发/评估水位/规则待确认与历史版本/抢救人员留痕（0.7.0）、锁单/锁单前置清单/修订版本/版本差异/当前有效值投影与 CA 占位签名（0.8.0→0.8.1）、旧访视骨架读写、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
+| `anesthesia.yaml` | 37 | 54 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、预警规则版本化/告警评估与确认忽略/抢救记录 append-only（0.6.0）、实时触发/评估水位/规则待确认与历史版本/抢救人员留痕（0.7.0）、锁单/锁单前置清单/修订版本/版本差异/当前有效值投影与 CA 占位签名（0.8.0→0.8.1）、复苏记录入室/Aldrete 评估时间序列/转出 SBAR 与达标快照（0.9.0）、旧访视骨架读写、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
 | `device.yaml` | 4 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
-| **合计** | **70** | **90** | 5 个限界上下文骨架 | — |
+| **合计** | **75** | **98** | 5 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -406,6 +406,40 @@ packages/contracts/
   锁单摘要不含签名摘要（锁单时尚未签名）。详见 `docs/modules/m2/README.md` §14.3。
 - **示例**：全部 SYNTHETIC（`SYNTH-*` / 演示患者 / 演示麻醉方式），不含真实患者数据。
 
+### 3.11 复苏记录与转出（M3-M10-01，anesthesia 0.9.0 additive）
+
+> 0.9.0 只新增路径与 schema（7 个 operation、11 个 schema），未删除或改类型既有定义；
+> `anesthesia.yaml` 与 `baseline/anesthesia.yaml` 同步更新，`oasdiff`（baseline → 当前、
+> HEAD baseline → 当前）均无破坏性变更。Aldrete 转出阈值由服务端配置
+> （`anesop.m2.pacu.aldrete-threshold`，默认 9，**院方阈值【待确认】**），契约中通过
+> `aldreteThreshold` 暴露给前端展示，不接受客户端写入。
+
+- **入室** `POST /v1/anesthesia/pacu-records`（`admitPacuRecord`，`m2:pacu:write`）：
+  body `{recordId, admittedAt, vitalSigns, consciousness, painScore, nausea, airway}`；
+  记录单必须已开始（DRAFT/未开始 409）、不可见 422、同一记录单已有未转出记录 409、
+  `admittedAt` 早于记录开始或晚于服务端当前时间+容差 400。
+- **查询** `GET /v1/anesthesia/pacu-records?recordId=`（`listPacuRecords`）与
+  `GET /v1/anesthesia/pacu-records/{pacuId}`（`getPacuRecord`，均 `m2:pacu:read`）：
+  返回状态（`ADMITTED/MONITORING/READY/DISCHARGED`）、入室信息、最近一次评估投影
+  （`latestAssessmentId/At/latestAldreteTotal`）与服务端阈值 `aldreteThreshold`；
+  列表 `recordId` 缺失/非 UUID 400。
+- **Aldrete 评估** `POST /v1/anesthesia/pacu-records/{pacuId}/assessments`
+  （`recordPacuAssessment`，`m2:pacu:write`）：五项
+  `activity/respiration/circulation/consciousness/oxygenation` 各 0–2（缺项/越界 400），
+  **总分为服务端计算**（0–10）；append-only（数据库 55000），已转出后再评估 409；
+  评估时间早于入室/早于上一条评估/晚于当前时间+容差 400，latest 按
+  `(assessed_at, created_at, id)` 判定且状态推进以 latest 为准。
+  `GET .../assessments`（`listPacuAssessments`）返回 `assessedAt` 升序时间序列。
+- **转出** `POST /v1/anesthesia/pacu-records/{pacuId}/discharge`（`dischargePacuRecord`，
+  `m2:pacu:write`）：body `{destination, handover:{situation,background,assessment,
+  recommendation}, criteriaConfirmed}`；SBAR 四段必填、`criteriaConfirmed` 缺省/false 400。
+  服务端校验最近一次评估存在、五项齐全、总分 ≥ 阈值；未满足 409 `STATE_CONFLICT`，
+  `details[]` 逐项列出 `ALDRETE_ASSESSED`/`ALDRETE_ITEMS_COMPLETE`/`ALDRETE_THRESHOLD_MET`。
+  成功返回 `PacuDischarge`：去向、SBAR、`criteria` 达标快照（阈值/总分/依据评估标识与时间）
+  与转出时间；转出记录 append-only，一次一条，重复转出 409。
+  `GET .../discharge`（`getPacuDischarge`）未转出 404。
+- **示例**：全部 SYNTHETIC（演示患者/演示 SBAR/演示分项），不含真实患者数据。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -423,7 +457,7 @@ packages/contracts/
 | 401 | 未认证/令牌失效（`Unauthorized`） | 所有 operation 必备 |
 | 403 | 无权限/超出数据范围（`Forbidden`） | 需认证的 operation 必备；`security: []` 的登录/刷新与 `logout` 除外 |
 | 404 | 资源不存在或不可见（`NotFound`） | 仅路径含 `{资源参数}` 的单资源 operation；集合查询、创建接口不声明 |
-| 409 | 状态/版本/排程/锁单前置/唯一键冲突（`Conflict`） | 仅状态变更操作（带 `requestBody`）声明；`logout`、登录/刷新不声明。用户管理：创建账号重复、更新工号撞 `uk_sys_user_employee_no`；锁单前置未满足时 `details[]` 逐项列出条件码（`THREE_WAY_CHECK_COMPLETED` 等） |
+| 409 | 状态/版本/排程/锁单前置/转出前置/唯一键冲突（`Conflict`） | 仅状态变更操作（带 `requestBody`）声明；`logout`、登录/刷新不声明。用户管理：创建账号重复、更新工号撞 `uk_sys_user_employee_no`；锁单前置未满足时 `details[]` 逐项列出条件码（`THREE_WAY_CHECK_COMPLETED` 等）；PACU 转出未达标时 `details[]` 列出 `ALDRETE_THRESHOLD_MET` 等条件码 |
 | 422 | 语义不合法（`UnprocessableEntity`） | 字段格式正确但业务规则拒绝（如患者不在主索引、术间不满足隔离要求） |
 | 201 | 创建成功 | 创建类接口；响应体返回创建后的实体（`POST three-way-checks` 首次创建为 201，更新为 200） |
 | 204 | 成功无响应体 | `POST /v1/auth/logout` |

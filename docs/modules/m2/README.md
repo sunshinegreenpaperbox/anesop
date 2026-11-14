@@ -2,14 +2,16 @@
 
 > 状态：M2-M4-01「术前访视与评估」+ M2-M5-01「知情同意与三方核查」+ M3-M2-01
 > 「麻醉记录单与时间轴」+ M3-M2-02「术中预警规则与抢救记录」+ M3-M2-03
-> 「锁单/修订/CA 签名（模拟）」落地版（2026-11-14）。
-> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.8.1；
+> 「锁单/修订/CA 签名（模拟）」+ M3-M10-01「复苏记录与转出（Aldrete、SBAR 交接）」
+> 落地版（2026-11-14）。
+> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.9.0；
 > 迁移：`db/migration/V10__m2_preop_assessment.sql`、
 > `db/migration/V11__m2_consent_threeway.sql`、
 > `db/migration/V13__m2_anesthesia_record.sql`、
 > `db/migration/V15__m2_alert_rescue.sql`、
 > `db/migration/V16__m2_alert_realtime_watermark_rescue_leader.sql`、
-> `db/migration/V17__m2_record_lock_revision.sql`；
+> `db/migration/V17__m2_record_lock_revision.sql`、
+> `db/migration/V18__m2_pacu_recovery.sql`；
 > 方案书：§2.4.3（M2 术前访视/知情同意/三方核查/麻醉计划）、§3.4.2（麻醉记录单与访视实体）、
 > §3.4.3（审计字段/乐观锁/逻辑删除）、§3.9.2（RBAC/数据权限）、§3.9.3（脱敏）、
 > §3.9.4（CA 签名；EXT-05 CA 不可用，本期为占位/自签哈希）。
@@ -79,7 +81,8 @@ apps/web/src/modules/m2/
 ├── views/ConsentEntryView.vue    知情同意菜单入口
 ├── views/ThreeWayCheckView.vue   Time-out/Sign-out/标本/植入物/问题项 + 版本历史
 ├── views/ThreeWayCheckEntryView.vue 三方核查菜单入口
-└── __tests__/                    Vitest（术前访视 4 + 同意 5 + 核查 7）
+├── views/PacuView.vue           PACU 入室/Aldrete 评分表与时间序列/转出（SBAR）
+└── __tests__/                    Vitest（术前访视 4 + 同意 5 + 核查 7 + PACU 4）
 ```
 
 ## 3. 接口（anesthesia 0.8.1）
@@ -471,9 +474,13 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
   原因码 400、全量快照（事件/用药/出入量/汇总/锁单摘要）、差异、版本链摘要、append-only 55000、
   原记录内容不变；双线程并发修订 revisionNo=1/2 且 current_revision=2；越权 403/跨科室 404、
   护士默认无 lock/revise 授权、V17 结构/权限/触发器/注释断言。
+- `AldreteCalculatorTest`（4 用例）+ `PacuServiceImplTest`（29 用例）+
+  `PacuRecoveryApiIntegrationTest`（5 用例，嵌入式 PG16：入室→评估→转出、评估时间单调 400、
+  阈值 409、append-only 55000、权限/跨科室、V18 结构/审计）——详见 §15.8。
 - 前端 Vitest：术前访视 4 用例 + 知情同意 5 用例（加载/创建/签署/撤销/403）+
   三方核查 7 用例（空态/Time-out/Sign-out 完成/必选逐项确认/二次确认取消/Time-out 预填/403）+
-  麻醉记录单 6 用例（空态创建/时间轴与汇总/追加事件/麻精双人核对拦截/出入量/只读态）；
+  麻醉记录单 6 用例（空态创建/时间轴与汇总/追加事件/麻精双人核对拦截/出入量/只读态）+
+  PACU 4 用例（空态入室/评分表实时总分与提交/转出 SBAR 与达标确认/阈值不足 409 展示）；
   E2E：签署 + CA 占位、核对逐项确认 + 二次确认 + 核查完成、记录单创建→事件→出入量汇总、
   麻精双人核对拦截与提交、E2E-03 锁单→编辑被拒→带原因修订→新版本可见。
 - 实测覆盖率见验收报告（`./scripts/mvn.sh -B -f apps/api/pom.xml verify` 的 JaCoCo 汇总），
@@ -960,3 +967,178 @@ hash 随抢救内容变化、effective 投影、锁后抢救 409/直插 55000、
 | Q-3 | 是否仅麻醉医师可锁单/修订 | 保留 SYS_ADMIN break-glass 并审计标注 | 管理员是否只应排障、不参与临床签名？由医务处/麻醉科确认 |
 | Q-4 | 记录完整性前置 | 开始/结束 + ≥1 事件 | 是否要求麻醉小结/生命体征/签名完成后才允许锁单？ |
 | Q-5 | 修订原因码 | 0.8.1 仅 ANESTHESIA_TYPE_CHANGE/OTHER | OMISSION/TIMING_CORRECTION 待结构化更正能力（M3-QA 前，Q-17） |
+
+## 15. 复苏记录与转出（M3-M10-01，契约 0.9.0 + V18）
+
+### 15.1 接口与权限
+
+| 端点（operationId） | 权限 | 说明 |
+|---|---|---|
+| `GET /v1/anesthesia/pacu-records?recordId=`（`listPacuRecords`） | `m2:pacu:read` | 按麻醉记录单查询复苏记录（创建时间倒序）；`recordId` 缺失/非 UUID 400；记录单不可见 403（集合语义） |
+| `POST /v1/anesthesia/pacu-records`（`admitPacuRecord`） | `m2:pacu:write` | 入室（201）；记录单未开始 409、不可见 422、重复未转出记录 409、时间窗 400 |
+| `GET /v1/anesthesia/pacu-records/{pacuId}`（`getPacuRecord`） | `m2:pacu:read` | 复苏记录详情（含最近 Aldrete 总分与服务端阈值）；越界/不存在 404 |
+| `GET /v1/anesthesia/pacu-records/{pacuId}/assessments`（`listPacuAssessments`） | `m2:pacu:read` | Aldrete 时间序列（assessedAt 升序） |
+| `POST /v1/anesthesia/pacu-records/{pacuId}/assessments`（`recordPacuAssessment`） | `m2:pacu:write` | 记录评估（201，append-only）；单项越界/缺项 400、已转出 409 |
+| `GET /v1/anesthesia/pacu-records/{pacuId}/discharge`（`getPacuDischarge`） | `m2:pacu:read` | 转出留痕（未转出 404） |
+| `POST /v1/anesthesia/pacu-records/{pacuId}/discharge`（`dischargePacuRecord`） | `m2:pacu:write` | 转出（201）；Aldrete 未评估/未达阈值 409（details 条件码）、未确认/SBAR 缺失 400 |
+
+数据范围沿用记录单/台次可见性（只调 m1-api，不读 m1 表）：按记录单列表为集合语义
+（越权 403），单对象操作越界 404，入室时记录单不可见 422。V18 权限点
+`m2:pacu:read|write` 授予 SYS_ADMIN、SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST
+（与记录单读写同口径）；PACU 专职护士角色 `SYS_PACU_NURSE` 当前未落库种子，是否单独授权
+待护理部确认（§15.9 Q-2）。
+
+### 15.2 入室与状态机
+
+```text
+(入室) ──→ ADMITTED ──首次评估──→ MONITORING / READY
+              │                      │        │
+              │                      │        └── 再次评估 < 阈值 → MONITORING（可回落）
+              │                      └── 评估 ≥ 阈值 → READY
+              └────────── 转出（前置全部满足）──→ DISCHARGED（终态）
+```
+
+- 入室必须关联**已开始**的麻醉记录单（`ONGOING/LOCKED/REVISED` 且 `started_at` 非空）；
+  DRAFT 或未开始 409。患者标识由记录单解析，不信任客户端。
+- 一条麻醉记录单同时最多一条未转出记录（服务层先查 + 部分唯一索引 `uk_pacu_record_active`
+  兜底 → 409）；转出后可再次入室（新记录，历史保留）。
+- 时间窗：`admittedAt ≥ 记录 startedAt`，且 `≤ 服务端当前时间 + 容差`
+  （`anesop.m2.record.time-tolerance-seconds`，默认 600s），违反 400。
+- 入室信息（生命体征/意识/疼痛/恶心/气道）与身份列写入后不可改（DB 守卫 55000）：
+  入室信息有误须重新入室并说明，不回改历史。
+- 状态机：`ADMITTED → MONITORING/READY → DISCHARGED`，`DISCHARGED` 为终态，不可回退为
+  监测/达标。`READY→MONITORING` 当前实现允许（最新评估因病情变化低于阈值时回落），
+  **是否允许待临床确认（§15.9 Q-8）**；状态推进以 latest 评估为准。
+
+### 15.3 Aldrete 评分口径（临床规则，需人工逐行）
+
+> 实现：`AldreteCalculator`（五项合法性/求和）与 `PacuServiceImpl`（字段级 400 / 总分计算 /
+> 状态推进）。分值与切点来自公开量表，**院方转出阈值【待确认】**；系统结果不得替代医师判断
+> （AGENTS H-06）。
+
+| 项 | 0 分 | 1 分 | 2 分 |
+|---|---|---|---|
+| activity 活动能力 | 不能活动肢体（自主或遵嘱） | 可活动两个肢体（自主或遵嘱） | 可活动四个肢体（自主或遵嘱） |
+| respiration 呼吸 | 呼吸暂停 | 呼吸困难或呼吸受限 | 能深呼吸并有效咳嗽 |
+| circulation 循环 | 血压偏离术前 >50% | 偏离 20%–50% | 偏离 <20% |
+| consciousness 意识 | 无反应 | 呼之可醒 | 完全清醒 |
+| oxygenation 氧合 | 吸氧下 SpO₂ <90% | 需吸氧维持 SpO₂ >90% | 空气下 SpO₂ >92% |
+
+- 分项定义按 Aldrete 1995 修订版原文校准（activity 1=活动两个肢体、respiration 0=呼吸暂停、
+  consciousness 1=呼之可醒等）；契约 description、`AldreteCalculator` Javadoc、V18 列注释、
+  前端评分表选项保持同一口径。
+- 每项 0–2（缺项/越界 400），**总分由服务端计算**（五项之和 0–10），契约无客户端总分字段；
+  数据库 `ck_pacu_assessment_total_sum` 为第二道防线。
+- 来源：Aldrete JA, Kroulik D. Anesth Analg. 1970;49(6):924-934；修订版 Aldrete JA.
+  J Clin Monit. 1995;11(1):41-46。
+- **转出阈值**：`anesop.m2.pacu.aldrete-threshold`，默认 **9**（0–10 校验，非法配置启动即失败），
+  院方口径【待确认】（Q-1）。阈值调整只改配置；转出时阈值与总分冻结在
+  `pacu_discharge.criteria_snapshot`，可追溯“当时依据”。
+- 评估 **append-only**：表只 INSERT/查询，UPDATE/DELETE/TRUNCATE 由触发器拒绝（55000）；
+  更正只能新增评估；已转出后再评估 409（DB BEFORE INSERT 守卫 55000）。
+- 时间序列按 `assessed_at ASC, created_at ASC, id ASC` 稳定排序；latest 统一按
+  `(assessed_at, created_at, id)` 倒序取 1 条，状态推进以 latest 为准。
+- 评估时间不得早于入室、**不得早于上一条评估**（否则 400）、不得晚于当前时间 + 容差（400）；
+  时间序列只追加不回溯补录。总分达到阈值时 latest 状态推进为 READY，否则 MONITORING
+  （READY→MONITORING 回落待临床确认，§15.9 Q-8）。
+
+### 15.4 转出前置、SBAR 与达标快照
+
+- 请求：`destination`（`WARD/ICU/HDU/DAY_SURGERY/HOME`，演示口径【待确认】）、
+  `handover`（SBAR 四段各必填 ≤2000 字符）、`criteriaConfirmed=true`（缺省/false 400，
+  不能替代服务端校验）。
+- 服务端转出前置（固定顺序、`details[]` 逐项列出条件码）：
+  1. `ALDRETE_ASSESSED`：存在最近一次 Aldrete 评估；
+  2. `ALDRETE_ITEMS_COMPLETE`：五项齐全且各在 0–2；
+  3. `ALDRETE_THRESHOLD_MET`：总分 ≥ 阈值（含等于）。
+- 未满足 → 409 `STATE_CONFLICT`，并以独立事务写 `PACU_DISCHARGE result=0` 失败审计
+  （只记条件码）；不写转出、不放宽阈值。
+- 满足后在复苏记录行锁内：写 append-only 转出留痕（去向/SBAR/达标快照）→ 置 DISCHARGED 并
+  写 `discharged_at`（服务端时间）；重复转出 409，转出后不可再评估 409。
+- **未处理严重告警是否阻断转出**属临床规则，本期**未实现**（Q-3），不得据此认为“已排除风险”。
+
+### 15.5 不可变与并发（V18 触发器）
+
+- `pacu_assessment` / `pacu_discharge`：UPDATE/DELETE/TRUNCATE 一律 55000（append-only）。
+- `pacu_assessment` BEFORE INSERT：父记录已 `DISCHARGED` 时拒绝新增（55000）。
+- `pacu_record` 守卫：身份列与入室信息不可改、`DISCHARGED` 为终态（`READY→MONITORING`
+  回落待临床确认，§15.9 Q-8）、`discharged_at` 写一次且必须与 `DISCHARGED` 同置、`version`
+  只增、DELETE/TRUNCATE 拒绝（55000）。
+- 并发：入室靠部分唯一索引 → 409；评估/转出用 `WHERE id=? AND version=? AND status<>'DISCHARGED'`
+  条件更新，0 行即 409（不静默覆盖）。
+- 运行账号不得拥有 DDL 权限（否则可 DISABLE TRIGGER 绕过，见 `docs/db/README.md` §5.3）。
+
+### 15.6 审计与无 PHI
+
+| 动作 | 资源 | detail 白名单 |
+|---|---|---|
+| `PACU_ADMIT` | `PACU_RECORD` / 复苏记录标识 | pacuId/recordId/status/admittedAt/aldreteThreshold |
+| `PACU_ASSESS` | `PACU_RECORD` / 复苏记录标识 | pacuId/recordId/assessmentId/五项分值/aldreteTotal/threshold/status |
+| `PACU_DISCHARGE` | `PACU_RECORD` / 复苏记录标识 | pacuId/recordId/dischargeId/destination/aldreteTotal/threshold/latestAssessmentId/handoverSections |
+
+不含患者姓名/证件号/住院号/手机号，**不含 SBAR 交接原文与评估备注原文**；冲突/未达标路径以
+独立事务写 `result=0`（只含拒绝码与未满足条件码）。SBAR 与备注只落库、授权用户可见。
+
+### 15.7 配置
+
+```yaml
+anesop:
+  m2:
+    pacu:
+      # Aldrete 转出阈值（0–10）。院方阈值【待确认】，默认 9 仅为演示口径。
+      aldrete-threshold: ${ANESOP_M2_PACU_ALDRETE_THRESHOLD:9}
+```
+
+时间容差复用 `anesop.m2.record.time-tolerance-seconds`（默认 600s）。阈值越界启动即失败
+（fail-closed），不会静默放宽转出条件。
+
+### 15.8 测试
+
+- `AldreteCalculatorTest`（4）：总分边界 0/10、单项 0/2 与越界拒绝、阈值含等于判定。
+- `PacuServiceImplTest`（29）：入室时间窗/未开始 409/不可见 422/重复入室 409/唯一键并发 409、
+  入室必填与物理范围 400、Aldrete 服务端计算与 READY/MONITORING 推进、单项缺项/越界 400、
+  评估时间窗 400、**评估时间早于上一条 400**、**状态推进以 latest 而非本次提交分值**、
+  已转出评估 409、备注超长 400、版本冲突 409、转出未评估/未达阈值 409（条件码）、转出成功
+  快照与审计、SBAR/去向/确认 400、重复转出 409、越界 404、列表 403。
+- `PacuRecoveryApiIntegrationTest`（5，真实嵌入式 PG16）：入室→9 分/10 分评估→转出（快照/
+  SBAR/阈值）、**评估时间早于上一条 400**、转出后再评估 409、重复转出 409、append-only 55000
+  （评估/转出/复苏记录）、转出后直插评估 55000、审计 4 条成功且 detail 无 PHI；未评估/8 分
+  转出 409 与 result=0 审计；入室/评估字段 400、重复入室 409、非法标识 404；权限 403 与
+  跨科室 404/403/422；V18 结构/触发器/权限/注释；总分≠五项之和、单项越界、转出时间未同置、
+  重复未转出记录由 DB 拒绝。
+- 前端 `PacuView.spec.ts`（5）：空态入室（体征不预填、缺项不可提交）、**Aldrete 未选分项
+  不可提交/显式选择后提交**、转出 SBAR 与达标确认（展示服务端 latest 评估）、阈值不足 409
+  展示服务端条件；`RecordView.spec.ts` 覆盖记录页 PACU 入口按 `m2:pacu:read` 显示/隐藏。
+
+### 15.9 局限与 Q 登记（只登记不改实现）
+
+1. **Aldrete 转出阈值默认 9 为演示口径，院方阈值【待确认】**（Q-1）；阈值变更需临床顾问确认，
+   建议同时走配置审批并记录变更依据。
+2. 入室意识/气道/转出去向枚举均为演示口径（Q-4），需麻醉科/护理部确认院方字典。
+3. 未处理严重告警是否阻断转出（Q-3）未实现；当前只有 Aldrete 阈值与 SBAR/确认校验。
+4. PACU 专职护士（`SYS_PACU_NURSE`）未在 V2 种子落库，权限暂授麻醉医师/麻醉护士/
+   系统管理员（Q-2）。
+5. 入室信息写入后不可改（只可重新入室）；是否需要“入室信息更正（带原因）”待临床确认。
+6. 评估/转出未与麻醉记录锁单（§14）联动：锁单后仍可记录 PACU 复苏（PACU 属术后独立阶段，
+   不进麻醉记录单修订快照，Q-5）。
+7. 无 PACU 床位/转出排队、无接收科室确认回执；与 M1 排程/病房衔接仅以记录单台次为纽带
+   （Q-6）。
+8. **转出前 N 分钟时效窗未实现**（Q-7）：当前取任意最近一次 Aldrete 评估，不校验评估距转出
+   的时间间隔；是否要求“转出前 N 分钟内重新评估”待临床确认。
+9. **READY→MONITORING 回落**当前允许（最新评估低于阈值时回落），是否允许由临床确认（Q-8）；
+   文档统一表述为“DISCHARGED 终态，READY 可回 MONITORING 待确认”，不再笼统写“状态只进不退”。
+10. **入室体征必须项**：前端要求 SBP/DBP/HR/SpO₂/RR/TEMP 六项显式录入（不预填），但契约
+    `PacuVitalSigns` 与服务端仍按“可缺项、只校验已提供值”实现；是否改为服务端强制必填待
+    临床确认（Q-9）。
+
+| 编号 | 事项 | 当前实现 | 待确认点 / 决策人 |
+|---|---|---|---|
+| Q-1 | Aldrete 转出阈值 | 默认 9（配置项，可 0–10） | 院方阈值与“是否按年龄/术式分层”由麻醉科/医务处确认 |
+| Q-2 | PACU 护士权限 | `m2:pacu:read|write` 授 3 个角色，未含独立 PACU 角色 | 是否新增 `SYS_PACU_NURSE` 并单独授权（护理部/M0） |
+| Q-3 | 未处理严重告警阻断转出 | 未实现 | 是否要求 CRITICAL 未处置告警阻断转出（麻醉科/M3-M2-02 联动） |
+| Q-4 | 意识/气道/去向枚举 | ALERT/DROWSY/SEDATED/UNRESPONSIVE；NATURAL…TRACHEOSTOMY；WARD/ICU/HDU/DAY_SURGERY/HOME | 院方字典与是否允许“其他/自定义”（麻醉科/护理部/信息科） |
+| Q-5 | 锁单与 PACU 关系 | PACU 不参与麻醉记录修订快照 | 锁单后 PACU 是否允许继续记录（当前允许）由医务处确认 |
+| Q-6 | 病房交接回执 | 无 | 是否需接收科室签收/床位预约（M1/M4 衔接） |
+| Q-7 | 转出前评估时效窗 | 未实现（取最近一次评估，不限制间隔） | 是否要求转出前 N 分钟内重新评估，N 由麻醉科/医务处确认 |
+| Q-8 | READY→MONITORING 回落 | 允许（最新评估低于阈值时回落） | READY 后是否只能维持/转出、不得回退 MONITORING（麻醉科/医务处） |
+| Q-9 | 入室体征必须项 | 前端要求六项关键体征；契约/服务端允许缺项 | 哪些体征强制必填、缺项是否阻断入室（麻醉科/护理部/信息科） |

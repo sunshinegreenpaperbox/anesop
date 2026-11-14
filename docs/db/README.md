@@ -10,7 +10,9 @@
 > + V13（M2 麻醉记录单/时间轴/用药/出入量，M3-M2-01）
 > + V14（M2 设备登记与采集接入，M3-M8-01）
 > + V15（M2 术中预警规则/告警留痕/抢救记录，M3-M2-02）
-> + V16（M2 预警实时触发水位/记录术间快照/规则待确认/抢救人员留痕，M3-M2-02 评审修复）；
+> + V16（M2 预警实时触发水位/记录术间快照/规则待确认/抢救人员留痕，M3-M2-02 评审修复）
+> + V17（M2 锁单/修订/CA 占位签名，M3-M2-03）
+> + V18（M2 复苏记录/Aldrete 评估/转出交接，M3-M10-01）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -36,6 +38,8 @@ db/
 │   ├── V14__m2_device_registry.sql         # m2_anes 设备登记/上报幂等日志 + m2:device:*（M3-M8-01）
 │   ├── V15__m2_alert_rescue.sql            # m2_anes 预警规则/告警/抢救记录 + m2:alert:* / m2:rescue:write（M3-M2-02）
 │   ├── V16__m2_alert_realtime_watermark_rescue_leader.sql # 记录术间快照/评估水位/规则待确认/抢救人员（M3-M2-02 评审修复）
+│   ├── V17__m2_record_lock_revision.sql    # m2_anes 修订版本/锁单留痕 + m2:record:lock/revise（M3-M2-03）
+│   ├── V18__m2_pacu_recovery.sql           # m2_anes 复苏记录/Aldrete 评估/转出 + m2:pacu:*（M3-M10-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -57,7 +61,7 @@ db/
 |---|---|---|
 | `m0_platform` | M0 公共支撑 | 用户、角色、权限、审计、字典（本基线） |
 | `m1_sched` | M1 手术排程 | 手术申请、排程/台次、术间 |
-| `m2_anes` | M2 麻醉记录 | 术前访视与评估（V10）、设备采集体征（V4）；记录单/事件/用药由后续版本扩展 |
+| `m2_anes` | M2 麻醉记录 | 术前访视（V10）、知情同意/三方核查（V11）、记录单/事件/用药/出入量（V13）、设备登记与体征（V4/V14）、预警/抢救（V15/V16）、锁单/修订（V17）、复苏记录/Aldrete/转出（V18） |
 | `m3_staff` | M3 人员资质 | 人员档案、授权 |
 | `m4_supply` | M4 耗材追溯 | 批次、消耗 |
 | `m5_drug` | M5 药品管理 | 麻精台账、处方 |
@@ -439,6 +443,40 @@ lock_signature_ref/lock_signature_hash/lock_ca_status`），`status` 取值扩�
   CHECK 失败（旧注释只回退 REVISED 会导致 LOCKED 行违反状态约束，已修正）。生产完整回滚
   演练（含备份恢复与临床归档）待 staging 具备 Docker/PG 后按 §4 流程执行并由 DBA 签字；
   未完成前不得对生产执行 V17 回滚。
+
+
+### 4.13 V18（M2 复苏记录、Aldrete 评估与转出交接）回滚说明
+
+V18 属 expand 段：新增 `m2_anes.pacu_record`（一条麻醉记录单同时最多一条未转出，部分唯一索引
+`uk_pacu_record_active`）、`m2_anes.pacu_assessment`（append-only Aldrete 评估，五项 0–2、
+总分 0–10 且等于五项之和）、`m2_anes.pacu_discharge`（每条复苏记录最多一条 append-only 转出，
+`pacu_id` 唯一）；触发器：评估/转出 append-only（55000）、父记录转出后禁新增评估（55000）、
+复苏记录守卫（身份/入室信息不可改、`DISCHARGED` 终态、`READY→MONITORING` 回落待确认 Q-8、
+转出时间写一次且与 DISCHARGED 同置、DELETE/TRUNCATE 拒绝）；权限点 `m2:pacu:read`、
+`m2:pacu:write`（授 SYS_ADMIN/SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）。不改写
+V1–V17 既有列与数据。
+
+- **应用回滚**：下线 `/v1/anesthesia/pacu-records*` 全部端点与前端 PACU 页面入口
+  （记录页“复苏记录（PACU）”按钮）；麻醉记录单仍可读写，新增表保留在库中不影响旧代码；
+  PACU 审计（`PACU_ADMIT/PACU_ASSESS/PACU_DISCHARGE`）不得随回滚删除。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份 + 临床归档，顺序不可颠倒）：
+  `DROP TRIGGER trg_pacu_assessment_discharged_insert ON m2_anes.pacu_assessment` →
+  `DROP FUNCTION fn_pacu_assessment_guard()` →
+  `DROP TRIGGER trg_pacu_assessment_no_update/no_delete/no_truncate` →
+  `DROP TABLE m2_anes.pacu_discharge`（先 `pg_dump -t` 导出并校验行数）→
+  `DROP FUNCTION fn_pacu_discharge_append_only()` →
+  `DROP TABLE m2_anes.pacu_assessment` →
+  `DROP FUNCTION fn_pacu_assessment_append_only()` →
+  `DROP TRIGGER trg_pacu_record_guard_update/no_delete/no_truncate ON m2_anes.pacu_record` →
+  `DROP FUNCTION fn_pacu_record_guard()` / `fn_pacu_record_no_truncate()` →
+  `DROP TABLE m2_anes.pacu_record` →
+  删除权限点与角色授权（先 `DELETE FROM sys_role_permission`，再 `DELETE FROM sys_permission`）。
+- **重放**：修复后重新执行 V18 会重建空表与触发器；已归档的评估/转出**不得直接回灌**
+  （append-only 语义），如需恢复须按原标识/原时间重新录入并在备注说明补录原因（须临床确认）。
+- **临床风险**：回滚窗口内“转出质检”能力缺失，须通知 PACU 恢复纸质/其他系统记录；
+  已转出与评估留痕属临床证据，回滚前必须归档到离线审计库并由医务处/麻醉科签字。
+- **运行时权限**：append-only 与状态守卫依赖触发器，应用运行账号不得拥有 DDL 权限
+  （见 §5.3）。
 
 ## 5. 运行方式
 

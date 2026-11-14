@@ -27,7 +27,12 @@ info:
     全量快照、与上一版差异摘要）；锁单与修订均生成 CA 占位签名（EXT-05：
     caStatus=SIMULATED，signatureHash 为规范化记录 JSON 的 SHA-256）。所有示例仍为
     SYNTHETIC 合成数据。
-  version: 0.8.1
+    0.9.0（additive，M3-M10-01）新增复苏记录（PACU）：入室记录（生命体征/意识/疼痛/恶心/气道）、
+    Aldrete 五项评分（activity/respiration/circulation/consciousness/oxygenation 各 0–2，服务端
+    计算总分 0–10，append-only 时间序列）、转出（去向 + SBAR 交接 + 达标确认；服务端校验
+    Aldrete ≥ 阈值与必填项，未达标 409；转出后不可再评估）。Aldrete 转出阈值【待确认】，
+    默认 9，由 `anesop.m2.pacu.aldrete-threshold` 配置。所有示例仍为 SYNTHETIC 合成数据。
+  version: 0.9.0
   contact:
     name: ANESOP 项目组
   license:
@@ -3236,6 +3241,432 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/pacu-records:
+    get:
+      operationId: listPacuRecords
+      tags:
+        - 麻醉记录
+      summary: 按麻醉记录单查询复苏记录
+      description: |
+        按麻醉记录单查询 PACU 复苏记录（创建时间倒序）。数据范围复用记录单/台次可见性：
+        记录单不可见时按集合语义返回 403（不返回空列表，不泄露存在性）。
+        `recordId` 缺失或非 UUID 字符串返回 400（字段级校验）。
+      parameters:
+        - name: recordId
+          in: query
+          description: 麻醉记录单标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 该记录单的复苏记录列表（0/1 条；转出后可再次入室时返回多条）。'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PacuRecordList'
+              example:
+                items:
+                  - pacuId: '19000000-0000-4000-8000-000000000001'
+                    recordId: '12000000-0000-4000-8000-000000000001'
+                    patientId: '50000000-0000-4000-8000-000000000001'
+                    admittedAt: '2026-12-01T11:05:00+08:00'
+                    dischargedAt: null
+                    status: MONITORING
+                    vitalSigns:
+                      systolicBp: 118
+                      diastolicBp: 72
+                      heartRate: 82
+                      spo2: 97
+                      respiratoryRate: 14
+                      temperature: 36.5
+                    consciousness: ALERT
+                    painScore: 3
+                    nausea: false
+                    airway: NATURAL
+                    latestAssessmentId: '1a000000-0000-4000-8000-000000000002'
+                    latestAssessmentAt: '2026-12-01T11:30:00+08:00'
+                    latestAldreteTotal: 8
+                    aldreteThreshold: 9
+                    createdAt: '2026-12-01T11:05:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000002'
+                    updatedAt: '2026-12-01T11:30:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000002'
+                    version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: admitPacuRecord
+      tags:
+        - 麻醉记录
+      summary: 入室（创建复苏记录）
+      description: |
+        为已开始的麻醉记录单创建 PACU 复苏记录：记录入室时间、生命体征、意识、疼痛评分、
+        恶心与气道。服务端校验记录单可见、状态为 ONGOING/LOCKED/REVISED 且已记录麻醉开始
+        （DRAFT 或未开始 409）；入室时间不得早于记录开始时间（400），不得晚于服务端当前时间
+        + 容差（400）；同一记录单同时最多一条未转出的复苏记录（409，转出后可再次入室）。
+        患者标识由记录单解析，不信任客户端。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePacuRecordRequest'
+            example:
+              recordId: '12000000-0000-4000-8000-000000000001'
+              admittedAt: '2026-12-01T11:05:00+08:00'
+              vitalSigns:
+                systolicBp: 118
+                diastolicBp: 72
+                heartRate: 82
+                spo2: 97
+                respiratoryRate: 14
+                temperature: 36.5
+              consciousness: ALERT
+              painScore: 3
+              nausea: false
+              airway: NATURAL
+      responses:
+        '201':
+          description: 已创建复苏记录（ADMITTED）。'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PacuRecord'
+              example:
+                pacuId: '19000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                admittedAt: '2026-12-01T11:05:00+08:00'
+                dischargedAt: null
+                status: ADMITTED
+                vitalSigns:
+                  systolicBp: 118
+                  diastolicBp: 72
+                  heartRate: 82
+                  spo2: 97
+                  respiratoryRate: 14
+                  temperature: 36.5
+                consciousness: ALERT
+                painScore: 3
+                nausea: false
+                airway: NATURAL
+                latestAssessmentId: null
+                latestAssessmentAt: null
+                latestAldreteTotal: null
+                aldreteThreshold: 9
+                createdAt: '2026-12-01T11:05:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+                updatedAt: '2026-12-01T11:05:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000002'
+                version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/anesthesia/pacu-records/{pacuId}:
+    get:
+      operationId: getPacuRecord
+      tags:
+        - 麻醉记录
+      summary: 查询复苏记录详情
+      description: |
+        返回复苏记录（入室信息、当前状态、最近一次 Aldrete 总分与转出状态）。
+        不存在或超出数据范围统一 404（不泄露存在性）。
+      parameters:
+        - name: pacuId
+          in: path
+          description: 复苏记录标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 复苏记录详情。'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PacuRecord'
+              example:
+                pacuId: '19000000-0000-4000-8000-000000000001'
+                recordId: '12000000-0000-4000-8000-000000000001'
+                patientId: '50000000-0000-4000-8000-000000000001'
+                admittedAt: '2026-12-01T11:05:00+08:00'
+                dischargedAt: null
+                status: MONITORING
+                vitalSigns:
+                  systolicBp: 118
+                  diastolicBp: 72
+                  heartRate: 82
+                  spo2: 97
+                  respiratoryRate: 14
+                  temperature: 36.5
+                consciousness: ALERT
+                painScore: 3
+                nausea: false
+                airway: NATURAL
+                latestAssessmentId: '1a000000-0000-4000-8000-000000000002'
+                latestAssessmentAt: '2026-12-01T11:30:00+08:00'
+                latestAldreteTotal: 8
+                aldreteThreshold: 9
+                createdAt: '2026-12-01T11:05:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+                updatedAt: '2026-12-01T11:30:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000002'
+                version: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/anesthesia/pacu-records/{pacuId}/assessments:
+    get:
+      operationId: listPacuAssessments
+      tags:
+        - 麻醉记录
+      summary: 查询 Aldrete 评估时间序列
+      description: |
+        返回该复苏记录的 Aldrete 评估（按 assessedAt 升序，供评分曲线与达标判定展示）。
+        评估 append-only：不提供修改/删除接口，更正只能新增一条评估。
+      parameters:
+        - name: pacuId
+          in: path
+          description: 复苏记录标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 评估时间序列（assessedAt 升序）。'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PacuAssessmentList'
+              example:
+                items:
+                  - assessmentId: '1a000000-0000-4000-8000-000000000001'
+                    pacuId: '19000000-0000-4000-8000-000000000001'
+                    assessedAt: '2026-12-01T11:15:00+08:00'
+                    activity: 1
+                    respiration: 2
+                    circulation: 2
+                    consciousness: 2
+                    oxygenation: 1
+                    aldreteTotal: 8
+                    notes: 演示：入室 10 分钟评估（合成数据）
+                    createdAt: '2026-12-01T11:15:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000002'
+                  - assessmentId: '1a000000-0000-4000-8000-000000000002'
+                    pacuId: '19000000-0000-4000-8000-000000000001'
+                    assessedAt: '2026-12-01T11:30:00+08:00'
+                    activity: 2
+                    respiration: 2
+                    circulation: 2
+                    consciousness: 2
+                    oxygenation: 2
+                    aldreteTotal: 10
+                    notes: null
+                    createdAt: '2026-12-01T11:30:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000002'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: recordPacuAssessment
+      tags:
+        - 麻醉记录
+      summary: 记录 Aldrete 评估（append-only）
+      description: |
+        记录一次 Aldrete 评估：activity/respiration/circulation/consciousness/oxygenation
+        各 0–2 分（越界/缺项 400），总分由**服务端**计算（0–10，不接受客户端总分）。
+        评估 append-only（数据库触发器拒绝 UPDATE/DELETE/TRUNCATE，55000），按 assessedAt
+        形成时间序列；已转出（DISCHARGED）后再评估返回 409。评估时间不得早于入室时间、
+        不得早于上一条评估、不得晚于服务端当前时间 + 容差（400）。总分达到阈值时状态推进为
+        READY，否则 MONITORING（状态推进以 latest 评估为准；READY→MONITORING 是否允许待临床
+        确认，见 docs/modules/m2/README.md §15.9 Q-8）。
+      parameters:
+        - name: pacuId
+          in: path
+          description: 复苏记录标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordPacuAssessmentRequest'
+            example:
+              assessedAt: '2026-12-01T11:30:00+08:00'
+              activity: 2
+              respiration: 2
+              circulation: 2
+              consciousness: 2
+              oxygenation: 2
+              notes: 演示：转出前评估（合成数据）
+      responses:
+        '201':
+          description: 已记录评估（总分由服务端计算）。'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PacuAssessment'
+              example:
+                assessmentId: '1a000000-0000-4000-8000-000000000002'
+                pacuId: '19000000-0000-4000-8000-000000000001'
+                assessedAt: '2026-12-01T11:30:00+08:00'
+                activity: 2
+                respiration: 2
+                circulation: 2
+                consciousness: 2
+                oxygenation: 2
+                aldreteTotal: 10
+                notes: 演示：转出前评估（合成数据）
+                createdAt: '2026-12-01T11:30:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/anesthesia/pacu-records/{pacuId}/discharge:
+    get:
+      operationId: getPacuDischarge
+      tags:
+        - 麻醉记录
+      summary: 查询转出记录
+      description: |
+        返回转出留痕（转出时间、去向、SBAR 交接、转出时 Aldrete 达标快照）。
+        未转出时返回 404（不返回空对象，避免与“已转出但无交接”混淆）。
+      parameters:
+        - name: pacuId
+          in: path
+          description: 复苏记录标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 转出记录（append-only，一次）。'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PacuDischarge'
+              example:
+                dischargeId: '1b000000-0000-4000-8000-000000000001'
+                pacuId: '19000000-0000-4000-8000-000000000001'
+                dischargedAt: '2026-12-01T12:10:00+08:00'
+                destination: WARD
+                handover:
+                  situation: 演示：全麻腹腔镜胆囊切除术后，PACU 观察 65 分钟（合成数据）
+                  background: 演示：ASA II，术中生命体征平稳（合成数据）
+                  assessment: 演示：Aldrete 10 分，无恶心呕吐，疼痛 NRS 2（合成数据）
+                  recommendation: 演示：返病房继续监测，按需镇痛（合成数据）
+                criteria:
+                  aldreteThreshold: 9
+                  aldreteTotal: 10
+                  meetsThreshold: true
+                  itemsComplete: true
+                  latestAssessmentId: '1a000000-0000-4000-8000-000000000002'
+                  latestAssessmentAt: '2026-12-01T11:30:00+08:00'
+                createdAt: '2026-12-01T12:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: dischargePacuRecord
+      tags:
+        - 麻醉记录
+      summary: 转出（校验 Aldrete 阈值与交接）
+      description: |
+        转出复苏记录：填写去向（`destination`）与 SBAR 交接（`handover`），并显式确认已核对
+        转出条件（`criteriaConfirmed=true`，缺省/false 返回 400）。服务端校验前置条件：
+        存在最近一次 Aldrete 评估且**五项齐全**、总分 ≥ 转出阈值
+        （`anesop.m2.pacu.aldrete-threshold`，默认 9，**院方阈值【待确认】**）；未满足返回
+        409，details[] 逐项列出未满足条件（field=条件码）。转出后状态置 DISCHARGED，
+        不可再次转出、不可再记录评估（409）；转出记录 append-only，一次一条。
+        转出时间取服务端当前时间；SBAR 四段必填（缺失/超长 400）。
+      parameters:
+        - name: pacuId
+          in: path
+          description: 复苏记录标识（UUID 字符串）。
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PacuDischargeRequest'
+            example:
+              destination: WARD
+              criteriaConfirmed: true
+              handover:
+                situation: 演示：全麻腹腔镜胆囊切除术后，PACU 观察 65 分钟（合成数据）
+                background: 演示：ASA II，术中生命体征平稳（合成数据）
+                assessment: 演示：Aldrete 10 分，无恶心呕吐，疼痛 NRS 2（合成数据）
+                recommendation: 演示：返病房继续监测，按需镇痛（合成数据）
+      responses:
+        '201':
+          description: 转出成功（状态 DISCHARGED，写入 append-only 转出留痕）。'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PacuDischarge'
+              example:
+                dischargeId: '1b000000-0000-4000-8000-000000000001'
+                pacuId: '19000000-0000-4000-8000-000000000001'
+                dischargedAt: '2026-12-01T12:10:00+08:00'
+                destination: WARD
+                handover:
+                  situation: 演示：全麻腹腔镜胆囊切除术后，PACU 观察 65 分钟（合成数据）
+                  background: 演示：ASA II，术中生命体征平稳（合成数据）
+                  assessment: 演示：Aldrete 10 分，无恶心呕吐，疼痛 NRS 2（合成数据）
+                  recommendation: 演示：返病房继续监测，按需镇痛（合成数据）
+                criteria:
+                  aldreteThreshold: 9
+                  aldreteTotal: 10
+                  meetsThreshold: true
+                  itemsComplete: true
+                  latestAssessmentId: '1a000000-0000-4000-8000-000000000002'
+                  latestAssessmentAt: '2026-12-01T11:30:00+08:00'
+                createdAt: '2026-12-01T12:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000002'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 components:
   securitySchemes:
     bearerAuth:
@@ -6405,3 +6836,477 @@ components:
             - PARTIAL
             - FAILED
             - UNKNOWN
+    PacuVitalSigns:
+      type: object
+      description: |
+        入室生命体征（可缺项，服务端只做物理范围校验，不做临床阈值判定【待确认】）。
+        单位：血压 mmHg、心率 bpm、SpO2 %、呼吸次/分、体温 ℃。
+      properties:
+        systolicBp:
+          type: integer
+          description: 收缩压（mmHg）。
+          minimum: 40
+          maximum: 300
+        diastolicBp:
+          type: integer
+          description: 舒张压（mmHg）。
+          minimum: 20
+          maximum: 200
+        heartRate:
+          type: integer
+          description: 心率（bpm）。
+          minimum: 20
+          maximum: 250
+        spo2:
+          type: integer
+          description: 脉搏血氧饱和度（%）。
+          minimum: 50
+          maximum: 100
+        respiratoryRate:
+          type: integer
+          description: 呼吸频率（次/分）。
+          minimum: 4
+          maximum: 60
+        temperature:
+          type: number
+          description: 体温（℃）。
+          minimum: 30
+          maximum: 45
+    CreatePacuRecordRequest:
+      type: object
+      description: |
+        入室（创建复苏记录）请求。recordId 为已开始的麻醉记录单；患者标识由记录单解析，
+        不信任客户端。入室时间不得早于记录开始时间、不得晚于服务端当前时间 + 容差。
+      required:
+        - recordId
+        - admittedAt
+        - vitalSigns
+        - consciousness
+        - painScore
+        - nausea
+        - airway
+      properties:
+        recordId:
+          type: string
+          description: 麻醉记录单标识（必须已开始且可见，否则 422/409）。
+        admittedAt:
+          type: string
+          format: date-time
+          description: 入 PACU 时间（不得早于记录开始时间，不得晚于服务端当前时间 + 容差）。
+        vitalSigns:
+          $ref: '#/components/schemas/PacuVitalSigns'
+        consciousness:
+          type: string
+          description: 入室意识状态（枚举为演示口径【待确认】）。
+          enum:
+            - ALERT
+            - DROWSY
+            - SEDATED
+            - UNRESPONSIVE
+        painScore:
+          type: integer
+          description: 入室疼痛评分 NRS 0–10（量表口径【待确认】）。
+          minimum: 0
+          maximum: 10
+        nausea:
+          type: boolean
+          description: 入室是否存在恶心/呕吐。
+        airway:
+          type: string
+          description: 入室气道方式（枚举为演示口径【待确认】）。
+          enum:
+            - NATURAL
+            - ORAL_AIRWAY
+            - NASAL_AIRWAY
+            - LARYNGEAL_MASK
+            - ENDOTRACHEAL
+            - TRACHEOSTOMY
+    PacuRecord:
+      type: object
+      description: |
+        PACU 复苏记录（入室信息与当前状态）。`latest*` 字段是最近一次 Aldrete 评估的只读投影，
+        便于列表/页面展示；完整时间序列见 GET /pacu-records/{pacuId}/assessments。
+      required:
+        - pacuId
+        - recordId
+        - patientId
+        - admittedAt
+        - status
+        - vitalSigns
+        - consciousness
+        - painScore
+        - nausea
+        - airway
+        - aldreteThreshold
+        - createdAt
+        - createdBy
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        pacuId:
+          type: string
+          description: 复苏记录标识。
+        recordId:
+          type: string
+          description: 所属麻醉记录单标识。
+        patientId:
+          type: string
+          description: 患者标识（由记录单解析，不返回姓名/证件号/住院号明文）。
+        admittedAt:
+          type: string
+          format: date-time
+          description: 入 PACU 时间。
+        dischargedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: 转出时间；未转出为 null。
+        status:
+          type: string
+          description: |
+            复苏状态：ADMITTED=已入室，MONITORING=监测中（最近评估未达阈值），
+            READY=已达转出阈值，DISCHARGED=已转出（终态）。状态推进以 latest 评估为准；
+            READY 是否允许回落 MONITORING 待临床确认（§15.9 Q-8）。
+          enum:
+            - ADMITTED
+            - MONITORING
+            - READY
+            - DISCHARGED
+        vitalSigns:
+          $ref: '#/components/schemas/PacuVitalSigns'
+        consciousness:
+          type: string
+          description: 入室意识状态（枚举为演示口径【待确认】）。
+          enum:
+            - ALERT
+            - DROWSY
+            - SEDATED
+            - UNRESPONSIVE
+        painScore:
+          type: integer
+          description: 入室疼痛评分 NRS 0–10。
+          minimum: 0
+          maximum: 10
+        nausea:
+          type: boolean
+          description: 入室是否存在恶心/呕吐。
+        airway:
+          type: string
+          description: 入室气道方式（枚举为演示口径【待确认】）。
+          enum:
+            - NATURAL
+            - ORAL_AIRWAY
+            - NASAL_AIRWAY
+            - LARYNGEAL_MASK
+            - ENDOTRACHEAL
+            - TRACHEOSTOMY
+        latestAssessmentId:
+          type:
+            - string
+            - 'null'
+          description: 最近一次评估标识；尚未评估为 null。
+        latestAssessmentAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: 最近一次评估时间；尚未评估为 null。
+        latestAldreteTotal:
+          type:
+            - integer
+            - 'null'
+          description: 最近一次 Aldrete 总分（0–10，服务端计算）；尚未评估为 null。
+          minimum: 0
+          maximum: 10
+        aldreteThreshold:
+          type: integer
+          description: 当前转出阈值（服务端配置 `anesop.m2.pacu.aldrete-threshold`，默认 9，【待确认】）。
+          minimum: 0
+          maximum: 10
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号。
+          minimum: 1
+    PacuRecordList:
+      type: object
+      description: 复苏记录列表（按创建时间倒序）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 复苏记录列表。
+          items:
+            $ref: '#/components/schemas/PacuRecord'
+    RecordPacuAssessmentRequest:
+      type: object
+      description: |
+        Aldrete 评估请求（分项定义按 1995 修订版原文校准）。五项各 0–2 分，缺项/越界 400；
+        **总分由服务端计算**（不接受客户端总分）。评估 append-only：更正只能新增一条评估；
+        `assessedAt` 不得早于入室时间，也不得早于上一条评估（否则 400），latest 按
+        (assessed_at, created_at, id) 判定。
+      required:
+        - assessedAt
+        - activity
+        - respiration
+        - circulation
+        - consciousness
+        - oxygenation
+      properties:
+        assessedAt:
+          type: string
+          format: date-time
+          description: 评估时间（不得早于入室时间与上一条评估，不得晚于服务端当前时间 + 容差）。
+        activity:
+          type: integer
+          description: 活动能力（0=不能活动肢体，1=可活动两个肢体，2=可活动四个肢体；自主或遵嘱）。
+          minimum: 0
+          maximum: 2
+        respiration:
+          type: integer
+          description: 呼吸（0=呼吸暂停，1=呼吸困难或呼吸受限，2=能深呼吸并有效咳嗽）。
+          minimum: 0
+          maximum: 2
+        circulation:
+          type: integer
+          description: 循环（0=血压偏离术前 >50%，1=偏离 20%–50%，2=偏离 <20%）。
+          minimum: 0
+          maximum: 2
+        consciousness:
+          type: integer
+          description: 意识（0=无反应，1=呼之可醒，2=完全清醒）。
+          minimum: 0
+          maximum: 2
+        oxygenation:
+          type: integer
+          description: 氧合（0=吸氧下 SpO2 <90%，1=需吸氧维持 SpO2 >90%，2=空气下 SpO2 >92%）。
+          minimum: 0
+          maximum: 2
+        notes:
+          type: string
+          description: 评估备注（≤500 字符；只落库/授权用户可见，不写日志与审计原文）。
+          maxLength: 500
+    PacuAssessment:
+      type: object
+      description: Aldrete 评估（append-only，时间序列）。
+      required:
+        - assessmentId
+        - pacuId
+        - assessedAt
+        - activity
+        - respiration
+        - circulation
+        - consciousness
+        - oxygenation
+        - aldreteTotal
+        - createdAt
+        - createdBy
+      properties:
+        assessmentId:
+          type: string
+          description: 评估标识。
+        pacuId:
+          type: string
+          description: 所属复苏记录标识。
+        assessedAt:
+          type: string
+          format: date-time
+          description: 评估时间。
+        activity:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: 活动能力（0=不能活动肢体，1=可活动两个肢体，2=可活动四个肢体）。
+        respiration:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: 呼吸（0=呼吸暂停，1=呼吸困难或呼吸受限，2=能深呼吸并有效咳嗽）。
+        circulation:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: 循环（0=偏离 >50%，1=偏离 20%–50%，2=偏离 <20%）。
+        consciousness:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: 意识（0=无反应，1=呼之可醒，2=完全清醒）。
+        oxygenation:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: 氧合（0=吸氧下 SpO2 <90%，1=需吸氧维持 >90%，2=空气下 >92%）。
+        aldreteTotal:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: 总分（服务端计算：五项之和，0–10）。
+        notes:
+          type:
+            - string
+            - 'null'
+          description: 评估备注。
+          maxLength: 500
+        createdAt:
+          type: string
+          format: date-time
+          description: 录入时间（服务端时间）。
+        createdBy:
+          type: string
+          description: 录入人用户标识。
+    PacuAssessmentList:
+      type: object
+      description: Aldrete 评估时间序列（assessedAt 升序）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 评估列表（assessedAt 升序，同刻按录入时间、标识升序）。
+          items:
+            $ref: '#/components/schemas/PacuAssessment'
+    PacuHandover:
+      type: object
+      description: |
+        SBAR 交接（Situation/Background/Assessment/Recommendation 四段必填）。
+        文本只落库与授权用户可见，不写入日志/审计原文；不得包含患者直接标识以外的隐私信息。
+      required:
+        - situation
+        - background
+        - assessment
+        - recommendation
+      properties:
+        situation:
+          type: string
+          description: S（现状）：当前病情与管道/监护要点。
+          maxLength: 2000
+        background:
+          type: string
+          description: B（背景）：术式、麻醉方式与重要既往史摘要。
+          maxLength: 2000
+        assessment:
+          type: string
+          description: A（评估）：Aldrete 评分、疼痛、恶心与风险判断。
+          maxLength: 2000
+        recommendation:
+          type: string
+          description: R（建议）：接收科室需继续执行的监测与处置。
+          maxLength: 2000
+    PacuDischargeCriteria:
+      type: object
+      description: 转出时的 Aldrete 达标快照（服务端计算，随转出记录冻结）。
+      required:
+        - aldreteThreshold
+        - aldreteTotal
+        - meetsThreshold
+        - itemsComplete
+        - latestAssessmentId
+        - latestAssessmentAt
+      properties:
+        aldreteThreshold:
+          type: integer
+          description: 转出阈值（配置，默认 9，【待确认】）。
+          minimum: 0
+          maximum: 10
+        aldreteTotal:
+          type: integer
+          description: 转出时最近一次评估总分。
+          minimum: 0
+          maximum: 10
+        meetsThreshold:
+          type: boolean
+          description: 总分是否达到阈值。
+        itemsComplete:
+          type: boolean
+          description: 五项是否齐全（服务端按非空校验）。
+        latestAssessmentId:
+          type: string
+          description: 达标所依据的评估标识。
+        latestAssessmentAt:
+          type: string
+          format: date-time
+          description: 达标所依据的评估时间。
+    PacuDischargeRequest:
+      type: object
+      description: |
+        转出请求。服务端校验最近一次 Aldrete 评估存在且五项齐全、总分 ≥ 阈值，否则 409
+        （details[] 逐项列出条件码）；`criteriaConfirmed` 缺省/false 返回 400（不能替代校验）。
+      required:
+        - destination
+        - handover
+        - criteriaConfirmed
+      properties:
+        destination:
+          type: string
+          description: 转出去向（枚举为演示口径【待确认】）。
+          enum:
+            - WARD
+            - ICU
+            - HDU
+            - DAY_SURGERY
+            - HOME
+        handover:
+          $ref: '#/components/schemas/PacuHandover'
+        criteriaConfirmed:
+          type: boolean
+          description: 是否已逐项确认转出条件（前端二次确认）；false/缺省 400，服务端仍重新校验。
+    PacuDischarge:
+      type: object
+      description: 转出留痕（append-only，一次一条）。
+      required:
+        - dischargeId
+        - pacuId
+        - dischargedAt
+        - destination
+        - handover
+        - criteria
+        - createdAt
+        - createdBy
+      properties:
+        dischargeId:
+          type: string
+          description: 转出记录标识。
+        pacuId:
+          type: string
+          description: 所属复苏记录标识。
+        dischargedAt:
+          type: string
+          format: date-time
+          description: 转出时间（服务端时间）。
+        destination:
+          type: string
+          description: 转出去向。
+          enum:
+            - WARD
+            - ICU
+            - HDU
+            - DAY_SURGERY
+            - HOME
+        handover:
+          $ref: '#/components/schemas/PacuHandover'
+        criteria:
+          $ref: '#/components/schemas/PacuDischargeCriteria'
+        createdAt:
+          type: string
+          format: date-time
+          description: 录入时间（服务端时间）。
+        createdBy:
+          type: string
+          description: 转出操作人用户标识。
