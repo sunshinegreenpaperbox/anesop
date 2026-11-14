@@ -18,6 +18,8 @@ import RecordView from '../modules/m2/views/RecordView.vue'
 import AlertRuleConfigView from '../modules/m2/views/AlertRuleConfigView.vue'
 import PacuView from '../modules/m2/views/PacuView.vue'
 import FollowupView from '../modules/m2/views/FollowupView.vue'
+import DrugCatalogView from '../modules/m4/views/DrugCatalogView.vue'
+import NarcoticView from '../modules/m4/views/NarcoticView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -177,6 +179,18 @@ export const routes: RouteRecordRaw[] = [
         name: 'm2-alert-rules',
         component: AlertRuleConfigView,
         meta: menuMeta('/m2/alert-rules'),
+      },
+      {
+        path: 'm4/drugs',
+        name: 'm4-drugs',
+        component: DrugCatalogView,
+        meta: menuMeta('/m4/drugs'),
+      },
+      {
+        path: 'm4/narcotic',
+        name: 'm4-narcotic',
+        component: NarcoticView,
+        meta: menuMeta('/m4/narcotic'),
       },
       {
         path: 'm0/sessions',

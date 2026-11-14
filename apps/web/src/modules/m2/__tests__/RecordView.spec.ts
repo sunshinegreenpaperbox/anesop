@@ -68,6 +68,28 @@ const drug = {
   createdBy: '10000000-0000-4000-8000-000000000001',
 }
 
+function dictionaryDrug(name = '瑞芬太尼（演示）', narcotic = true) {
+  return {
+    drugId: '2a000000-0000-4000-8000-000000000003',
+    code: 'DRUG-REM-001',
+    name,
+    genericName: `${name}通用名`,
+    specification: '1mg/1ml',
+    unit: 'mg',
+    dosageForm: 'INJECTION',
+    category: 'OPIOID',
+    narcotic,
+    highRisk: false,
+    aliases: [],
+    status: 'ACTIVE' as const,
+    createdAt: '2026-11-14T08:00:00+08:00',
+    createdBy: '10000000-0000-4000-8000-000000000001',
+    updatedAt: '2026-11-14T08:00:00+08:00',
+    updatedBy: '10000000-0000-4000-8000-000000000001',
+    version: 1,
+  }
+}
+
 const fluid = {
   fluidId: '16000000-0000-4000-8000-000000000001',
   recordId: RECORD_ID,
@@ -312,6 +334,9 @@ describe('RecordView 麻醉记录单', () => {
     const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({}) as never)
     const queue = createFetchQueue([
       ...loadedResponses(),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse({ items: [dictionaryDrug()] }),
       jsonResponse(
         {
           ...drug,
@@ -335,13 +360,13 @@ describe('RecordView 麻醉记录单', () => {
     await settle()
 
     await wrapper.find('[data-testid="drug-name"]').setValue('瑞芬太尼（演示）')
-    await wrapper.find('[data-testid="drug-narcotic"] input').setValue(true)
     await wrapper.find('[data-testid="record-drug"]').trigger('click')
     await settle()
 
     expect(warning).toHaveBeenCalledTimes(1)
     expect(String(warning.mock.calls[0]?.[0])).toContain('双人核对')
-    expect(queue.calls).toHaveLength(8)
+    // 8 个初始请求 + 输入联想 + 提交前解析（缺核对人时不 POST）。
+    expect(queue.calls).toHaveLength(10)
 
     await wrapper
       .find('[data-testid="drug-second-checker-id"]')

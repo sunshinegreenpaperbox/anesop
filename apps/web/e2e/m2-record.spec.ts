@@ -98,6 +98,35 @@ test.describe('M3 麻醉记录单', () => {
     const events: Record<string, unknown>[] = []
     const fluids: Record<string, unknown>[] = []
 
+    await page.route('**/api/v1/drugs/search**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            {
+              drugId: '2a000000-0000-4000-8000-000000000003',
+              code: 'DRUG-REM-001',
+              name: '瑞芬太尼（演示）',
+              genericName: '瑞芬太尼注射液（演示）',
+              specification: '1mg/1ml',
+              unit: 'mg',
+              dosageForm: 'INJECTION',
+              category: 'OPIOID',
+              narcotic: true,
+              highRisk: false,
+              aliases: [],
+              status: 'ACTIVE',
+              createdAt: '2026-11-14T08:00:00+08:00',
+              createdBy: ANESTHESIOLOGIST.userId,
+              updatedAt: '2026-11-14T08:00:00+08:00',
+              updatedBy: ANESTHESIOLOGIST.userId,
+              version: 1,
+            },
+          ],
+        }),
+      }),
+    )
     await page.route('**/api/v1/anesthesia/records**', async (route) => {
       const request = route.request()
       const path = new URL(request.url()).pathname
@@ -239,6 +268,35 @@ test.describe('M3 麻醉记录单', () => {
     const drugs: Record<string, unknown>[] = []
     let drugPosts = 0
 
+    await page.route('**/api/v1/drugs/search**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            {
+              drugId: '2a000000-0000-4000-8000-000000000003',
+              code: 'DRUG-REM-001',
+              name: '瑞芬太尼（演示）',
+              genericName: '瑞芬太尼注射液（演示）',
+              specification: '1mg/1ml',
+              unit: 'mg',
+              dosageForm: 'INJECTION',
+              category: 'OPIOID',
+              narcotic: true,
+              highRisk: false,
+              aliases: [],
+              status: 'ACTIVE',
+              createdAt: '2026-11-14T08:00:00+08:00',
+              createdBy: ANESTHESIOLOGIST.userId,
+              updatedAt: '2026-11-14T08:00:00+08:00',
+              updatedBy: ANESTHESIOLOGIST.userId,
+              version: 1,
+            },
+          ],
+        }),
+      }),
+    )
     await page.route('**/api/v1/anesthesia/records**', async (route) => {
       const request = route.request()
       const path = new URL(request.url()).pathname
@@ -311,7 +369,6 @@ test.describe('M3 麻醉记录单', () => {
     await expect(page.getByTestId('record-context')).toContainText('演示患者')
 
     await page.getByTestId('drug-name').fill('瑞芬太尼（演示）')
-    await page.getByTestId('drug-narcotic').click()
     await page.getByTestId('record-drug').click()
 
     await expect(page.locator('.el-message').last()).toContainText('麻精药品必须双人核对')

@@ -1,4 +1,5 @@
 import type { components as anesthesiaComponents } from '@anesop/contracts/anesthesia'
+import type { components as drugComponents } from '@anesop/contracts/drug'
 import { http } from '../../../api/http'
 
 /** 术前访视与评估（anesthesia.yaml 0.3.0 生成类型，禁止手写重复模型）。 */
@@ -229,6 +230,21 @@ export function appendRecordEvent(
 /** 用药记录（按给药时间倒序）。 */
 export function listDrugAdministrations(recordId: string): Promise<DrugAdministrationList> {
   return http.get<DrugAdministrationList>(`/v1/anesthesia/records/${recordId}/drugs`)
+}
+
+/** 药品字典联想项（drug.yaml 0.1.0 生成类型）；麻精标志只读、来自字典（T-4）。 */
+export type DrugDictionaryItem = drugComponents['schemas']['Drug']
+
+/**
+ * 用药联想/解析：命中药品名称、通用名或别名（服务端 trim + 忽略大小写）。
+ * 页面用返回值把自由文本解析为字典项，麻精标志不由用户填写。
+ */
+export async function searchDrugDictionary(q: string, limit = 20): Promise<DrugDictionaryItem[]> {
+  const query = new URLSearchParams({ q, limit: String(limit) })
+  const list = await http.get<{ items: DrugDictionaryItem[] }>(
+    `/v1/drugs/search?${query.toString()}`,
+  )
+  return list.items
 }
 
 /** 记录用药：麻精类必须双人核对（缺失/同人 400）。 */

@@ -69,6 +69,18 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m2:alert:configure'],
   },
   {
+    path: '/m4/drugs',
+    title: '药品目录',
+    icon: 'sessions',
+    permissions: ['m4:drug:read'],
+  },
+  {
+    path: '/m4/narcotic',
+    title: '麻精五专',
+    icon: 'lock',
+    permissions: ['m4:narcotic:manage'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',
@@ -102,6 +114,7 @@ export const roleLabels: Record<string, string> = {
   SYS_PACU_NURSE: 'PACU 护士（R5）',
   SYS_MATERIAL_MANAGER: '耗材/库房管理员（R6）',
   SYS_NARCOTIC_MANAGER: '麻精药品管理员（R7）',
+  SYS_PHARMACIST: '药房药师（R6/R7）',
   SYS_HOSPITAL_LEADER: '院领导/医务处（R11）',
 }
 

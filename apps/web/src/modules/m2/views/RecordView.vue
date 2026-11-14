@@ -30,6 +30,7 @@ import {
   recordFluidRecord,
   recordEventLabels,
   resusOutcomeLabels,
+  searchDrugDictionary,
   resusTypeLabels,
   revisionReasonLabels,
   type Alert,
@@ -38,6 +39,7 @@ import {
   type CreateResuscitationRequest,
   type CreateRevisionRequest,
   type DrugAdministration,
+  type DrugDictionaryItem,
   type FluidDirection,
   type FluidRecord,
   type IntakeOutputSummary,
@@ -189,6 +191,63 @@ const drugForm = reactive({
   secondCheckerName: '',
   note: '',
 })
+
+/* S-4：用药名称接 /v1/drugs/search 字典联想；麻精标志只读、来自字典（T-4），
+ * 保留自由文本时提交前解析，未收录/歧义直接提示，不把客户端声明当作判定依据。 */
+const drugDictionaryMatch = ref<DrugDictionaryItem | null>(null)
+
+function normalizedDrugName(value: string): string {
+  return value.trim().toLocaleLowerCase()
+}
+
+async function fetchDrugSuggestions(
+  query: string,
+  callback: (items: { value: string; drug: DrugDictionaryItem }[]) => void,
+): Promise<void> {
+  const keyword = query.trim()
+  if (!keyword) {
+    callback([])
+    return
+  }
+  try {
+    const items = await searchDrugDictionary(keyword)
+    callback(items.map((drug) => ({ value: drug.name, drug })))
+  } catch {
+    callback([])
+  }
+}
+
+function applyDictionaryDrug(drug: DrugDictionaryItem): void {
+  drugForm.drugName = drug.name
+  drugForm.narcotic = drug.narcotic
+  drugForm.unit = drug.unit || drugForm.unit
+  drugDictionaryMatch.value = drug
+}
+
+function handleDrugSelect(item: { value: string; drug: DrugDictionaryItem }): void {
+  applyDictionaryDrug(item.drug)
+}
+
+function handleDrugInput(value: string): void {
+  if (
+    !drugDictionaryMatch.value ||
+    normalizedDrugName(drugDictionaryMatch.value.name) !== normalizedDrugName(value)
+  ) {
+    drugDictionaryMatch.value = null
+  }
+}
+
+/** 提交前解析：按名称/通用名/别名（trim + 忽略大小写）精确匹配，0/多候选都拒绝。 */
+async function resolveDictionaryDrugs(): Promise<DrugDictionaryItem[]> {
+  const keyword = drugForm.drugName.trim()
+  if (!keyword) return []
+  const items = await searchDrugDictionary(keyword)
+  return items.filter((drug) =>
+    [drug.name, drug.genericName ?? '', ...(drug.aliases ?? [])].some(
+      (candidate) => normalizedDrugName(candidate) === normalizedDrugName(keyword),
+    ),
+  )
+}
 
 const fluidForm = reactive({
   direction: 'INTAKE' as FluidDirection,
@@ -458,6 +517,23 @@ async function submitDrug(): Promise<void> {
     ElMessage.warning('请填写药品名称')
     return
   }
+  let matches: DrugDictionaryItem[]
+  try {
+    matches = await resolveDictionaryDrugs()
+  } catch (cause) {
+    handleError(cause)
+    return
+  }
+  if (matches.length === 0) {
+    ElMessage.warning('药品未收录于药品字典，无法判定麻精属性；请从字典联想中选择')
+    return
+  }
+  if (matches.length > 1) {
+    ElMessage.warning('药品名称在字典中命中多个药品（歧义），请改用唯一名称或联系药房')
+    return
+  }
+  const dictionary = matches[0]
+  applyDictionaryDrug(dictionary)
   if (
     drugForm.narcotic &&
     (!drugForm.secondCheckerId.trim() || !drugForm.secondCheckerName.trim())
@@ -468,12 +544,12 @@ async function submitDrug(): Promise<void> {
   saving.value = true
   try {
     await recordDrugAdministration(record.value.recordId, {
-      drugName: drugForm.drugName.trim(),
+      drugName: dictionary.name,
       dose: drugForm.dose,
       unit: drugForm.unit,
       route: drugForm.route,
       administeredAt: drugForm.administeredAt,
-      narcotic: drugForm.narcotic,
+      narcotic: dictionary.narcotic,
       ...(drugForm.narcotic
         ? {
             secondCheckerId: drugForm.secondCheckerId.trim(),
@@ -486,6 +562,7 @@ async function submitDrug(): Promise<void> {
     drugForm.drugName = ''
     drugForm.note = ''
     drugForm.narcotic = false
+    drugDictionaryMatch.value = null
     drugForm.secondCheckerId = ''
     drugForm.secondCheckerName = ''
     await refresh()
@@ -1233,7 +1310,22 @@ onUnmounted(stopAlertPolling)
 
         <el-form v-if="editable" class="record__form" label-width="110px" @submit.prevent>
           <el-form-item label="药品名称">
-            <el-input v-model="drugForm.drugName" data-testid="drug-name" maxlength="200" />
+            <el-autocomplete
+              v-model="drugForm.drugName"
+              data-testid="drug-name"
+              :fetch-suggestions="fetchDrugSuggestions"
+              :debounce="0"
+              placeholder="输入药品名称/通用名/别名，选择字典项"
+              maxlength="200"
+              style="width: 100%"
+              @select="handleDrugSelect"
+              @input="handleDrugInput"
+            >
+              <template #default="{ item }">
+                <span>{{ item.value }}</span>
+                <span class="record__hint">{{ item.drug.narcotic ? '麻精' : '非麻精' }}</span>
+              </template>
+            </el-autocomplete>
           </el-form-item>
           <el-form-item label="剂量/单位">
             <el-input-number
@@ -1261,8 +1353,10 @@ onUnmounted(stopAlertPolling)
             />
           </el-form-item>
           <el-form-item label="麻精药品">
-            <el-switch v-model="drugForm.narcotic" data-testid="drug-narcotic" />
-            <span class="record__hint">开启后必须双人核对，核对人不得为给药人本人</span>
+            <el-switch :model-value="drugForm.narcotic" disabled data-testid="drug-narcotic" />
+            <span class="record__hint">
+              麻精标志只读、来自药品字典；麻精药品必须双人核对，核对人不得为给药人本人
+            </span>
           </el-form-item>
           <template v-if="drugForm.narcotic">
             <el-form-item label="核对人标识">
