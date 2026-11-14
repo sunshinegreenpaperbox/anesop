@@ -105,6 +105,24 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m4:staff:read'],
   },
   {
+    path: '/m4/materials',
+    title: '耗材目录',
+    icon: 'sessions',
+    permissions: ['m4:material:read'],
+  },
+  {
+    path: '/m4/materials/stock',
+    title: '耗材出入库',
+    icon: 'lock',
+    permissions: ['m4:material:read'],
+  },
+  {
+    path: '/m4/materials/trace',
+    title: 'UDI 追溯',
+    icon: 'sessions',
+    permissions: ['m4:material:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',
