@@ -20,6 +20,10 @@ import PacuView from '../modules/m2/views/PacuView.vue'
 import FollowupView from '../modules/m2/views/FollowupView.vue'
 import DrugCatalogView from '../modules/m4/views/DrugCatalogView.vue'
 import NarcoticView from '../modules/m4/views/NarcoticView.vue'
+import StaffListView from '../modules/m4/views/StaffListView.vue'
+import StaffAuthorizationView from '../modules/m4/views/StaffAuthorizationView.vue'
+import StaffScheduleView from '../modules/m4/views/StaffScheduleView.vue'
+import StaffTrainingView from '../modules/m4/views/StaffTrainingView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -191,6 +195,30 @@ export const routes: RouteRecordRaw[] = [
         name: 'm4-narcotic',
         component: NarcoticView,
         meta: menuMeta('/m4/narcotic'),
+      },
+      {
+        path: 'm4/staff',
+        name: 'm4-staff',
+        component: StaffListView,
+        meta: menuMeta('/m4/staff'),
+      },
+      {
+        path: 'm4/staff/authorizations',
+        name: 'm4-staff-authorizations',
+        component: StaffAuthorizationView,
+        meta: menuMeta('/m4/staff/authorizations'),
+      },
+      {
+        path: 'm4/staff/schedules',
+        name: 'm4-staff-schedules',
+        component: StaffScheduleView,
+        meta: menuMeta('/m4/staff/schedules'),
+      },
+      {
+        path: 'm4/staff/trainings',
+        name: 'm4-staff-trainings',
+        component: StaffTrainingView,
+        meta: menuMeta('/m4/staff/trainings'),
       },
       {
         path: 'm0/sessions',

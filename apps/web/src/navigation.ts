@@ -81,6 +81,30 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m4:narcotic:manage'],
   },
   {
+    path: '/m4/staff',
+    title: '人员档案',
+    icon: 'sessions',
+    permissions: ['m4:staff:read'],
+  },
+  {
+    path: '/m4/staff/authorizations',
+    title: '分级授权',
+    icon: 'lock',
+    permissions: ['m4:staff:read'],
+  },
+  {
+    path: '/m4/staff/schedules',
+    title: '人员排班',
+    icon: 'sessions',
+    permissions: ['m4:staff:read'],
+  },
+  {
+    path: '/m4/staff/trainings',
+    title: '培训提醒',
+    icon: 'lock',
+    permissions: ['m4:staff:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',
