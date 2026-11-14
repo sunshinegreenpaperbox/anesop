@@ -36,3 +36,4 @@
 | E2E-02 采集断网补传 | 3.6 | device.yaml | gateway + m2/acquisition | 记录单体征 | m2-device-ingest.spec.ts + DeviceAcquisitionApiIntegrationTest + ClinicalRecordAcceptanceTest | 已实现（M3-QA-01，2026-11-14） |
 | E2E-03 记录锁单修订 | 2.4.2 | anesthesia.yaml 0.8.1 | m2/record | 记录单 | m2-record-lock.spec.ts + RecordLockRevisionApiIntegrationTest | 已实现（M3-M2-03/M3-QA-01） |
 | 临床记录专项（发布准入） | AGENTS.md | anesthesia.yaml + device.yaml | m2/record + m2/acquisition | 记录单/PACU | ClinicalRecordAcceptanceTest（时间轴/补传/并发/签名锁定）+ 专项矩阵 docs/testing §9 | 已实现（M3-QA-01，2026-11-14；失败即阻断发布） |
+| 药品目录与麻精五专 | 2.5 | drug.yaml 0.1.0 | m4/drug | 药品/五专页 | M4DrugApiIntegrationTest | 已实现（M4-M15-01；T-4 收口；EXT-02 模拟） |

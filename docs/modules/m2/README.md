@@ -127,7 +127,7 @@ apps/web/src/modules/m2/
 | GET | `/v1/anesthesia/records/{recordId}/events` | `listRecordEvents` | `m2:record:read` | 时间轴（occurredAt 升序，同刻按 seq）；越界 404 |
 | POST | `/v1/anesthesia/records/{recordId}/events` | `appendRecordEvent` | `m2:record:write` | 追加事件（201）；早于记录开始 400、重复开始/结束 409 |
 | GET | `/v1/anesthesia/records/{recordId}/drugs` | `listDrugAdministrations` | `m2:record:read` | 用药记录（给药时间倒序） |
-| POST | `/v1/anesthesia/records/{recordId}/drugs` | `recordDrugAdministration` | `m2:record:write` | 用药记录（201）；麻精缺双人核对/同人核对/非麻精带核对字段 400 |
+| POST | `/v1/anesthesia/records/{recordId}/drugs` | `recordDrugAdministration` | `m2:record:write` | 用药记录（201）；字典未收录/声明与字典不一致 400、字典歧义 422；麻精缺双人核对/同人核对/非麻精带核对字段 400 |
 | GET | `/v1/anesthesia/records/{recordId}/fluids` | `listFluidRecords` | `m2:record:read` | 输液/出入量明细（记录时间倒序） |
 | POST | `/v1/anesthesia/records/{recordId}/fluids` | `recordFluidRecord` | `m2:record:write` | 入量/出量明细（201）；amountMl ≤ 0 400 |
 | GET | `/v1/anesthesia/records/{recordId}/io-summary` | `getIntakeOutputSummary` | `m2:record:read` | 出入量汇总（服务端计算 balanceMl = 入量 - 出量） |
@@ -392,12 +392,15 @@ GET                   → items（版本倒序）+ completed（最新版本是�
   `before`/`after` 摘要（状态、麻醉方式、开始/结束时间、版本）；detail 只含记录/台次/申请标识、
   状态、版本、事件类型与 seq、是否补录（`backfilled`，不写原因原文）、药品名/剂量/单位/途径、
   核对人标识、出入量方向与数值；**不含患者姓名/院内患者号/核对人姓名与备注/补录原因原文**
-  （药品名保留用于追溯）。
+  （药品名保留用于追溯）。用药审计键为 `administrationId`（给药行）+ `dictionaryDrugId`
+  （字典药品），两者分列，避免同键覆盖（M4 复审 S-1）。
 - 失败路径（S-3）：麻精双人核对缺失、同人、核对人不存在/停用/无 `m2:record:write` 的 400
   以 `result=0` 写 `DRUG_ADMIN` 审计（`ClinicalFailureAuditor` 独立事务，业务回滚不影响留痕），
   detail 只有记录标识、`narcotic=true` 与失败原因码
   （`CHECKER_REQUIRED`/`CHECKER_SAME_PERSON`/`CHECKER_NOT_FOUND`/`CHECKER_DISABLED`/
-  `CHECKER_NO_PERMISSION`），无核对人姓名。
+  `CHECKER_NO_PERMISSION`），无核对人姓名。字典侧失败同样写 `result=0`：
+  `DRUG_NOT_IN_DICTIONARY`/`NARCOTIC_MISMATCH`（400）与 `DRUG_AMBIGUOUS`（422，
+  detail 只记命中数与原因码，不记候选药品名）。
 - 日志不打印病史/姓名/签名；测试与示例均为 SYNTHETIC。
 
 ## 7. 权限
@@ -517,7 +520,10 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
 9. 生命体征为占位：`AnesthesiaRecord.vitalSigns` 本期固定空数组，真实采集/质量标记由
    M3-M8-01 接入（§12）；设备数据未接入前不得在记录单展示伪造体征。
 10. 用药只记录药品字典名/剂量/途径与麻精核对，不含配伍、输注泵速率、批号/效期与库存联动；
-   真实麻精药品「五专」管理与处方/空安瓿回收由药事系统（M4/M5）承接，【待确认】。
+   真实麻精药品「五专」管理已由 M4-M15-01 落地（专册/交接/基数/日结），处方与空安瓿回收
+   仍由药事系统/线下流程承接，【待确认】。M2 用药的麻精判定已收口 T-4：服务端按药品字典
+   判定（别名/通用名/大小写/首尾空白归一化），解析歧义 422 `DRUG_AMBIGUOUS`；用药页接
+   `/v1/drugs/search` 字典联想，麻精标志只读、来自字典。
 
 ## 10. Q 登记（待临床 / M3 确认，只登记不改实现）
 
