@@ -204,6 +204,8 @@ const canLock = computed(() => auth.hasPermission('m2:record:lock'))
 const canRevise = computed(() => auth.hasPermission('m2:record:revise'))
 /** S-2：PACU 入口按 m2:pacu:read 显示；缺权限时隐藏，避免 403 跳转。 */
 const canPacuRead = computed(() => auth.hasPermission('m2:pacu:read'))
+/** M3-M11-01：术后随访入口按 m2:followup:read 显示；缺权限时隐藏，避免 403 跳转。 */
+const canFollowupRead = computed(() => auth.hasPermission('m2:followup:read'))
 /** 权限隔离（S-3）：缺 alert:read / rescue 权限时跳过对应请求，不影响时间轴/用药/出入量。 */
 const canAlertRead = computed(() => auth.hasPermission('m2:alert:read'))
 const canRescueView = computed(() => canRescue.value || auth.hasPermission('m2:record:write'))
@@ -825,6 +827,14 @@ onUnmounted(stopAlertPolling)
           @click="router.push(`/m2/pacu/${record.recordId}`)"
         >
           复苏记录（PACU）
+        </el-button>
+        <el-button
+          v-if="record && canFollowupRead"
+          data-testid="followup-entry"
+          :disabled="busy"
+          @click="router.push(`/m2/followups/${record.recordId}`)"
+        >
+          术后随访
         </el-button>
         <el-button
           v-if="record && canLock && !locked"

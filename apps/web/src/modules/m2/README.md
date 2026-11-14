@@ -2,7 +2,8 @@
 
 **一句话职责**：M2 麻醉信息域的浏览器页面、模块内组件与组合式函数；已落地术前访视与评估
 （M2-M4-01）、知情同意与三方核查（M2-M5-01）、麻醉记录单/时间轴/用药/出入量（M3-M2-01）、
-术中预警与抢救（M3-M2-02）、锁单/修订/CA 占位签名（M3-M2-03）与 PACU 复苏/转出（M3-M10-01）。
+术中预警与抢救（M3-M2-02）、锁单/修订/CA 占位签名（M3-M2-03）、PACU 复苏/转出（M3-M10-01）
+与术后随访/镇痛（M3-M11-01）。
 
 本目录只放 M2 的页面、模块内组件与组合式函数，不对外导出内部实现。
 
@@ -17,7 +18,7 @@
 
 ```text
 src/modules/m2/
-├── api/m2.ts                     anesthesia 0.9.0 类型与模块接口封装
+├── api/m2.ts                     anesthesia 0.10.0 类型与模块接口封装
 ├── utils/preopScores.ts          评分实时预览（与服务端同口径，最终以服务端为准）
 ├── views/PreopAssessmentView.vue 术前访视与评估页（/m2/preop/:applicationId）
 ├── views/PreopEntryView.vue      菜单入口说明（/m2/preop）
@@ -26,7 +27,9 @@ src/modules/m2/
 ├── views/RecordView.vue          麻醉记录单/时间轴/预警/抢救/锁单修订（/m2/records/:scheduleId）
 ├── views/AlertRuleConfigView.vue 预警规则配置（/m2/alert-rules）
 ├── views/PacuView.vue            PACU 入室/Aldrete 评分表与时间序列/转出 SBAR（/m2/pacu/:recordId）
-└── __tests__/                    Vitest（术前访视/同意/核查/记录/锁单/PACU）
+├── views/FollowupView.vue        术后随访（24/48h、NRS/PONV/并发症/反馈）与镇痛 PCA
+│                                 （/m2/followups/:recordId）
+└── __tests__/                    Vitest（术前访视/同意/核查/记录/锁单/PACU/随访）
 ```
 
 页面与路由：
@@ -38,6 +41,10 @@ src/modules/m2/
 - `/m2/three-way/:applicationId`：三方核查（Time-out/Sign-out/标本/植入物/问题项 + 版本）；
 - `/m2/records/:scheduleId`：麻醉记录单（时间轴/用药/出入量/预警/抢救/锁单/修订/版本对比）；
   页面顶部「复苏记录（PACU）」按钮跳转 `/m2/pacu/:recordId`；
+- `/m2/followups/:recordId`：术后随访与镇痛（24/48h 选择、NRS 0–10、PONV 0–3、并发症多选 +
+  说明、患者反馈脱敏提示、随访人；镇痛 PCIA/PCEA 参数 bolus/background/lockout、效果与调整
+  说明）；随访与镇痛 append-only，更正只能新增；记录页「术后随访」按钮按 `m2:followup:read`
+  显示；
 - `/m2/pacu/:recordId`：PACU 入室（生命体征/意识/疼痛/恶心/气道**不预填默认值**，关键体征
   逐项显式录入，Aldrete 五项未选齐时「记录评估」禁用并提示）、评分表（实时总分，提交后以
   服务端计算为准）、时间序列与转出对话框（去向 + SBAR + 达标确认；展示服务端
@@ -56,8 +63,8 @@ pnpm e2e
 
 ## 关键契约
 
-- 契约：`packages/contracts/openapi/anesthesia.yaml` 0.9.0（术前访视/同意/核查/记录单/
-  预警/锁单修订/PACU）；类型经 `@anesop/contracts/anesthesia` 导入，禁止手改生成物。
+- 契约：`packages/contracts/openapi/anesthesia.yaml` 0.10.0（术前访视/同意/核查/记录单/
+  预警/锁单修订/PACU/术后随访与镇痛）；类型经 `@anesop/contracts/anesthesia` 导入，禁止手改生成物。
 - 评分口径、切点与【待确认】项见 [`docs/modules/m2/README.md`](../../../../../docs/modules/m2/README.md) §4。
   `utils/preopScores.ts` 是服务端 `PreopScoreCalculator` 的**预览镜像**：改公式必须两端同步。
 

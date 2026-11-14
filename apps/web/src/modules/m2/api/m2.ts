@@ -541,3 +541,97 @@ export function dischargePacuRecord(
 ): Promise<PacuDischarge> {
   return http.post<PacuDischarge>(`/v1/anesthesia/pacu-records/${pacuId}/discharge`, payload)
 }
+
+/* ---------------------------------------------------------------------------
+ * 术后随访与镇痛（anesthesia.yaml 0.10.0，M3-M11-01）
+ * 随访 H24/H48（NRS 0–10、PONV 0–3、并发症多选 + 反馈；记录单结束后录入、append-only）；
+ * 镇痛 PCIA/PCEA/口服/静脉/神经阻滞（bolus/background/lockout、效果、调整记录）。
+ * 并发症字典、PONV 分级、随访窗口与 PCA 默认值均为【待确认】演示口径；自由文本脱敏后落库。
+ * ------------------------------------------------------------------------- */
+
+export type PostopFollowup = anesthesiaComponents['schemas']['PostopFollowup']
+export type PostopFollowupList = anesthesiaComponents['schemas']['PostopFollowupList']
+export type CreatePostopFollowupRequest =
+  anesthesiaComponents['schemas']['CreatePostopFollowupRequest']
+export type FollowupType = anesthesiaComponents['schemas']['FollowupType']
+export type FollowupComplication = anesthesiaComponents['schemas']['FollowupComplication']
+export type PainManagement = anesthesiaComponents['schemas']['PainManagement']
+export type PainManagementList = anesthesiaComponents['schemas']['PainManagementList']
+export type PainManagementModality = anesthesiaComponents['schemas']['PainManagementModality']
+export type PainManagementEffect = anesthesiaComponents['schemas']['PainManagementEffect']
+export type PainAdjustment = anesthesiaComponents['schemas']['PainAdjustment']
+export type RecordPainManagementRequest =
+  anesthesiaComponents['schemas']['RecordPainManagementRequest']
+
+/** 随访类型中文标签。 */
+export const followupTypeLabels: Record<string, string> = {
+  H24: '术后 24 小时',
+  H48: '术后 48 小时',
+}
+
+/** 并发症中文标签（演示字典【待确认】）。 */
+export const followupComplicationLabels: Record<string, string> = {
+  PONV: '恶心/呕吐（PONV）',
+  PAIN_INADEQUATE: '镇痛不全',
+  RESPIRATORY_DEPRESSION: '呼吸抑制',
+  AIRWAY_INJURY: '气道损伤',
+  HYPOTENSION: '低血压',
+  HYPERTENSION: '高血压',
+  ARRHYTHMIA: '心律失常',
+  SHIVERING: '寒战',
+  DELAYED_AWAKENING: '苏醒延迟',
+  NERVE_INJURY: '神经损伤',
+  SURGICAL_BLEEDING: '手术部位出血',
+  INFECTION: '感染',
+  OTHER: '其他',
+}
+
+/** 镇痛方式中文标签（演示口径【待确认】）。 */
+export const painManagementModalityLabels: Record<string, string> = {
+  PCIA: 'PCIA（自控静脉）',
+  PCEA: 'PCEA（自控硬膜外）',
+  ORAL: '口服',
+  IV: '静脉',
+  NERVE_BLOCK: '神经阻滞',
+  OTHER: '其他',
+}
+
+/** 镇痛效果中文标签（演示口径【待确认】）。 */
+export const painManagementEffectLabels: Record<string, string> = {
+  EFFECTIVE: '有效',
+  PARTIAL: '部分有效',
+  INEFFECTIVE: '无效',
+  NOT_ASSESSED: '未评估',
+}
+
+/** 按麻醉记录单查询随访（assessedAt 倒序；记录单不可见 403）。 */
+export function listFollowups(recordId: string): Promise<PostopFollowupList> {
+  const query = new URLSearchParams({ recordId })
+  return http.get<PostopFollowupList>(`/v1/anesthesia/followups?${query.toString()}`)
+}
+
+/** 录入随访（append-only）：记录单未结束 409、时间/评分越界 400、不可见 422。 */
+export function createFollowup(payload: CreatePostopFollowupRequest): Promise<PostopFollowup> {
+  return http.post<PostopFollowup>('/v1/anesthesia/followups', payload)
+}
+
+/** 随访详情（不存在/越界 404）。 */
+export function getFollowup(followupId: string): Promise<PostopFollowup> {
+  return http.get<PostopFollowup>(`/v1/anesthesia/followups/${followupId}`)
+}
+
+/** 该随访的镇痛记录（录入时间升序）。 */
+export function listPainManagement(followupId: string): Promise<PainManagementList> {
+  return http.get<PainManagementList>(`/v1/anesthesia/followups/${followupId}/pain-management`)
+}
+
+/** 追加镇痛记录（append-only）：参数越界 400、随访不存在/越界 404。 */
+export function recordPainManagement(
+  followupId: string,
+  payload: RecordPainManagementRequest,
+): Promise<PainManagement> {
+  return http.post<PainManagement>(
+    `/v1/anesthesia/followups/${followupId}/pain-management`,
+    payload,
+  )
+}

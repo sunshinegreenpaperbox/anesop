@@ -17,6 +17,7 @@ import RecordEntryView from '../modules/m2/views/RecordEntryView.vue'
 import RecordView from '../modules/m2/views/RecordView.vue'
 import AlertRuleConfigView from '../modules/m2/views/AlertRuleConfigView.vue'
 import PacuView from '../modules/m2/views/PacuView.vue'
+import FollowupView from '../modules/m2/views/FollowupView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -157,6 +158,17 @@ export const routes: RouteRecordRaw[] = [
           title: '复苏记录（PACU）',
           icon: 'sessions',
           permissions: ['m2:pacu:read'],
+          menu: false,
+        },
+      },
+      {
+        path: 'm2/followups/:recordId',
+        name: 'm2-followup',
+        component: FollowupView,
+        meta: {
+          title: '术后随访与镇痛',
+          icon: 'sessions',
+          permissions: ['m2:followup:read'],
           menu: false,
         },
       },
