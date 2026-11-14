@@ -24,8 +24,8 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 | M4-M13-01 | 人员档案、分级授权、排班、培训 | 新契约 staff.yaml、m4 模块、V21/V22、前端 | M3-M0-* | Review（blocking 已清） |
 | M4-M14-01 | 耗材主数据、出入库、UDI、高值追溯、SPD 模拟 | 新契约 material.yaml、m4 模块、V23、前端 | M4-M15-01 | Review |
 | M4-M16-01 | 工作量统计、多维报表、导出 | 报表接口/契约、m4 模块、前端 | M4-M13-01、M3 | Review（blocking 已清） |
-| M4-M17-01 | 质控指标、不良事件 RCA、病历质量抽查、上报导出 | m4 模块、契约、前端 | M4-M16-01 | 可解锁 |
-| M4-QA-01 | 管理域专项测试、覆盖率、导出脱敏与权限回归 | 测试/文档 | M4-M15-01…M4-M17-01 | Blocked |
+| M4-M17-01 | 质控指标、不良事件 RCA、病历质量抽查、上报导出 | m4 模块、契约、前端 | M4-M16-01 | Review（blocking 已清） |
+| M4-QA-01 | 管理域专项测试、覆盖率、导出脱敏与权限回归 | 测试/文档 | M4-M15-01…M4-M17-01 | 可解锁 |
 
 ## 任务卡要点
 
@@ -108,6 +108,23 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 - 验收：手算期望、维度过滤、DataScope、CSV 无 PHI/注入防护、性能（≤92 天区间 <10s）。
 
 ### M4-M17-01 质控/RCA/病历质量
+
+> **Review（2026-11-15）**：契约 `qc.yaml 0.1.0`（9 路径 / 11 operation / 21 schema，第 10 域；
+> baseline 落地，新增 ChartReview `rectificationId` 供闭环）、V25（`m4_qc` 6 表 + append-only/
+> 状态机/一次性写入触发器 + 权限点 + 7 条合成参考指标）、m4-api/impl（`QcServiceImpl`：指标
+> 手算口径/版本化快照/分母 0、不良事件分阶段状态机、抽查评分、CSV BOM/防注入/无自由文本）、
+> bootstrap（`QcController` + 装配层只读投影 `QcIndicatorSourceAdapter` 5 条 SELECT）、
+> 前端三页（指标看板/不良事件 RCA/病历抽查）+ Vitest 8 例 + E2E 1 条、文档（模块 README
+> §42–§51、ADR-0022、docs-api §3.17、docs-db §4.20、data-dictionary §3.15）已完成。
+> **独立评审修复（2026-11-15，第二轮）**：B-1 指标按 `effective_from/effective_to` 选择版本、
+> 同 code 周期内重叠 → 409、跨版本按有效期切分并补三组用例；S-1 `QC-SYN-PROC-004` 改名
+> “麻精专册双人签字结构合规率”（结构类、`inTargetStatistics=false`、Q-1 前不计入达标）；
+> S-2 导出 `LIMIT 50000+1` 探测、超限 422 不截断、失败审计记真实 `dataRows/truncated`；
+> S-3 `scheduleId`/`recordId` 不存在 422、跨科室 403（`QcCaseReferenceAdapter`）；
+> S-4 `qc_indicator` 增 DELETE/TRUNCATE 守卫（55000），结果重算写 `QC_INDICATOR_COMPUTE`
+> （含导出路径）；S-5 补 SYS_OR_MANAGER 无 export/review → 403 反例。
+> 指标清单/阈值、上报格式、匿名化、抽查合格线、复核治理与人工抽检/人员自由文本取舍标
+> 【待确认】（ADR-0022 Q-1…Q-10）；M4-QA-01 可解锁。
 - 目标：质控指标（结构/过程/结果，口径可配）、不良事件登记与 RCA（时间线/根因/整改/
   闭环）、病历质量抽查（评分表/缺陷项/整改）、上报导出（脱敏，外部上报格式占位）；
   与 M4-M16 报表复用；权限 `m4:qc:*`。
