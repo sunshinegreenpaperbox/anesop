@@ -119,6 +119,18 @@ public final class M2Permissions {
     /** Spring Security 授权表达式中的 PACU 书写权限：{@code PERM_m2:pacu:write}。 */
     public static final String AUTHORITY_PACU_WRITE = "PERM_" + PACU_WRITE;
 
+    /** 术后随访只读（随访列表/详情、镇痛记录列表）。 */
+    public static final String FOLLOWUP_READ = "m2:followup:read";
+
+    /** 术后随访与镇痛记录（append-only）。 */
+    public static final String FOLLOWUP_WRITE = "m2:followup:write";
+
+    /** Spring Security 授权表达式中的术后随访只读权限：{@code PERM_m2:followup:read}。 */
+    public static final String AUTHORITY_FOLLOWUP_READ = "PERM_" + FOLLOWUP_READ;
+
+    /** Spring Security 授权表达式中的术后随访书写权限：{@code PERM_m2:followup:write}。 */
+    public static final String AUTHORITY_FOLLOWUP_WRITE = "PERM_" + FOLLOWUP_WRITE;
+
     private M2Permissions() {
     }
 }
