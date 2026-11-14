@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M2 达成（2026-11-14）**；M3 达成（7/7，M3-QA-01 转 Review 待全量 verify）
-- 当前 Round：26（2026-11-14，M3-QA-01 临床专项 + E2E-02）
-- 最近提交：`feat(m4)` M4-M17-01 质控/RCA/病历质量；本轮未提交（M3-QA-01 待验收）
-- 已完成任务：**S0 12/12；M2 9/9；M3 7/7（M3-QA-01 Review）**
-- 进行中：M3-QA-01 临床记录专项 + E2E-02（已实现并通过全量 verify，待独立复审）
+- 当前里程碑：**M4 达成（2026-11-15）**；M2（9/9）、M3（7/7）、M4（6/6）均已完成
+- 当前 Round：27（2026-11-15，M4-QA-01 管理域专项 + E2E 2 条）
+- 最近提交：`feat(m4)` M4-M17-01 质控/RCA/病历质量；本轮未提交（M4-QA-01 待独立复审）
+- 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6（M4-QA-01 Review）**
+- 进行中：—（M4-QA-01 实现与门禁已完成，待独立复审后收口 tag m4）
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M3 收口（独立复审 M3-QA-01 → tag m3、交接单）→ M4
+- 下一步：M4 收口（独立复审 M4-QA-01 → tag m4、交接单）→ M5
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
@@ -40,6 +40,22 @@
 | 文档 | `docs/testing/README.md` §9 发布准入矩阵；`TRACEABILITY.md` 4 行 |
 | 门禁实跑 | `mvn -f apps/api/pom.xml clean verify` BUILD SUCCESS（803 用例，8m04s）；前端 111 单测 + build + lint + `pnpm e2e` 34/34；`./scripts/check.sh` OK（11m09s，含契约/规则） |
 
+## M4-QA-01 管理域专项（2026-11-15）
+
+| 准入项 | 证据 |
+|---|---|
+| 权限矩阵 | `M4AcceptanceTest#roleEndpointMatrixCoversPositiveAndNegativeCases`：SYS_ADMIN/SYS_PHARMACIST/SYS_AUTH_MANAGER/SYS_OR_MANAGER/SYS_QC_MANAGER/SYS_ANESTHESIOLOGIST/匿名 × 药品写、五专、人员写/授权、耗材 UDI、报表读/导出、质控读/导出/复核；匿名 401、缺权限 403、正例 200/201 |
+| 授权治理 | `#authorizationRequiresDualApprovalAndForbidsSelfGrant`：缺第二审批人/与第一审批人相同 400、两名不同审批人 200、自授（管理员与授权管理员）403、伪造审批人 400 |
+| 数据范围 | `#dataScopeEnforcesDeptBoundaryRoomFailClosedAndSelfReadOnly`：DEPT 越界科室 403；ROOM 在人员/耗材 fail-closed 403、报表按术间收窄；SELF 仅本人档案（他人 404、写 403）、报表仅本人 1 台次/125 分钟 |
+| 导出脱敏/防注入 | `#csvExportsAreBomMaskedInjectionSafePhiFreeAndAudited`：报表 workload/multi + 质控 indicator/adverse/review 五类 CSV 的 BOM、列头、无患者标识、无自由文本、审计 dataRows（9/6/7/1/2）；报表覆盖 `= + - @` 四种前缀，质控覆盖 `=`/`@` |
+| 五专对账 | `#narcoticLedgerReconcilesAndRejectsUnbalancedClose`：基数 10 + 交接 4 − 专册 3 − 退回 0 = 期末 11，API 台账独立求和后与日结一致；不平 409 给期望/实盘、重复 409、双签同一人 400、失败审计 result=0 |
+| UDI 追溯 | `#udiTraceChainCoversInboundUseLookupAndGuards`：入库 IN_STOCK → 绑定记录/台次 USED → 按 UDI 反查耗材/记录/台次；重复使用 409、过期登记 422、退回批次不一致 422、UDI-DI 不一致 422；`UDI_USE` 审计无患者标识 |
+| 手算对照 | `#workloadMatchesHandCalculatedTotalsAndWeights`（6 台次/215 分钟/加权 6.5/unrecorded 4；麻醉科 2/125/2.5、手术室 4/90/4.0）；`#qcIndicatorRatesMatchHandCalculation`（50/50/25/50/250/50/66.67） |
+| E2E | `m4-narcotic-reconcile.spec.ts`（日结 409 差异 → 修正平账）、`m4-qc-export.spec.ts`（质控指标按当前区间导出 CSV）；`pnpm e2e` **42/42** |
+| 文档 | `docs/testing/README.md` §11 管理域专项发布准入矩阵；`TRACEABILITY.md` 2 行；本看板 |
+| 门禁实跑 | 后端 `mvn -f apps/api/pom.xml clean verify` **BUILD SUCCESS（1100 用例，13:03；api-bootstrap 248，含专项 8）**；前端 167/167 单测 + build + lint（0 error）+ `pnpm e2e` 42/42（1.2m）。`./scripts/check.sh` 未重复跑（会二次触发全量 verify），上述单项已分别实跑。 |
+| 遗留 | `drug.yaml`/`material.yaml` 无 CSV 导出端点（契约未定义，按 H-04 不臆造），药品/耗材导出待补契约后加测 |
+
 ## 近期提交
 
 | 提交 | 任务 | 说明 |
@@ -56,6 +72,7 @@
 | 7f72bf0 | S0-08 | 前端登录/布局/权限菜单/401 刷新 |
 | bad4204 | S0-04 | 10 项 CI 流水线 + ci-local 本地等价 |
 | （本提交） | S0-12 | README/guides/seed-demo/dev-check/链接校验 |
+| （本轮，未提交） | M4-QA-01 | `M4AcceptanceTest` 8 条 + E2E 2 条 + 管理域专项矩阵与文档 |
 
 ## 下一里程碑 M2（2027-01-29）任务候选
 

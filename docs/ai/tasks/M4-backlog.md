@@ -25,7 +25,7 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 | M4-M14-01 | 耗材主数据、出入库、UDI、高值追溯、SPD 模拟 | 新契约 material.yaml、m4 模块、V23、前端 | M4-M15-01 | Review |
 | M4-M16-01 | 工作量统计、多维报表、导出 | 报表接口/契约、m4 模块、前端 | M4-M13-01、M3 | Review（blocking 已清） |
 | M4-M17-01 | 质控指标、不良事件 RCA、病历质量抽查、上报导出 | m4 模块、契约、前端 | M4-M16-01 | Review（blocking 已清） |
-| M4-QA-01 | 管理域专项测试、覆盖率、导出脱敏与权限回归 | 测试/文档 | M4-M15-01…M4-M17-01 | 可解锁 |
+| M4-QA-01 | 管理域专项测试、覆盖率、导出脱敏与权限回归 | 测试/文档 | M4-M15-01…M4-M17-01 | Done（2026-11-15） |
 
 ## 任务卡要点
 
@@ -131,6 +131,18 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 - 验收：指标口径可追溯、RCA 闭环状态机、抽查评分、上报导出脱敏、审计。
 
 ### M4-QA-01 管理域专项
+
+> **Done（2026-11-15）**：新增 `M4AcceptanceTest`（8 条，真实嵌入式 PG16 + Flyway V20–V25）：
+> 七角色（含匿名）× 药品/五专/人员授权/耗材 UDI/报表/质控正负例矩阵、DEPT 越界 403 与
+> ROOM/SELF fail-closed、双人审批/自授禁止、5 类 CSV（报表 workload/multi + 质控
+> indicator/adverse/review）BOM/列头/防注入/无 PHI/审计 dataRows、五专对账（10+4−3−0=11，
+> 不平 409）、UDI 入库→使用→反查（重复 409/过期 422/批次不一致 422）、报表手算
+> （6 台次/215 分钟/6.5 加权）与质控率手算（50/50/25/50/250/50/66.67）。新增 E2E
+> `m4-narcotic-reconcile.spec.ts`、`m4-qc-export.spec.ts`（E2E 42/42）；
+> `docs/testing/README.md` §11 管理域专项矩阵；STATUS/TRACEABILITY 已更新。
+> 门禁：后端 `clean verify` BUILD SUCCESS（1100 用例，13:03；api-bootstrap 248）；前端 167/167 单测 +
+> build + lint（0 error）；`pnpm e2e` 42/42（1.2m）。
+> 遗留：`drug.yaml`/`material.yaml` 未定义 CSV 导出端点，按 H-04 不臆造，药品/耗材导出待补契约后加测。
 - 目标：权限矩阵回归（m4 角色/数据范围）、导出脱敏与 CSV 注入、五专日结/基数一致性、
   UDI 追溯完整性、报表手算对照；发布准入矩阵更新。
 

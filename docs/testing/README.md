@@ -9,10 +9,10 @@
 
 | 层 | 技术 | 目标占比 | 当前落点 |
 |---|---|---|---|
-| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端全 reactor **803** 个用例（含集成）、前端 **111** 个用例 |
+| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端全 reactor **1100** 个用例（含集成，2026-11-15）、前端 **167** 个用例（33 文件） |
 | 集成 | Spring Boot Test + 嵌入式 PostgreSQL 16（Zonky）/ Testcontainers | ≈20% | 迁移、MyBatis、认证越权、审计、网关幂等与断网补传 |
 | 契约 | spectral + oasdiff（Java DTO 反序列化用例） | — | `apps/api/api-contracts/src/test` |
-| E2E | Playwright（Chromium） | 关键路径 | **34 条**（首页 3 + 登录/越权 6 + M1 11 + M2 14）；E2E-01–05 见 §6，临床专项矩阵见 §9 |
+| E2E | Playwright（Chromium） | 关键路径 | **42 条**（首页 3 + 登录/越权 6 + M1 11 + M2 14 + M4 8）；E2E-01–05 见 §6，临床专项矩阵见 §9，管理域专项见 §11 |
 
 比例是目标而非硬门禁；骨架期没有业务域，集成/E2E 占比会随后续里程碑上升。
 
@@ -104,8 +104,8 @@ pnpm e2e
 - 配置：`apps/web/vitest.config.ts`（`environment: jsdom`、`coverage.provider: v8`）
 - 阈值：行 ≥70%、分支 ≥55%；排除 `src/api/generated/**`、`src/env.d.ts`、`src/main.ts`、
   `src/**/__tests__/**`
-- 用例：`apps/web/src/__tests__/{App,router,HomeView}.spec.ts`
-- 实测：**111/111 通过**（22 个测试文件，2026-11-14），行 85.24%、分支 78.63%
+- 用例：`apps/web/src/__tests__/**` 与各模块 `__tests__/**`（含 M4 药品/五专/人员/耗材/报表/质控页）
+- 实测：**167/167 通过**（33 个测试文件，2026-11-15），语句 75.80%、分支 73.55%、函数 78.09%、行 78.26%（M4 页面新增行摊薄，仍高于 70/55 门禁）
 - 断言可失败：标题、文案、路由 path/name 均为精确值；不使用恒真断言
 
 ## 6. E2E 清单与落地计划
@@ -139,7 +139,15 @@ pnpm e2e
   1. 登记设备 → 无网关令牌 401 → 断网缓冲 2 帧上传 → 同 batchKey 重放 `duplicateBatch=true` 且
      `acceptedRows=0` → 记录页体征 2 条（非 4 条）→ 新 batchKey 补 1 帧 → 3 条（非 6 条）；
   2. 无 `m2:device:read` 用户设备查询 403、记录页被路由守卫拦到 `/403`，不渲染患者上下文。
-- `pnpm e2e` 实测 **34/34 通过**（2026-11-14，Chromium，无 flaky）。
+- `apps/web/e2e/m4-*.spec.ts` 8 条（M4 五域 + QA）：
+  1. `m4-drug.spec.ts` 1 条：药品新建 → 专册双签登记 → 日结平账；
+  2. `m4-staff.spec.ts` 1 条：授予授权 → 授权校验通过 → 排班冲突提示；
+  3. `m4-material.spec.ts` 1 条：UDI 登记入库 → 绑定记录使用 → 追溯链；
+  4. `m4-report.spec.ts` 2 条：筛选/查询/导出工作量 CSV；无读权限守卫 403；
+  5. `m4-qc.spec.ts` 1 条：不良事件 RCA 闭环状态逐级前进；
+  6. `m4-narcotic-reconcile.spec.ts` 1 条（M4-QA-01）：日结不平 409 → 差异明细 → 修正期末后平账；
+  7. `m4-qc-export.spec.ts` 1 条（M4-QA-01）：质控指标按当前区间导出 CSV（`type=indicator`、`Accept: text/csv`、脱敏提示）。
+- `pnpm e2e` 实测 **42/42 通过**（2026-11-15，Chromium，无 flaky；含 M4 8 条）。
 
 > **E2E-02/E2E-04 口径说明**：当前为 **UI 级（路由守卫 + 菜单权限过滤）+ 平台 API 契约拦截**，
 > Playwright 不启动 Spring Boot/PG，因此**不得宣称 E2E 已覆盖真实 ingest 幂等或真实越权 API**。
@@ -267,8 +275,58 @@ pnpm e2e
 CI 建议把后端、前端、E2E 拆 job 并行（本地 `check.sh` 仍串行全量），总时长目标 ≤10 分钟；
 覆盖率报告作为 artifact 上传，JaCoCo 门禁失败即阻断合并。
 
-## 11. 变更记录
+## 11. 管理域专项（M4-QA-01，发布准入）
 
+依据 `AGENTS.md`「权限与数据范围」「导出必须脱敏」与 M4 任务卡（E-M13…E-M17），管理域专项
+不拆成散点，而由聚合用例 `apps/api/api-bootstrap/src/test/java/com/anesop/api/M4AcceptanceTest.java`
+在**真实嵌入式 PostgreSQL 16 + 真实 Flyway V20–V25** 上收敛；任一断言失败即阻断 M4 验收。
+全部数据为 `SYNTH-` 前缀的 SYNTHETIC 数据，固定窗口（报表 2032-06、质控 2026-10、
+UDI 2026-08；五专用当前时点与业务日 T−3）与其他用例不交叉，用例结束清理。
+
+| 准入项 | 关键断言（可失败） | 真实 API+PG 用例 | E2E / 说明 |
+|---|---|---|---|
+| 权限矩阵（角色×端点） | SYS_ADMIN / SYS_PHARMACIST / SYS_AUTH_MANAGER / SYS_OR_MANAGER / SYS_QC_MANAGER / SYS_ANESTHESIOLOGIST / 匿名 × 药品写、五专科室/专册、人员档案写/授权、耗材 UDI、报表读/导出、质控读/导出/复核；匿名一律 401，缺权限一律 403，正例 200/201 | `M4AcceptanceTest#roleEndpointMatrixCoversPositiveAndNegativeCases` | — |
+| 授权治理 | 双人审批：缺第二审批人 400、与第一审批人相同 400、两名不同审批人 200；自授禁止（管理员/授权管理员均 403）；伪造审批人 400；响应记录双审批人与时点 | `M4AcceptanceTest#authorizationRequiresDualApprovalAndForbidsSelfGrant`；`M4StaffApiIntegrationTest#authorizationApprovalGovernanceRejectsSelfFakeAndMissingSecondApprover` | `m4-staff.spec.ts`（授权 → 校验 → 排班） |
+| 数据范围 | DEPT 越界科室 403（报表/人员），本科室只返回本科室；ROOM 在无术间语义的域（人员/耗材）fail-closed 403，在报表按术间收窄；SELF 仅本人档案可读、他人 404、写 403；SELF 报表仅本人记录单台次 | `M4AcceptanceTest#dataScopeEnforcesDeptBoundaryRoomFailClosedAndSelfReadOnly`；`M4ReportApiIntegrationTest#dataScopeDeptAndSelfAreRestricted` | — |
+| 导出脱敏/防注入 | 报表 `workload`/`multi` + 质控 `indicator`/`adverse`/`review` 五类 CSV：UTF-8 BOM、固定列头、无患者姓名/院内号/住院号/身份证/手机号、质控无自由文本原文；报表覆盖 `= + - @` 四种公式前缀，质控 `adverse`/`review` 覆盖 `=`/`@`（同一 `csvCell` 分支）；审计 `REPORT_EXPORT`/`QC_EXPORT` 的 `dataRows` 与真实行数一致 | `M4AcceptanceTest#csvExportsAreBomMaskedInjectionSafePhiFreeAndAudited`；`M4ReportApiIntegrationTest#csvExportHasBomHeaderFormulaGuardNoPhiAndAudit`；`M4QcApiIntegrationTest#exportIsBomMaskedInjectionSafeAndFreeOfPhiAndFreeText` | `m4-report.spec.ts`（导出请求）、`m4-qc-export.spec.ts`（质控导出） |
+| 五专对账 | 基数 10 + 交接入库 4 − 专册使用 3 − 退回 0 = 期末 11；不平 409 `details` 给期望/实盘；同日同班次重复 409；双人签字同一人 400；成功/失败审计分离（失败审计只记 rejection，不记柜号/处方号） | `M4AcceptanceTest#narcoticLedgerReconcilesAndRejectsUnbalancedClose`；`M4DrugApiIntegrationTest#narcoticFiveSpecialtiesFlowAndRules` | `m4-narcotic-reconcile.spec.ts`（409 差异 → 修正平账） |
+| UDI 追溯链 | 登记入库 `IN_STOCK` → 绑定记录/台次使用 `USED` → 按 UDI 反查实例/耗材/2 条流水/记录/台次；重复使用 409；过期登记 422；退回批次不一致 422；UDI-DI 与耗材不一致 422；`UDI_USE` 审计无患者标识 | `M4AcceptanceTest#udiTraceChainCoversInboundUseLookupAndGuards`；`M4MaterialApiIntegrationTest#udiLifecycleTraceDuplicateUseAndRecordBinding` | `m4-material.spec.ts`（UI 追溯链） |
+| 报表/质控手算对照 | 报表：台次 6、麻醉时长 215、加权 6.5（SYNTH-ART-001 权重 1.5）、unrecorded 4，麻醉科桶 2/125/2.5、手术室桶 4/90/4.0；质控：记录单 50.00%、访视 50.00%、三方核查 25.00%、麻精双签 50.00%、不良事件 250.00‰、抽查合格 50.00%、高值 UDI 66.67% | `M4AcceptanceTest#workloadMatchesHandCalculatedTotalsAndWeights`、`#qcIndicatorRatesMatchHandCalculation`；`M4ReportApiIntegrationTest#workloadMatchesHandCalculatedTotalsAndBuckets`；`M4QcApiIntegrationTest#indicatorResultsMatchHandCalculatedValues` | — |
+
+**导出覆盖口径（重要）**：截至 M4-QA-01，契约只定义了两类导出端点——`GET /v1/reports/export`
+（`report.yaml`，workload/multi 两种报表）与 `GET /v1/qc/export`（`qc.yaml`，indicator/adverse/review
+三种类型）。`drug.yaml`、`material.yaml` **没有** CSV 导出端点，按「不臆造接口与字段」（AGENTS.md
+H-04）本期不新增生产代码与契约，因此导出脱敏证据覆盖上述 5 个 CSV 变体；药品/耗材如后续需要
+导出，须先补契约与权限点（建议 `m4:drug:export` / `m4:material:export`）再补测，已登记为
+M4 遗留项（不阻断本期验收）。
+
+运行与阻断：
+
+```bash
+source scripts/env.sh
+# 管理域专项聚合（真实嵌入式 PG，约 55s / 8 用例）
+./scripts/mvn.sh -B -pl apps/api/api-bootstrap -am \
+  -Dtest=M4AcceptanceTest -Dsurefire.failIfNoSpecifiedTests=false test
+# 全量后端门禁（含 M4 五域既有集成用例与专项）
+./scripts/mvn.sh -B -f apps/api/pom.xml clean verify
+# E2E（含新增五专日结对账 / 质控导出 2 条）
+pnpm e2e
+```
+
+- `scripts/ci-local.sh` 无需改动：`ci/unit-test` 跑全量 `mvn verify`（自动包含 `M4AcceptanceTest`），
+  `ci/e2e-smoke` 跑 `pnpm e2e`（自动包含 `m4-narcotic-reconcile.spec.ts` / `m4-qc-export.spec.ts`）。
+- 任一准入项失败（含 flaky）→ 阻断 M4 验收，按 P0/P1 缺陷分级处理；不得 `@Disabled` 或放宽断言。
+- 遗留项：药品/耗材 CSV 导出（契约未定义）；M4 模块 README 中已登记的【待确认】口径
+  （R1–R5 映射、统计权重、质控指标清单）不因本专项改变，仍按 ADR-0018…0022 待院方确认。
+
+## 12. 变更记录
+
+- 2026-11-15（M4-QA-01）：新增 `M4AcceptanceTest`（权限矩阵/授权治理/数据范围/5 类 CSV/
+  五专对账/UDI 追溯/报表与质控手算，8 条）；新增 E2E `m4-narcotic-reconcile.spec.ts`
+  （日结 409 差异 → 修正平账）与 `m4-qc-export.spec.ts`（指标导出请求/脱敏提示）；新增 §11 管理域
+  专项发布准入矩阵；E2E 总数 42。药品/耗材无 CSV 导出端点（契约未定义）登记为遗留项。
+  实测：`mvn -f apps/api/pom.xml clean verify` BUILD SUCCESS（1100 用例，13:03，api-bootstrap 248）；
+  前端 `pnpm test:unit` 167/167、`pnpm build` 通过、`pnpm lint` 0 error、`pnpm e2e` 42/42（1.2m）。
 - 2026-11-14（M3-QA-01）：新增 `ClinicalRecordAcceptanceTest`（时间轴/补传幂等/并发 PUT/签名锁定
   聚合，2 条）；新增 **E2E-02** `m2-device-ingest.spec.ts`（2 条）；新增 §9 临床记录专项发布准入矩阵；
   E2E 总数 34；`pnpm e2e` 34/34、专项 2/2 通过。
