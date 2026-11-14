@@ -6,7 +6,8 @@
 
 ## 1. 范围与权威源
 
-- 本初稿覆盖 **M0 公共支撑、M1 手术排程、M2 麻醉信息** 的核心实体；M3–M8 在对应模块任务中补充。
+- 本初稿覆盖 **M0 公共支撑、M1 手术排程、M2 麻醉信息、M4 药品与人员管理** 的核心实体；
+  M3/M5–M8 在对应模块任务中补充。
 - 主数据权威源：患者主索引 HIS、药品目录药房、耗材主数据 SPD；临床记录以本系统为源，EMR 只归档（`CONTEXT_CORE.md` §2）。
 - 同一字段一期只允许一个权威来源；跨系统同步字段在“来源”列注明接口编号（§3.5.3）。
 - 契约与字典的对应关系见 `core-entities.md` 第 4 节；契约新增字段必须先评审，再补迁移与字典。
@@ -53,6 +54,11 @@
 | M2 | 复苏记录 | `m2_anes.pacu_record` | PACU 入室信息/状态机；Aldrete 评估 `m2_anes.pacu_assessment`（append-only）；转出交接 `m2_anes.pacu_discharge`（append-only） | `PacuRecord`、`PacuAssessment`、`PacuDischarge` | §2.4.3、V18 |
 | M2 | 术后随访 | `m2_anes.followup_record` | 24/48 小时随访、NRS/PONV、并发症、脱敏说明/反馈（append-only） | `PostopFollowup` | §2.4.3、V19 |
 | M2 | 术后镇痛 | `m2_anes.pain_management` | 镇痛方式/PCA 参数/效果/调整记录（append-only） | `PainManagement` | §2.4.3、V19 |
+| M4 | 人员档案 | `m4_staff.staff_profile` | 工号唯一、关联 m0 用户、职称/职级/专长、在职状态 | `Staff` | §2.4.4、V21 |
+| M4 | 执业资质 | `m4_staff.staff_qualification` | 同人员同证书号唯一、有效期 | `StaffQualification` | §2.4.4、V21 |
+| M4 | 分级授权 | `m4_staff.staff_authorization` | append-only 版本链，当前版本视图；级别/术式/年龄/ASA/有效期 | `StaffAuthorization` | §2.4.4、§3.4.1、V21、ADR-0019 |
+| M4 | 人员排班 | `m4_staff.staff_schedule` | 同人员同日同班次、同术间同日同班次唯一 | `StaffSchedule` | §2.4.4、V21 |
+| M4 | 培训记录 | `m4_staff.staff_training` | 课程/完成/到期/证书号；到期提醒 | `StaffTraining` | §2.4.4、V21 |
 
 > “契约暂未单列”表示该实体已由方案书确认，但 S0-05 的四个域契约只覆盖主链路；后续任务按契约优先顺序补接口，禁止先写后端 DTO。
 

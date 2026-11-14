@@ -44,6 +44,8 @@ db/
 │   ├── V18__m2_pacu_recovery.sql           # m2_anes 复苏记录/Aldrete 评估/转出 + m2:pacu:*（M3-M10-01）
 │   ├── V19__m2_followup_pain.sql           # m2_anes 术后随访/镇痛 + m2:followup:*（M3-M11-01）
 │   ├── V20__m4_drug_dictionary.sql         # m4_drug 药品目录/五专/基数/日结/适配器 + m4:*（M4-M15-01）
+│   ├── V21__m4_staff_authorization.sql     # m4_staff 人员档案/资质/分级授权/排班/培训 + m4:staff/schedule/training（M4-M13-01）
+│   ├── V22__m4_staff_authorization_governance.sql  # 授权双人审批/撤销时点 + SYS_AUTH_MANAGER（M4-M13-01 评审）
 │   └── ../seed/demo/V101__demo_drug_synthetic.sql # 演示药品 3 条（仅 dev/test/uat）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
@@ -67,7 +69,7 @@ db/
 | `m0_platform` | M0 公共支撑 | 用户、角色、权限、审计、字典（本基线） |
 | `m1_sched` | M1 手术排程 | 手术申请、排程/台次、术间 |
 | `m2_anes` | M2 麻醉记录 | 术前访视（V10）、知情同意/三方核查（V11）、记录单/事件/用药/出入量（V13）、设备登记与体征（V4/V14）、预警/抢救（V15/V16）、锁单/修订（V17）、复苏记录/Aldrete/转出（V18）、术后随访/镇痛（V19） |
-| `m3_staff` | M3 人员资质 | 人员档案、授权 |
+| `m4_staff` | M4 人员档案与分级授权（方案书 M3 人员管理，一期由 M4-M13-01 落地） | 人员档案/执业资质、分级授权（append-only 历史 + 当前视图）、排班、培训（V21）；授权治理列/角色（V22） |
 | `m4_drug` | M4 药品目录与麻精五专 | 药品目录/别名、专册、专柜交接、基数、日结、药房适配器日志（V20） |
 | `m4_supply` | M4 耗材追溯 | 批次、消耗 |
 | `m5_drug` | M5 药品管理 | 麻精台账、处方 |
@@ -545,6 +547,54 @@ version 只增；`drug_baseline` 守卫品种/柜/科室不可改、version 只�
 - **临床/合规风险**：麻精账属法定留痕，回滚前必须归档到离线审计库并由药房/麻醉科/医务处
   签字；回滚窗口内五专登记能力缺失，须改用纸质台账并保证双人签字。
 - **运行时权限**：append-only 与平账守卫依赖触发器，应用运行账号不得拥有 DDL 权限（见 §5.3）。
+
+### 4.16 V21（M4 人员档案、分级授权、排班与培训）回滚说明
+
+V21 属 expand 段：新增 schema `m4_staff` 与 5 张表——`staff_profile`（工号 lower(btrim)
+唯一且不可改、userId 一人一档案、在职状态 ACTIVE/INACTIVE、专长 jsonb 数组、乐观锁 version）、
+`staff_qualification`（同人员同证书号唯一、有效期 CHECK）、`staff_authorization`
+（**append-only 历史**：级别 R1–R5 + 术式范围 jsonb + 年龄段 + ASA 上限 + 有效期 + 审批人；
+同人员 version 唯一）、`staff_schedule`（**同人员同日同班次、同术间同日同班次唯一**，仅
+PLANNED 占用名额；取消保留记录并释放）、`staff_training`（同人员同课程编码唯一）。
+视图 `staff_authorization_current` 取每人员 version 最大的一行作为当前版本（撤销后当前版本
+status=REVOKED，历史保留）。触发器：授权历史 UPDATE/DELETE/TRUNCATE 一律 55000；
+`staff_profile` 守卫工号/userId/创建留痕不可改、version 只增；`staff_schedule` 守卫
+创建留痕不可改、version 只增、已取消不得复活。权限点 `m4:staff:read|write`、
+`m4:schedule:manage`、`m4:training:manage`（最小集授予 SYS_ADMIN / SYS_OR_MANAGER（排班）/
+SYS_ANESTHESIOLOGIST（授权复核与培训））。不改写 V1–V20 既有列与数据。
+
+- **应用回滚**：下线 `/v1/staff*` 端点与前端“人员档案/分级授权/人员排班/培训提醒”菜单；
+  M1 排程与 M5 术中的授权校验调用方恢复为“不做资质校验”的旧行为（授权表保留不影响旧代码）。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份 + 授权历史归档，顺序不可颠倒）：
+  先 `DROP TRIGGER`（授权 3 个 + `trg_staff_profile_guard` + `trg_staff_schedule_guard`）
+  → `DROP FUNCTION m4_staff.fn_reject_mutation/fn_reject_truncate/fn_staff_profile_guard/
+  fn_staff_schedule_guard()` → `DROP VIEW m4_staff.staff_authorization_current` →
+  按 `staff_training` → `staff_schedule` → `staff_authorization` → `staff_qualification` →
+  `staff_profile` 顺序 `DROP TABLE`（先 `pg_dump -t` 导出并校验行数）→ `DROP SCHEMA m4_staff`
+  → 删除四个权限点对应的角色授权与权限记录。
+- **重放**：修复后重新执行 V21 会重建空 schema/表；**授权历史不得直接回灌**（append-only），
+  如需恢复须按原 version/审批人/时间重新授予并注明补录原因（须医务处/人事与麻醉科确认）。
+- **临床/合规风险**：分级授权与排班属资质与执业留痕，回滚前必须归档授权历史；回滚窗口内
+  “无授权不得执业”校验缺失，须改用纸质授权清单并保证审批签字。
+- **运行时权限**：append-only 守卫依赖触发器，应用运行账号不得拥有 DDL 权限（见 §5.3）。
+
+### 4.17 V22（M4 分级授权治理）回滚说明
+
+V22 属 expand 段（**不改写 V21**）：为 `m4_staff.staff_authorization` 增加
+`second_approver_id/second_approved_at/second_approver_reason/revoked_at/revoked_by` 五列与
+`(staff_id, approved_at DESC)` 索引，并 `CREATE OR REPLACE` 当前版本视图使其包含新列
+（V21 已有列顺序不变）；新增权限点 `m4:staff:authorize` 与角色
+`SYS_AUTH_MANAGER`（`data_scope=DEPT`，承载 `m4:staff:read/write`、`m4:training:manage`、
+`m4:staff:authorize`）；SYS_ADMIN 追加审批权限；SYS_ANESTHESIOLOGIST 收回
+`m4:staff:write`/`m4:training:manage`（只读）；以 `COMMENT ON COLUMN` 纠正
+`staff_qualification.status` 的过强表述（资质吊销/过期是否阻断授权待 Q-21，当前不参与判定）。
+
+- **应用回滚**：旧代码不写 V22 新列（值为 NULL），可直接回退应用版本；授权历史仍保留。
+- **库层回滚**（forward-only，需 DBA 双签）：删除 SYS_AUTH_MANAGER 的角色授权与角色、
+  删除 `m4:staff:authorize`、恢复 SYS_ANESTHESIOLOGIST 原授权（仅当业务确认）、
+  `DROP INDEX idx_staff_authorization_effective`，再 `ALTER TABLE ... DROP COLUMN`
+  （五列）；**授权历史不得删除**（append-only），回滚前必须全量归档。
+- **运行时权限**：V22 仅新增列/角色/权限，不改变 append-only 触发器与 m4_staff 表结构约束。
 
 ## 5. 运行方式
 

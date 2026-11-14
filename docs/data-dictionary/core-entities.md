@@ -590,6 +590,24 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 容忍度均为【待确认】（见 `docs/modules/m4/README.md` §11 与 ADR-0018）。科室必须为启用
 `org_type=DEPT` 组织；SELF 范围按本人所属科室推导（B-3/S-5）。
 
+### 3.13 人员档案与分级授权 `staff_profile` / `staff_qualification` / `staff_authorization` / `staff_schedule` / `staff_training`（V21 + V22 已实现，M4-M13-01）
+
+| 表 | 关键字段 | 说明 | 来源/备注 |
+|---|---|---|---|
+| `m4_staff.staff_profile` | `staff_no`（lower(btrim) 唯一、创建后不可改）、`user_id`（可空，非空唯一）、`name`、`department_id`、`site_id`、`title`、`job_grade`、`employment_status(ACTIVE/INACTIVE)`、`specialties` jsonb 数组、`version` | 人员档案；关联 m0 用户与科室；离职只读历史 | §2.4.4、§3.4.1 |
+| `m4_staff.staff_qualification` | `staff_id`、`qualification_type(PRACTICE_LICENSE/SPECIALTY_CERT/NURSE_LICENSE/OTHER)`、`certificate_no`、`issuing_authority`、`valid_from`、`valid_to`（NULL=长期）、`status(ACTIVE/REVOKED)` | 执业资质；同人员同证书号唯一；`expired` 由 `valid_to` 计算 | §2.4.4 |
+| `m4_staff.staff_authorization` | `staff_id + version` 唯一、`level(R1–R5)`、`surgery_scopes` jsonb 数组（`*`=全部）、`age_min/age_max`、`asa_max(ASA1–ASA5)`、`valid_from/valid_to`、`status(ACTIVE/REVOKED)`、`approved_by`、`approved_at`、`second_approver_id/second_approved_at/second_approver_reason`（V22 双人审批）、`revoked_at/revoked_by`（V22 撤销时点）、`change_reason` | **append-only 授权历史**：每次授予/撤销写新版本；当前版本视图 `staff_authorization_current`；回溯按 `approved_at/valid_from/revoked_at` 取当时生效版本 | §2.4.4、§3.4.1、ADR-0019 |
+| `m4_staff.staff_schedule` | `staff_id`、`schedule_date`、`shift(DAY/NIGHT/ON_CALL)`、`room_id`、`department_id`、`status(PLANNED/CANCELLED)`、`cancelled_at/by`、`cancel_reason`、`version` | 排班；同人员同日同班次、同术间同日同班次唯一（仅 PLANNED 占用，取消释放） | §2.4.4、ADR-0019 |
+| `m4_staff.staff_training` | `staff_id + course_code` 唯一、`course_name`、`completed_on`、`expires_on`、`certificate_no` | 培训/继续教育；到期状态 VALID/EXPIRING/EXPIRED/NO_EXPIRY（30 天窗口） | §2.4.4 |
+
+说明：本域只存**在职人员**档案字段，不含患者任何标识；审计 detail 不含姓名与证书号原文。
+R1–R5 的业务含义、级别 → 术式/年龄/ASA 默认映射、职称/职级字典、班次定义与术间是否允许
+多人均为【待确认】（ADR-0019）；授权范围以显式字段为权威，系统不内置臆造映射。
+V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 ASA≥4 必须两名不同审批人。
+资质 `status/valid_to` 当前只用于档案展示/提醒，不参与授权判定（Q-21）。
+`staff_authorization` 的 UPDATE/DELETE/TRUNCATE 一律 55000；`staff_profile`/`staff_schedule`
+守卫创建留痕不可改、version 只增，排班取消后不可复活。
+
 ## 4. 与契约的对应
 
 | 契约 Schema | 数据库实体 | 说明 |
@@ -628,10 +646,18 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 | `DrugBaseline`、`DrugBaselineList`、`UpdateDrugBaselinesRequest` | `m4_drug.drug_baseline` | 基数（品种 + 柜唯一、乐观锁）（V20） |
 | `DailyClose`、`CreateDailyCloseRequest` | `m4_drug.daily_close` | 日结/班结、平账 CHECK、append-only（V20） |
 | `PharmacyAdapterStatus` | `m4_drug.pharmacy_adapter_log` | 药房适配器（EXT-02 SIMULATED）状态与降级留痕（V20） |
+| `Staff`、`StaffList`、`CreateStaffRequest`、`UpdateStaffRequest`、`StaffQualification`、`StaffQualificationInput`、`DepartmentOption`、`DepartmentList` | `m4_staff.staff_profile`、`m4_staff.staff_qualification` | 人员档案、执业资质、科室选项、乐观锁（V21） |
+| `StaffAuthorization`、`StaffAuthorizationHistory`、`UpdateStaffAuthorizationRequest` | `m4_staff.staff_authorization`（+ 视图 `staff_authorization_current`） | append-only 授权版本链、当前版本视图（V21） |
+| `AuthorizationCheckRequest`、`AuthorizationCheckResult`、`AuthorizationCheckReason` | 读时判定（无新表） | 授权校验（排程/术中集成点），原因码见契约枚举（V21） |
+| `StaffSchedule`、`StaffScheduleList`、`CreateStaffScheduleRequest`、`UpdateStaffScheduleRequest`、`CancelStaffScheduleRequest` | `m4_staff.staff_schedule` | 排班冲突唯一约束、取消留痕（V21） |
+| `StaffTraining`、`StaffTrainingList`、`ExpiringTrainingList`、`CreateStaffTrainingRequest` | `m4_staff.staff_training` | 培训记录、到期提醒（V21） |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
 
 ## 5. 【待确认】汇总
 
+0. **分级授权与排班口径**：R1–R5 的业务含义与“级别 → 术式/年龄/ASA”默认映射、ASA 上限
+   是否按级别固定、职称/职级字典、班次（三班制/节假日班/换班审批）、术间是否允许同时多人，
+   待院方（医务处/麻醉科/手术室/人事）确认；见 ADR-0019。
 1. 患者编号、住院号格式与唯一性；`gender`/`birth_date` 编码与返回精度。
 2. 术间设备配置结构、实时状态承载、隔离字段命名。
 3. 角色/权限/数据范围四张表的最终表名、权限点编码规范。

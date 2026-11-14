@@ -23,7 +23,7 @@ cd "$ROOT"
 source "$ROOT/scripts/env.sh" >/dev/null
 
 CONTRACTS_DIR="$ROOT/packages/contracts"
-DOMAINS=(auth patient scheduling anesthesia device drug)
+DOMAINS=(auth patient scheduling anesthesia device drug staff)
 MODE="all"
 
 for arg in "$@"; do
@@ -90,7 +90,7 @@ if [ "$MODE" != "lint" ]; then
     fi
   done
   if [ "$breaking_result" != "FAIL" ]; then
-    breaking_result="PASS（6 域均无破坏性变更）"
+    breaking_result="PASS（7 域均无破坏性变更）"
   fi
 fi
 
@@ -130,27 +130,29 @@ fi
 
 if [ "$MODE" = "all" ]; then
   hr
-  echo "[contract-check] 4/4 生成物漂移校验（重新生成 → git diff）"
+  echo "[contract-check] 4/4 生成物漂移校验（重新生成 → 内容哈希对比，含 untracked）"
   if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # 对比“重生成前/后”的 git diff：干净树上等价于 git diff --exit-code；
-    # 工作区已有未提交契约改动时，可区分“生成物已同步”与“生成物漂移”。
-    diff_before="$(git -C "$ROOT" diff -- packages/contracts/generated/typescript)"
-    if pnpm -C "$CONTRACTS_DIR" gen:ts >/dev/null; then
-      drift=0
-      if [ -z "$diff_before" ]; then
-        # 干净树：直接使用 git diff --exit-code 判定生成物是否漂移。
-        git -C "$ROOT" diff --exit-code -- packages/contracts/generated/typescript >/dev/null 2>&1 || drift=1
-      else
-        # 工作区已有未提交契约改动：对比重生成前后的 diff，仅当生成物发生变化才算漂移。
-        diff_after="$(git -C "$ROOT" diff -- packages/contracts/generated/typescript)"
-        [ "$diff_before" = "$diff_after" ] || drift=1
+    generated_dir="$CONTRACTS_DIR/generated/typescript"
+    # S-6：不能只用 git diff 判断——生成物可能是 untracked（首次落地）或被 .gitignore
+    # 忽略，git diff 会漏判。这里对目录内全部文件做内容哈希，重生成前后对比，
+    # 覆盖 tracked/untracked/未 add 的生成物，且不修改 git index。
+    hash_generated() {
+      if [ ! -d "$generated_dir" ]; then
+        printf 'EMPTY'
+        return
       fi
-      if [ "$drift" -eq 0 ]; then
-        echo "  PASS：generated/typescript 与 6 份契约一致"
+      (cd "$generated_dir" \
+        && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+    }
+    before_hash="$(hash_generated)"
+    if pnpm -C "$CONTRACTS_DIR" gen:ts >/dev/null; then
+      after_hash="$(hash_generated)"
+      if [ "$before_hash" = "$after_hash" ]; then
+        echo "  PASS：generated/typescript 与 7 份契约一致（含 untracked 文件）"
         drift_result="PASS"
       else
         echo "  FAIL：generated/typescript 与契约不一致（重生成产生了文件变化）"
-        git -C "$ROOT" diff --stat -- packages/contracts/generated/typescript | sed 's/^/    /'
+        git -C "$ROOT" status --porcelain -- packages/contracts/generated/typescript | sed 's/^/    /'
         echo "        请运行 bash scripts/gen-contracts.sh 并提交生成物后再提交 PR。"
         drift_result="FAIL"
         fail=1

@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口）
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -16,7 +16,8 @@ packages/contracts/
 │   ├── anesthesia.yaml    # 术前访视与评估、记录单、锁单/修订、三方核查、随访
 │   ├── device.yaml        # 设备登记、网关批量上报（幂等）、体征窗口查询、采集健康摘要
 │   ├── drug.yaml          # 药品目录、麻精专册/交接/基数/日结、药房适配器状态
-│   └── baseline/          # 当前已发布兼容基线（6 份快照）
+│   ├── staff.yaml         # 人员档案、分级授权（R1–R5）、排班、培训与到期提醒
+│   └── baseline/          # 当前已发布兼容基线（7 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -31,7 +32,8 @@ packages/contracts/
 | `anesthesia.yaml` | 37 | 54 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、预警规则版本化/告警评估与确认忽略/抢救记录 append-only（0.6.0）、实时触发/评估水位/规则待确认与历史版本/抢救人员留痕（0.7.0）、锁单/锁单前置清单/修订版本/版本差异/当前有效值投影与 CA 占位签名（0.8.0→0.8.1）、复苏记录入室/Aldrete 评估时间序列/转出 SBAR 与达标快照（0.9.0）、旧访视骨架读写、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
 | `device.yaml` | 4 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
 | `drug.yaml` | 10 | 15 | 药品目录（列表/检索/详情/创建/更新）、五专科室选择、麻精专册登记、专柜交接、基数维护、日结/班结（平账）、药房适配器状态（EXT-02 SIMULATED） | §2.5、§3.4、§3.9.2 |
-| **合计** | **84** | **112** | 6 个限界上下文骨架 | — |
+| `staff.yaml` | 10 | 15 | 人员档案（列表/详情/创建/更新）、科室选项、分级授权（当前 + append-only 历史、授予/撤销、授权校验）、排班（查询/新建/更新/取消、冲突检测）、培训（查询/登记/到期提醒） | §2.4.4、§3.4.1、§3.9.2 |
+| **合计** | **94** | **127** | 7 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -511,6 +513,62 @@ packages/contracts/
   SELF/ROOM fail-closed 403）。最小实现与待确认项见 `docs/modules/m4/README.md` 与 ADR-0018。
 - **示例**：全部 SYNTHETIC（演示药品/批号/处方号/使用人/签字人），不含真实患者标识。
 
+### 3.14 人员档案、分级授权、排班与培训（M4-M13-01，staff 0.1.1 新增域）
+
+> 0.1.1 是**新增域**的 additive 修订（10 条路径 / 15 个 operation / 25 个 schema；新增
+> `secondApproverId/secondApprovedAt/secondApproverReason/revokedAt/revokedBy` 与
+> `notApplicable`、`INPUT_INCOMPLETE`，无删除/类型变更），不改动既有六份契约；
+> `staff.yaml` 与 `baseline/staff.yaml` 同步落地，`oasdiff`（baseline → 当前、HEAD baseline →
+> 当前）均无破坏性变更（HEAD 无该域快照时自动 SKIP）。R1–R5 的临床映射【待确认】，
+> 契约不内置臆造映射；授权范围以显式字段为权威（见 ADR-0019）。
+
+- **人员档案**（`m4:staff:read` 读 / `m4:staff:write` 写）：`GET/POST /v1/staff`、
+  `GET/PUT /v1/staff/{staffId}`、`GET /v1/staff/departments`。工号（`staffNo`）院内唯一且
+  创建后不可改（重复 409）；`userId` 可空但非空时一人一档案（重复 409）；科室必须存在、启用且
+  为科室组织（422）并在数据范围内（403）；更新必须回传 `version`（过期 409）；不存在或越界 404。
+  在职状态 `ACTIVE/INACTIVE`：离职后档案只读历史，授权校验一律 `allowed=false`。
+  `userId` 写入校验存在/启用/组织归属；`siteId` 校验 UUID 格式与 SITE 范围（院区存在性/
+  同院区校验依赖 m0 组织查询扩展，Q-7）。
+- **分级授权**（`getStaffAuthorizations` 读 / `updateStaffAuthorizations` 写）：
+  - `GET /v1/staff/{staffId}/authorizations`：返回 `current`（当前版本，无授权为 null）与
+    `history`（全部版本，倒序）；
+  - `PUT /v1/staff/{staffId}/authorizations`：`action=GRANT`（级别 R1–R5 + `surgeryScopes`
+    + `ageMin/ageMax` + `asaMax` + `validFrom/validTo` + `approvedBy`）或
+    `action=REVOKE`（保留上一版本范围快照并把新版本标记 REVOKED，必须给原因，记录
+    `revokedAt/revokedBy`）。**append-only**：每次写入新 `version`（0 → 1 起），历史只增不改
+    （数据库触发器 55000）；`version` 必须等于当前版本（过期 409）；范围超出院方配置的级别策略 422。
+    **授权治理**：不得自授；`approvedBy` 必须存在、启用、具备 `m4:staff:authorize` 且非操作者/
+    被授权人；R1/R2、范围 `*` 或 ASA≥4 必须 `secondApproverId`（两名不同审批人，双方落库）；
+    失败审计按实际 `AUTH_GRANT/AUTH_REVOKE` 记录。
+  - `POST /v1/staff/authorization-checks`：**排程（M1）/术中（M5）集成点**。入参
+    `staffId` + `surgeryTypeId/age/asa`（缺失须在 `notApplicable` 声明）+ `at`，返回 `allowed`
+    与**全部**未通过原因（`NO_AUTHORIZATION`、`AUTHORIZATION_REVOKED`、`NOT_YET_VALID`、
+    `EXPIRED`、`SURGERY_SCOPE_MISSING`、`AGE_OUT_OF_RANGE`、`ASA_EXCEEDS_LIMIT`、
+    `STAFF_INACTIVE`、`INPUT_INCOMPLETE`、`LEVEL_POLICY_EXCEEDED`）。
+    缺失且未声明不适用 → `INPUT_INCOMPLETE`（fail-closed）；`at` 回溯按当时生效版本
+    （`approved_at/valid_from/revoked_at`），撤销不追溯既往。人员不存在/不可见 422
+    （集合型操作不声明 404）。
+    判定通过**不表示临床适宜**，最终由麻醉医师判断（AGENTS H-06）。
+- **排班**（查询 `m4:staff:read` / 维护 `m4:schedule:manage`）：`GET/POST /v1/staff/schedules`、
+  `PUT /v1/staff/schedules/{scheduleId}`、`POST /v1/staff/schedules/{scheduleId}/cancel`。
+  班次 `DAY/NIGHT/ON_CALL`（方案书“日常班/值班/备班”映射；三班制【待确认】）；
+  **冲突**：同一人员同一日期同一班次、同一术间同一日期同一班次 → 409，`details[]` 给出
+  `field=staffId|roomId` 与冲突排班标识；已取消（CANCELLED）不占用名额；更新/取消乐观锁
+  过期 409，已取消不得复活。术间主数据归属 M1，本域只做冲突检测。
+- **培训**（查询 `m4:staff:read` / 登记 `m4:training:manage`）：`GET/POST /v1/staff/trainings`、
+  `GET /v1/staff/trainings/expiring?days=30`。同一人员同一课程编码唯一（409）；完成日期
+  不得晚于今天、到期日期不得早于完成日期（400）；`status` 按 30 天提醒窗口计算
+  （VALID/EXPIRING/EXPIRED/NO_EXPIRY），到期查询**含已过期**（便于清零）。
+- **权限（V22）**：`m4:staff:read` 读；`m4:staff:write` 维护（SYS_ADMIN/SYS_AUTH_MANAGER）；
+  `m4:staff:authorize` 审批人资格；`m4:schedule:manage` 排班；`m4:training:manage` 培训。
+  `SYS_ANESTHESIOLOGIST` 只读（不再有 write/training）。
+- **数据范围**：ALL 全院 / SITE 院区子树 / DEPT 授权科室 / SELF 仅本人（写操作 403）；
+  ROOM/无范围 fail-closed 403（含 `/v1/staff/departments`）；单对象越界与不存在统一 404。
+- **审计**：`STAFF_CREATE/STAFF_UPDATE`、`AUTH_GRANT/AUTH_REVOKE`、
+  `SCHEDULE_CREATE/SCHEDULE_UPDATE/SCHEDULE_CANCEL`、`TRAINING_RECORD`；detail 只含标识与
+  枚举摘要，**不含姓名、证书号原文与联系方式**。
+- **示例**：全部 SYNTHETIC（演示医师/工号/证书号/排班），不含真实人员与患者标识。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -636,4 +694,7 @@ pnpm -C packages/contracts check:breaking   # 仅 breaking
 - 会话与刷新令牌的最终时效、是否强制双因素，需安全评审确认（当前示例 1800 秒 / 30 分钟）。
 - 排程冲突已落地时间重叠/术者/患者/术间类型/时间窗五类规则；设备依赖、隔离与人员资质的
   字段与字典编码在 M2-M2-02/M3 资质模块评审后补充（枚举值已预留）。
+- **分级授权口径【待确认】**：R1–R5 的业务含义、级别 → 术式范围/年龄段/ASA 的默认映射、
+  职称/职级字典、排班班次定义（是否三班制/节假日班/换班审批）、术间是否允许同时多人，
+  均待院方（医务处/麻醉科/手术室/人事）确认，见 ADR-0019 与 `docs/modules/m4/README.md`。
 - 生命体征高频序列与波形查询接口不在本基线，按 §3.4.4 的分区/归档方案在 M2 细化。
