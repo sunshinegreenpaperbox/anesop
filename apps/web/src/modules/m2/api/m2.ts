@@ -441,3 +441,103 @@ export function createRecordRevision(
 ): Promise<RecordRevision> {
   return http.post<RecordRevision>(`/v1/anesthesia/records/${recordId}/revisions`, payload)
 }
+
+/* ---------------------------------------------------------------------------
+ * PACU 复苏记录与转出（anesthesia.yaml 0.9.0，M3-M10-01）
+ * 入室 → Aldrete 评估（服务端算总分）→ 转出（去向 + SBAR + 达标确认，阈值不足 409）。
+ * 转出阈值由服务端配置（默认 9，【待确认】），前端只展示服务端结论，不自行判定。
+ * ------------------------------------------------------------------------- */
+
+export type PacuVitalSigns = anesthesiaComponents['schemas']['PacuVitalSigns']
+export type CreatePacuRecordRequest = anesthesiaComponents['schemas']['CreatePacuRecordRequest']
+export type PacuRecord = anesthesiaComponents['schemas']['PacuRecord']
+export type PacuRecordList = anesthesiaComponents['schemas']['PacuRecordList']
+export type RecordPacuAssessmentRequest =
+  anesthesiaComponents['schemas']['RecordPacuAssessmentRequest']
+export type PacuAssessment = anesthesiaComponents['schemas']['PacuAssessment']
+export type PacuAssessmentList = anesthesiaComponents['schemas']['PacuAssessmentList']
+export type PacuHandover = anesthesiaComponents['schemas']['PacuHandover']
+export type PacuDischargeRequest = anesthesiaComponents['schemas']['PacuDischargeRequest']
+export type PacuDischargeCriteria = anesthesiaComponents['schemas']['PacuDischargeCriteria']
+export type PacuDischarge = anesthesiaComponents['schemas']['PacuDischarge']
+export type PacuStatus = PacuRecord['status']
+export type PacuConsciousness = PacuRecord['consciousness']
+export type PacuAirway = PacuRecord['airway']
+export type PacuDestination = PacuDischarge['destination']
+
+/** 复苏状态中文标签。 */
+export const pacuStatusLabels: Record<string, string> = {
+  ADMITTED: '已入室',
+  MONITORING: '监测中',
+  READY: '已达转出标准',
+  DISCHARGED: '已转出',
+}
+
+/** 入室意识中文标签（枚举为演示口径【待确认】）。 */
+export const pacuConsciousnessLabels: Record<string, string> = {
+  ALERT: '清醒',
+  DROWSY: '嗜睡',
+  SEDATED: '镇静',
+  UNRESPONSIVE: '无反应',
+}
+
+/** 入室气道中文标签（枚举为演示口径【待确认】）。 */
+export const pacuAirwayLabels: Record<string, string> = {
+  NATURAL: '自然气道',
+  ORAL_AIRWAY: '口咽通气道',
+  NASAL_AIRWAY: '鼻咽通气道',
+  LARYNGEAL_MASK: '喉罩',
+  ENDOTRACHEAL: '气管插管',
+  TRACHEOSTOMY: '气管切开',
+}
+
+/** 转出去向中文标签（枚举为演示口径【待确认】）。 */
+export const pacuDestinationLabels: Record<string, string> = {
+  WARD: '病房',
+  ICU: 'ICU',
+  HDU: 'HDU（过渡监护）',
+  DAY_SURGERY: '日间手术区',
+  HOME: '离院',
+}
+
+/** 按麻醉记录单查询复苏记录（创建时间倒序；记录单不可见 403）。 */
+export function listPacuRecords(recordId: string): Promise<PacuRecordList> {
+  const query = new URLSearchParams({ recordId })
+  return http.get<PacuRecordList>(`/v1/anesthesia/pacu-records?${query.toString()}`)
+}
+
+/** 入室（创建复苏记录）：记录单未开始 409、不可见 422、重复未转出记录 409。 */
+export function admitPacuRecord(payload: CreatePacuRecordRequest): Promise<PacuRecord> {
+  return http.post<PacuRecord>('/v1/anesthesia/pacu-records', payload)
+}
+
+/** 复苏记录详情（含最近一次 Aldrete 总分与服务端转出阈值）。 */
+export function getPacuRecord(pacuId: string): Promise<PacuRecord> {
+  return http.get<PacuRecord>(`/v1/anesthesia/pacu-records/${pacuId}`)
+}
+
+/** Aldrete 评估时间序列（assessedAt 升序）。 */
+export function listPacuAssessments(pacuId: string): Promise<PacuAssessmentList> {
+  return http.get<PacuAssessmentList>(`/v1/anesthesia/pacu-records/${pacuId}/assessments`)
+}
+
+/** 记录 Aldrete 评估（总分由服务端计算；越界 400、已转出 409）。 */
+export function recordPacuAssessment(
+  pacuId: string,
+  payload: RecordPacuAssessmentRequest,
+): Promise<PacuAssessment> {
+  return http.post<PacuAssessment>(`/v1/anesthesia/pacu-records/${pacuId}/assessments`, payload)
+}
+
+/** 转出记录（未转出 404）。 */
+export function getPacuDischarge(pacuId: string): Promise<PacuDischarge> {
+  return http.get<PacuDischarge>(`/v1/anesthesia/pacu-records/${pacuId}/discharge`)
+}
+
+/** 转出：去向 + SBAR + 达标确认；Aldrete 未达标/未评估 409（details 列出条件）。 */
+export function dischargePacuRecord(
+  pacuId: string,
+  payload: PacuDischargeRequest,
+): Promise<PacuDischarge> {
+  return http.post<PacuDischarge>(`/v1/anesthesia/pacu-records/${pacuId}/discharge`, payload)
+}

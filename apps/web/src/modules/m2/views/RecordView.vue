@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ApiError } from '../../../api/http'
 import { useAuthStore } from '../../../stores/auth'
@@ -86,6 +86,7 @@ const ANESTHESIA_TYPES = [
 ] as const
 
 const route = useRoute()
+const router = useRouter()
 const auth = useAuthStore()
 
 const scheduleId = computed(() => {
@@ -201,6 +202,8 @@ const canAck = computed(() => auth.hasPermission('m2:alert:ack'))
 const canRescue = computed(() => auth.hasPermission('m2:rescue:write'))
 const canLock = computed(() => auth.hasPermission('m2:record:lock'))
 const canRevise = computed(() => auth.hasPermission('m2:record:revise'))
+/** S-2：PACU 入口按 m2:pacu:read 显示；缺权限时隐藏，避免 403 跳转。 */
+const canPacuRead = computed(() => auth.hasPermission('m2:pacu:read'))
 /** 权限隔离（S-3）：缺 alert:read / rescue 权限时跳过对应请求，不影响时间轴/用药/出入量。 */
 const canAlertRead = computed(() => auth.hasPermission('m2:alert:read'))
 const canRescueView = computed(() => canRescue.value || auth.hasPermission('m2:record:write'))
@@ -815,6 +818,14 @@ onUnmounted(stopAlertPolling)
       </div>
       <div class="record__actions">
         <el-button data-testid="record-refresh" :loading="loading" @click="load">刷新</el-button>
+        <el-button
+          v-if="record && canPacuRead"
+          data-testid="pacu-entry"
+          :disabled="busy"
+          @click="router.push(`/m2/pacu/${record.recordId}`)"
+        >
+          复苏记录（PACU）
+        </el-button>
         <el-button
           v-if="record && canLock && !locked"
           data-testid="lock-open"

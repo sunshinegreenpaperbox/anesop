@@ -16,6 +16,7 @@ import ThreeWayCheckView from '../modules/m2/views/ThreeWayCheckView.vue'
 import RecordEntryView from '../modules/m2/views/RecordEntryView.vue'
 import RecordView from '../modules/m2/views/RecordView.vue'
 import AlertRuleConfigView from '../modules/m2/views/AlertRuleConfigView.vue'
+import PacuView from '../modules/m2/views/PacuView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -145,6 +146,17 @@ export const routes: RouteRecordRaw[] = [
           title: '麻醉记录单',
           icon: 'sessions',
           permissions: ['m2:record:read'],
+          menu: false,
+        },
+      },
+      {
+        path: 'm2/pacu/:recordId',
+        name: 'm2-pacu',
+        component: PacuView,
+        meta: {
+          title: '复苏记录（PACU）',
+          icon: 'sessions',
+          permissions: ['m2:pacu:read'],
           menu: false,
         },
       },

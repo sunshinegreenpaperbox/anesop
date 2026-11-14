@@ -189,6 +189,21 @@ describe('RecordView 麻醉记录单', () => {
     resetAppState()
   })
 
+  it('PACU 入口按 m2:pacu:read 权限显示', async () => {
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m2:record:read'] }))
+    configureHttp({ fetchImpl: createFetchQueue(loadedResponses()).fetchImpl })
+    const withoutPermission = mountView()
+    await settle()
+    expect(withoutPermission.find('[data-testid="pacu-entry"]').exists()).toBe(false)
+    withoutPermission.unmount()
+
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m2:record:read', 'm2:pacu:read'] }))
+    configureHttp({ fetchImpl: createFetchQueue(loadedResponses()).fetchImpl })
+    const withPermission = mountView()
+    await settle()
+    expect(withPermission.find('[data-testid="pacu-entry"]').exists()).toBe(true)
+  })
+
   it('台次无记录单时显示空态并可创建草稿', async () => {
     const queue = createFetchQueue([
       jsonResponse({ items: [] }),
