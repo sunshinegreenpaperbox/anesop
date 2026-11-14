@@ -38,3 +38,4 @@
 | 临床记录专项（发布准入） | AGENTS.md | anesthesia.yaml + device.yaml | m2/record + m2/acquisition | 记录单/PACU | ClinicalRecordAcceptanceTest（时间轴/补传/并发/签名锁定）+ 专项矩阵 docs/testing §9 | 已实现（M3-QA-01，2026-11-14；失败即阻断发布） |
 | 药品目录与麻精五专 | 2.5 | drug.yaml 0.1.0 | m4/drug | 药品/五专页 | M4DrugApiIntegrationTest | 已实现（M4-M15-01；T-4 收口；EXT-02 模拟） |
 | 人员档案与分级授权/排班/培训 | 2.5 | staff.yaml 0.1.0 | m4/staff | 人员/授权/排班页 | M4StaffApiIntegrationTest | 已实现（M4-M13-01；R1–R5 映射待确认） |
+| 耗材主数据与 UDI 追溯/SPD | 2.5 | material.yaml 0.1.0 | m4/material | 耗材/追溯页 | M4MaterialApiIntegrationTest | 已实现（M4-M14-01；EXT-03 模拟） |
