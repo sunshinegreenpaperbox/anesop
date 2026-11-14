@@ -27,6 +27,7 @@ import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m4.api.error.M4ConflictException;
 import com.anesop.m4.api.error.M4UnprocessableException;
 import com.anesop.m4.api.error.M4ValidationException;
+import com.anesop.m5.api.error.M5ValidationException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -330,6 +331,17 @@ public class ApiExceptionHandler {
      * {@code BUSINESS_RULE_VIOLATION}，如药品未收录于字典、耗材已过效期、高值耗材裸数量
      * 出入库、UDI 绑定记录不存在/不可见。业务语义拒绝，非权限 403。
      */
+    /**
+     * 看板字段级校验（M5-M18-01）：400 {@code PARAM_INVALID}，field 由服务端固定提供，
+     * 不回显原始入参（日期原串）。
+     */
+    @ExceptionHandler(M5ValidationException.class)
+    public ResponseEntity<Error> handleM5Validation(M5ValidationException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
     @ExceptionHandler(M4UnprocessableException.class)
     public ResponseEntity<Error> handleM4Unprocessable(M4UnprocessableException exception,
             HttpServletRequest request) {

@@ -87,6 +87,13 @@
       <version>${project.version}</version>
     </dependency>
 
+    <!-- M5 实时态势与 KPI 看板实现（M5-M18-01）：bootstrap 是唯一允许依赖 impl 的装配点 -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m5-impl</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
     <!-- M2 术前访视实现（M2-M4-01）：bootstrap 是唯一允许依赖 impl 的装配点 -->
     <dependency>
       <groupId>com.anesop</groupId>

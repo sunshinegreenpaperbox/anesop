@@ -13,7 +13,7 @@
 
   <artifactId>m5</artifactId>
   <packaging>pom</packaging>
-  <name>ANESOP :: M5 药品统计</name>
+  <name>ANESOP :: M5 实时态势与 KPI 看板</name>
 
   <modules>
     <module>api</module>

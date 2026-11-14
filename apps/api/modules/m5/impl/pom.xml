@@ -12,8 +12,8 @@
   </parent>
 
   <artifactId>m5-impl</artifactId>
-  <name>ANESOP :: M5 药品统计 IMPL</name>
-  <description>M5 药品统计 实现与数据访问；只允许依赖本模块 api，不得依赖其他模块 impl</description>
+  <name>ANESOP :: M5 实时态势与 KPI 看板 IMPL</name>
+  <description>M5 实时态势与 KPI 看板 实现（只读聚合/数据范围/审计采样）；只允许依赖本模块 api，不得依赖其他模块 impl</description>
 
   <dependencies>
     <dependency>
@@ -24,6 +24,23 @@
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-context</artifactId>
+    </dependency>
+    <!-- 看板口径阈值用 @ConfigurationProperties（anesop.m5.dashboard.*）绑定 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot</artifactId>
+    </dependency>
+    <!-- 越权语义（AccessDeniedException），由 Web 层统一映射 403 -->
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-core</artifactId>
+    </dependency>
+
+    <!-- 单测：JUnit 5 + AssertJ + Mockito（版本由 Spring Boot BOM 管理） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 </project>
