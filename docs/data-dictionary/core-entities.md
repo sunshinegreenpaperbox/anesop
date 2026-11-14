@@ -204,15 +204,20 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 | `application_id` | uuid | 是 | 手术申请（由台次解析，不信任客户端） | §3.4.2 |
 | `patient_id` | uuid | 是 | 患者标识（不存姓名/证件号/住院号明文） | §3.9.3 |
 | `room_id` | uuid | 否 | **V16**：创建时经 m1-api 快照的术间；采集落库事件按它匹配 ONGOING 记录（不跨模块读 m1 表） | §2.4.3、ADR-0017；`idx_anesthesia_record_room_active` |
-| `status` | varchar(16) | 是 | `DRAFT/ONGOING`（契约映射 `DRAFT/IN_PROGRESS`） | §2.4.3；锁单 `LOCKED/REVISED` 由 M3-M2-03 新迁移扩展 |
-| `anesthesia_type` | varchar(16) | 是 | `GENERAL/REGIONAL/COMBINED/LOCAL/SEDATION` | §2.4.3；未锁定可改 |
-| `started_at` | timestamptz | 否 | 记录开始（首个 `ANESTHESIA_START` 事件时间） | §2.4.3；DRAFT 为 NULL |
-| `ended_at` | timestamptz | 否 | 记录结束（`ANESTHESIA_END` 事件时间） | §2.4.3；不得早于开始 |
+| `status` | varchar(16) | 是 | `DRAFT/ONGOING/LOCKED/REVISED`（契约映射 `DRAFT/IN_PROGRESS/LOCKED/REVISED`） | §2.4.3；V17 扩展；未锁单只允许 DRAFT/ONGOING，锁单只允许 `ONGOING → LOCKED` |
+| `anesthesia_type` | varchar(16) | 是 | `GENERAL/REGIONAL/COMBINED/LOCAL/SEDATION` | §2.4.3；未锁定可改，锁单后不可改（更正只写入修订快照） |
+| `started_at` | timestamptz | 否 | 记录开始（首个 `ANESTHESIA_START` 事件时间） | §2.4.3；DRAFT 为 NULL，写入后不可改 |
+| `ended_at` | timestamptz | 否 | 记录结束（`ANESTHESIA_END` 事件时间） | §2.4.3；不得早于开始，锁单后不可改 |
+| `locked_at` / `locked_by` | timestamptz / uuid | 否 | **V17** 锁单时间/操作人（同时写入，写一次不可改） | §2.4.3、§3.9.4；`ck_anesthesia_record_lock_consistency` |
+| `current_revision` | integer | 是 | **V17** 当前修订版本号（未锁单 0，每次修订 +1，只增） | 对应 `record_revision.revision_no` |
+| `lock_signature_ref` | varchar(128) | 否 | **V17** 锁单签名占位标识（`SIM-CA-<记录单标识>`，CA 占位 EXT-05） | §3.9.4 |
+| `lock_signature_hash` | varchar(64) | 否 | **V17** 锁单签名摘要：规范化记录 JSON 的 SHA-256（不含患者标识/审计时间/签名字段） | §3.9.4；`^[0-9a-f]{64}$` |
+| `lock_ca_status` | varchar(16) | 否 | **V17** 锁单 CA 状态（EXT-05 为 `SIMULATED`，解除后才有 `VERIFIED`） | §3.9.4 |
 | `version` | bigint | 是 | 乐观锁版本（从 1 起，更新必须回传） | §3.4.3 |
 | 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by` | §3.4.3 |
-| `deleted` | boolean | 是 | 逻辑删除（本期不提供删除接口） | §3.4.3；触发器拒绝物理删除 |
+| `deleted` | boolean | 是 | 逻辑删除（本期不提供删除接口） | §3.4.3；锁单后不可删除，触发器拒绝物理删除 |
 
-说明：锁单后不可直接改，修改生成修订版本并保留原值、修改人、时间、原因（§2.4.3），锁单/修订表与 `record_hash` 算法【待确认】（M3-M2-03）；三方核查未完成不允许锁单（集成点见 `docs/modules/m2/README.md` §5.4）。
+说明：锁单后不可直接改（V17 触发器 + 服务层 409 双保险），修改只能新增修订版本并保留原值、修改人、时间、原因（§2.4.3）；锁单前置（三方核查完成、当前有效 SIGNED 同意、开始/结束时间完整、至少 1 个事件）由服务层校验，未满足 409 并逐项列出。签名口径与稳定序列化见 `docs/modules/m2/README.md` §14.3。
 
 ### 3.3 时间轴事件 `m2_anes.record_event`（V13 已实现，append-only）
 
@@ -316,7 +321,7 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 | `started_at` / `ended_at` | timestamptz | 抢救时间窗（落在记录单时间窗内，服务层校验 400） |
 | `event_summary` | jsonb 对象 | `{summary, interventions[]}`，不写患者直接标识 |
 | `drugs` | jsonb 数组 | `[{drugName,dose,unit,route,administeredAt}]`（≤50 条） |
-| `leader` | jsonb 对象（NOT NULL） | **V16**：抢救负责人 `{userId?, name}`，name 必填（CHECK `ck_resuscitation_leader`） |
+| `leader` | jsonb 对象（NOT NULL） | **V16**：抢救负责人 `{userId?, name}`，name 必填（CHECK `ck_resuscitation_leader`）；锁单后禁止新增（Q-2） |
 | `rescuers` | jsonb 数组（NOT NULL） | **V16**：参与人员 `[{userId?, name}]`，≥1 人（CHECK `ck_resuscitation_rescuers`）；姓名只落库、不入日志/审计 |
 | `outcome` | varchar(16) | `SUCCESS`/`PARTIAL`/`FAILED`/`UNKNOWN`（【待确认】） |
 | `created_at/by` | timestamptz/uuid | 录入留痕 |
@@ -334,6 +339,25 @@ UPDATE/DELETE/TRUNCATE 由触发器拒绝（SQLSTATE 55000）。
 说明：采集 ingest 成功提交后（`@TransactionalEventListener(AFTER_COMMIT)`）按记录单快照 `room_id`
 匹配 `ONGOING 且 started_at IS NOT NULL` 的记录做增量评估；读取告警列表不评估，手动 evaluate
 仅调试/补偿。迁移前已存在的记录单水位初始化为迁移时刻，不回评历史窗口（ADR-0017）。
+
+### 3.4.6 修订版本 `m2_anes.record_revision`（V17 已实现，append-only，M3-M2-03）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键（gen_random_uuid） | 接口 `signatureRef` 前缀使用修订标识 |
+| `record_id` | uuid | 是 | 所属记录单（FK；记录必须已锁单才能新增修订） | §2.4.3 |
+| `revision_no` | integer | 是 | 修订版本号（同一记录单从 1 递增，`(record_id, revision_no)` 唯一） | 服务层在记录单行锁内分配 |
+| `reason_code` | varchar(32) | 是 | 白名单（0.8.1）`ANESTHESIA_TYPE_CHANGE/OTHER`；`OMISSION`/`TIMING_CORRECTION` 待结构化更正能力（Q-17） | 契约 `CreateRevisionRequest.reasonCode` |
+| `reason` | varchar(500) | 是 | 修订原因说明（只落库/授权用户可见，不写日志） | §2.4.3 |
+| `changes` | varchar(500) | 是 | 变更摘要（版本历史展示） | 契约 `changes` |
+| `snapshot` | jsonb | 是 | 全量快照：`record/events/drugs/fluids/rescues/ioSummary/signatures`；数组按 (时间,id) 稳定排序，不含患者标识、审计时间、抢救 created_at/created_by 与签名字段本身；设备 vital_sign 明细不在范围 | 哈希输入见 §14.3 |
+| `previous_revision_no` / `previous_signature_hash` | integer / varchar(64) | 否 | 上一修订版本号与摘要（首版为 NULL，后续成对） | 版本链校验；CHECK 约束 |
+| `signature_ref` | varchar(128) | 是 | 修订签名占位标识（`SIM-CA-<修订标识>`，CA 占位 EXT-05） | §3.9.4 |
+| `signature_hash` | varchar(64) | 是 | 修订快照规范化 JSON 的 SHA-256（`^[0-9a-f]{64}$`） | §3.9.4 |
+| `ca_status` | varchar(16) | 是 | `SIMULATED`（EXT-05）/`VERIFIED`（解除后）/`PENDING`/`FAILED` | §3.9.4 |
+| `created_at` / `created_by` | timestamptz / uuid | 是 | 修订时间与创建人（服务端时间/当前登录用户） | §3.4.3 |
+
+说明：修订版本永久 append-only（UPDATE/DELETE/TRUNCATE 由触发器拒绝，SQLSTATE 55000）；原记录与历史修订不可改，首版差异对比 `previous_revision_no=0` 的锁单原始内容。`record_revision` BEFORE INSERT 链守卫校验父记录已锁单、`revision_no=current_revision+1`、`previous_signature_hash` 与上一版一致（伪造/跳号/断链 55000）。记录锁单后禁止 INSERT `record_event`/`drug_administration`/`fluid_record`/`resuscitation_record`（V17 BEFORE INSERT 触发器）。
 
 ### 3.5 生命体征 `m2_anes.anesthesia_vital`（V4 已实现；V14 采集接入）
 
@@ -475,7 +499,9 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 | `VitalSignSample` | 未落表（M3-M8-01） | 记录单 `vitalSigns` 占位，本期固定空数组 |
 | `AlertRule`、`AlertRuleList`、`UpdateAlertRuleRequest` | `m2_anes.alert_rule` | 规则版本化、阈值/持续时长/严重度（V15） |
 | `Alert`、`AlertList`、`AcknowledgeAlertRequest`、`AlertEvaluationResult` | `m2_anes.alert` | 告警留痕与一次性处置、去重键（V15） |
-| `ResuscitationRecord`、`ResuscitationRecordList`、`CreateResuscitationRequest`、`ResuscitationDrug`、`ResuscitationEventSummary`、`ResuscitationParticipant` | `m2_anes.resuscitation_record` | 抢救记录 append-only、时间窗校验、负责人/参与人员（V16） |
+| `ResuscitationRecord`、`ResuscitationRecordList`、`CreateResuscitationRequest`、`ResuscitationDrug`、`ResuscitationEventSummary`、`ResuscitationParticipant` | `m2_anes.resuscitation_record` | 抢救记录 append-only、时间窗校验、负责人/参与人员（V16）；锁单后冻结（V17） |
+| `RecordRevision`、`RecordRevisionSummary`、`RecordRevisionList`、`CreateRevisionRequest`、`RevisionCorrections`、`RevisionDiff` | `m2_anes.record_revision` | 锁单后修订 append-only、版本链签名、差异（V17） |
+| `RecordEffectiveView`、`RecordEffectiveValues`、`RecordEffectiveCorrection` | 读时投影（无新表） | `original` + 最新修订 `corrections` 的当前有效值；详情/打印使用，原行不变（0.8.1） |
 | `FollowUp` | `follow_up` | 24/48 小时随访 |
 | `CurrentUser`、`DataScope` | `sys_user`、`sys_role_data_scope` 等 | 权限投影，不是单表 |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
@@ -486,13 +512,15 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 2. 术间设备配置结构、实时状态承载、隔离字段命名。
 3. 角色/权限/数据范围四张表的最终表名、权限点编码规范。
 4. 排程 `sequence_no` 唯一约束、跨天排程与改台记录是否独立成表。
-5. 麻醉记录单修订版本表与 `record_hash` 算法；记录单维度三方核查（M3）的表结构与
-   1:1 关系；CA 有效签名（EXT-05）解除后的证书链/时间戳字段。
+5. 记录单维度三方核查（M3）的表结构与 1:1 关系；CA 有效签名（EXT-05）解除后的
+   证书链/时间戳字段与真实验签流程。修订版本表与摘要算法已由 V17/`§14.3` 落地：
+   `signature_hash = SHA-256(规范化快照 JSON)`，修订快照含上一版摘要形成版本链。
 6. DASI 评分范围（V10 起按通行 0–58.2 实现）与院方口径、功能容量 <4 METs 切点，待临床确认。
 7. 用药剂量单位/途径字典、麻精双人核对签名字段与空安瓿台账（V13 先落 `second_checker_id/name`，
    电子签名与处方关联在 M5 细化）。
-7a. 记录单锁单表/修订版本表、`record_hash` 算法、事件按记录单分区策略（V13 未落，M3-M2-03
-   与新迁移承接）。
+7a. 事件按记录单分区策略（V13 未落，后续迁移）；`record_revision` 已由 V17 落地。
+   `OMISSION`/`TIMING_CORRECTION` 原因码需结构化更正能力（M3-QA 前，Q-17）；锁单后抢救
+   补录是否开放走下一修订版本待临床确认（Q-18）。
 8. 生命体征指标编码、单位、采样间隔、波形存储（D-04）。
 9. 复苏记录评分项与转出阈值、随访量表口径。
 10. 术中预警默认阈值（SpO2<90、HR<50/>120、MAP<65、EtCO2 30–50）与持续时长全部【待确认】，

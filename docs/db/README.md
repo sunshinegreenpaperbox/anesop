@@ -391,6 +391,55 @@ V16 属 expand 段：`anesthesia_record` 增加 `room_id`（创建时经 m1-api 
 - **临床风险**：阈值变更的 `pending_confirmation` 不会自动清除；生产启用前须临床顾问逐项
   确认（M5 权限细化承接复核流程），不得把演示默认阈值当成临床决策依据。
 
+### 4.12 V17（M2 锁单/修订/CA 占位签名）回滚说明
+
+V17 属 expand 段：`anesthesia_record` 增加锁单留痕（`locked_at/locked_by/current_revision/
+lock_signature_ref/lock_signature_hash/lock_ca_status`），`status` 取值扩展为
+`DRAFT/ONGOING/LOCKED/REVISED` 并新增锁字段一致性 CHECK；新增 `m2_anes.record_revision`
+（append-only 修订版本，`(record_id, revision_no)` 唯一、原因码白名单 CHECK、签名摘要 CHECK）；
+以 `CREATE OR REPLACE` 升级 `fn_anesthesia_record_guard`（锁单不可变、锁字段写一次、
+`current_revision` 逐次 +1、仅允许 `LOCKED→REVISED`）；新增
+`fn_record_child_locked_guard` 与四个 BEFORE INSERT 触发器（锁单后禁止追加事件/用药/出入量/
+抢救记录）；`record_revision` 新增 BEFORE INSERT 链守卫
+`fn_record_revision_chain_guard`（父记录已锁单、`revision_no=current_revision+1`、
+`previous_signature_hash` 与上一版一致）；修订原因码白名单为
+`ANESTHESIA_TYPE_CHANGE/OTHER`（0.8.1）；新增权限点 `m2:record:lock`、`m2:record:revise`
+（授 SYS_ADMIN/SYS_ANESTHESIOLOGIST）。
+不改写 V1–V16 既有列与数据；历史记录行迁移后 `locked_at` 为 NULL、`current_revision=0`。
+
+- **应用回滚**：下线 `POST /records/{recordId}/lock`、`GET /records/{recordId}/lock-status`、
+  `GET/POST /records/{recordId}/revisions` 与前端锁单/修订/版本历史界面；旧代码读
+  `anesthesia_record` 时新增列可忽略，锁单/修订审计保留。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份 + 临床归档，顺序不可颠倒）：
+  `DROP TRIGGER trg_record_event_locked_insert` / `trg_drug_administration_locked_insert` /
+  `trg_fluid_record_locked_insert` / `trg_resuscitation_record_locked_insert` →
+  `DROP FUNCTION fn_record_child_locked_guard()` →
+  `DROP TRIGGER trg_record_revision_chain_insert ON m2_anes.record_revision` →
+  `DROP FUNCTION fn_record_revision_chain_guard()` →
+  `DROP TABLE m2_anes.record_revision`（先 `pg_dump -t` 导出并校验行数）→
+  `DROP FUNCTION fn_record_revision_append_only()` → 删除 `ck_anesthesia_record_lock_consistency` /
+  `ck_anesthesia_record_lock_hash` / `ck_anesthesia_record_started` / `ck_anesthesia_record_status` →
+  把 `status` 回退（`REVISED→ONGOING`、`LOCKED→ONGOING`）并清空锁列/`current_revision` →
+  按 V13 定义重建 `ck_anesthesia_record_status`（仅 DRAFT/ONGOING）与
+  `ck_anesthesia_record_started` → 删除新增列 → 重新执行 V13 的
+  `CREATE OR REPLACE FUNCTION fn_anesthesia_record_guard` 恢复“仅 DRAFT/ONGOING”守卫 →
+  删除权限点与角色授权（先 `DELETE FROM sys_role_permission`，再 `DELETE FROM sys_permission`）。
+- **不可逆项**：`record_revision` 与锁单留痕属临床留痕，删除前必须导出到离线审计库；
+  锁单后已生成的事件/用药/出入量不会被回滚删除（append-only 语义不变）。
+- **重放**：修复后重新执行 V17 会重建修订表与触发器；已存在的锁单记录行若被回滚为
+  `locked_at IS NULL`，重放不会恢复其锁单状态（需从离线归档按记录标识重新锁单，生产须人签字）。
+- **临床风险**：回滚窗口内锁单记录可能重新变为“可编辑”，必须在停用相关接口与前端入口后
+  执行；`m2:record:lock/revise` 权限与审计（RECORD_LOCK/RECORD_REVISE/RECORD_SIGN）不得
+  随回滚删除（审计留存要求）。
+- **回滚演练记录（2026-11-14，M3-M2-03 复审 S-4）**：当前环境 Docker 不可用（EXT-08），
+  在嵌入式 PostgreSQL 16（`api-bootstrap` 集成测试同一实例）上执行了等价回滚 SQL 的静态
+  演练：依次重建状态 CHECK、把 `LOCKED/REVISED` 统一回退为 `ONGOING`、清空锁列与
+  `current_revision`、删除链守卫/冻结触发器与 `record_revision`，再按 V13 定义恢复
+  `fn_anesthesia_record_guard`；演练确认 `LOCKED→ONGOING` 与 `REVISED→ONGOING` 均不会触发
+  CHECK 失败（旧注释只回退 REVISED 会导致 LOCKED 行违反状态约束，已修正）。生产完整回滚
+  演练（含备份恢复与临床归档）待 staging 具备 Docker/PG 后按 §4 流程执行并由 DBA 签字；
+  未完成前不得对生产执行 V17 回滚。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）

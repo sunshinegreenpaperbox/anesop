@@ -151,11 +151,120 @@ export interface paths {
     put?: never
     /**
      * 锁单
-     * @description 锁单后记录不可直接修改，修改只能生成修订版本并保留原值、修改人、时间、原因。
-     *     三方核查未完成（缺少 ThreeWayCheck 的 timeOutAt 或 signOutAt）或版本冲突时返回 409；
-     *     CA 签名失败不阻断锁单，签名状态置为 PENDING。
+     * @description 锁单生成锁单时间、操作人与 CA 占位签名（EXT-05：caStatus=SIMULATED），记录状态置为
+     *     LOCKED、currentRevision=0；锁单后记录内容不可直接修改，修正只能新增修订版本（保留原值、
+     *     修改人、时间、原因）。前置条件见 GET /records/{recordId}/lock-status：三方核查完成、
+     *     申请存在当前有效 SIGNED 同意、记录开始/结束时间完整、至少 1 个时间轴事件。
+     *     未满足返回 409，details[] 逐项列出未满足条件（field=条件码，reason=中文说明）；
+     *     version 过期或重复锁单 409（STATE_CONFLICT）；confirmChecklist 未确认为 400。
+     *     `signatureRequested` 为兼容保留字段：EXT-05 下无论取值均生成 SIMULATED 占位签名，
+     *     不模拟真实 CA 有效签名，也不生成 PDF/证书链/可信时间戳。
      */
     post: operations['lockAnesthesiaRecord']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/lock-status': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询锁单状态与前置清单
+     * @description 返回记录单锁定状态、锁单签名摘要（EXT-05 占位）与锁单前置条件清单；清单逐项给出
+     *     条件码、中文说明、是否满足与当前值摘要，供锁单前展示（前端不得自行推导前置条件）。
+     *     条件码：THREE_WAY_CHECK_COMPLETED（三方核查完成）、CONSENT_SIGNED（当前有效
+     *     SIGNED 同意）、RECORD_STARTED（ANESTHESIA_START 已记录）、RECORD_ENDED
+     *     （ANESTHESIA_END 已记录）、AT_LEAST_ONE_EVENT（至少 1 个时间轴事件）、
+     *     NOT_LOCKED（尚未锁单）。只读接口，不改变记录状态。
+     */
+    get: operations['getRecordLockStatus']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/effective': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询当前有效记录值（锁单原始行 + 最新修订更正）
+     * @description 返回锁单时的原始临床值（original）与叠加最新修订更正后的当前有效值（effective），
+     *     供记录详情页与打印使用。原记录行与历史修订始终保持不可变；effective 只是读时投影，
+     *     不改写任何锁单字段或原始行。当前可更正字段仅 anesthesiaType（0.8.1）；事件/用药/出入量
+     *     与抢救记录为 append-only，不参与更正。corrections[] 逐项列出被修订改写的字段及来源版本。
+     *     “最新修订”指 currentRevision 指向的版本；未锁单或未修订时 effective 等于 original。
+     */
+    get: operations['getEffectiveAnesthesiaRecord']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/revisions': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询修订版本列表
+     * @description 按 revisionNo 升序返回记录单的不可变修订版本摘要（原因码、原因、变更摘要、签名摘要、
+     *     CA 状态、创建人与时间）。修订版本一经写入不可修改或删除；原记录与历史版本内容不变。
+     */
+    get: operations['listRecordRevisions']
+    put?: never
+    /**
+     * 创建修订版本（锁单后修正唯一入口）
+     * @description 锁单后修正记录的唯一入口：原因码必填且限定白名单（ANESTHESIA_TYPE_CHANGE/OTHER，
+     *     0.8.1 与当前更正能力一致；OMISSION/TIMING_CORRECTION 待结构化更正能力落地后恢复），
+     *     reason 与 changes 摘要必填。服务端对记录单行加锁（SELECT ... FOR UPDATE）后递增
+     *     revisionNo（从 1 起），生成全量快照（记录单字段 + 全部时间轴事件/用药/出入量明细/
+     *     抢救记录/出入量汇总 + 锁单签名摘要）
+     *     与 CA 占位签名（signatureRef/hash，caStatus=SIMULATED），revisionNo 唯一。
+     *     原记录与既有修订版本不可改；记录状态由 LOCKED 变为 REVISED。可选 corrections
+     *     仅允许更正 anesthesiaType（时间轴/用药/出入量为 append-only，不可通过修订改写）。
+     *     未锁单、version 过期、并发 revisionNo 冲突返回 409。
+     */
+    post: operations['createRecordRevision']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/records/{recordId}/revisions/{revisionNo}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询修订版本详情
+     * @description 返回指定 revisionNo 的完整快照、签名留痕（EXT-05 占位）与相对上一版（revisionNo-1；
+     *     首版相对锁单时原始记录，previousRevisionNo=0）的差异摘要。只读；版本不存在 404，
+     *     记录越界 404。
+     */
+    get: operations['getRecordRevision']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -1265,6 +1374,24 @@ export interface components {
        * @description Sign-out 完成时间摘要；未完成为 null。
        */
       readonly threeWayCheckSignOutAt?: string | null
+      /**
+       * Format: date-time
+       * @description 锁单时间（0.8.0 起）；未锁单为 null。锁单后记录内容不可直接修改。
+       */
+      readonly lockedAt?: string | null
+      /** @description 锁单操作人用户标识；未锁单为 null。 */
+      readonly lockedBy?: string | null
+      /** @description 当前修订版本号（锁单为 0，每次修订递增；历史版本不可改）。 */
+      readonly currentRevision?: number
+      /** @description 锁单签名占位标识（SIM-CA-<记录单标识>；EXT-05 占位）。 */
+      readonly signatureRef?: string | null
+      /** @description 锁单时的规范化记录 JSON SHA-256 摘要；未锁单为 null。 */
+      readonly signatureHash?: string | null
+      /**
+       * @description 锁单签名 CA 状态；EXT-05 下为 SIMULATED（占位签名）。
+       * @enum {string|null}
+       */
+      readonly caStatus?: 'PENDING' | 'SIMULATED' | 'VERIFIED' | 'FAILED' | null
     }
     /** @description 三方核查记录（Time-out / Sign-out）；同一记录单 1:1，是锁单前置条件。 */
     ThreeWayCheck: components['schemas']['AuditFields'] & {
@@ -1582,14 +1709,25 @@ export interface components {
       /** @description 当前版本号。 */
       version: number
     }
-    /** @description 锁单请求。 */
+    /** @description 锁单请求；必须回传当前版本并显式确认已核对前置条件清单。 */
     LockRecordRequest: {
-      /** @description 当前版本号。 */
+      /** @description 当前版本号；与服务端不一致返回 409（需刷新后重试）。 */
       version: number
-      /** @description 是否同时发起 CA 签名与可信时间戳。 */
+      /**
+       * @description 兼容保留字段（0.2.0 骨架）：是否发起 CA 签名与可信时间戳。EXT-05 下 CA 不可用，
+       *     无论取值均生成 SIMULATED 占位签名（signatureStatus=SIGNED、caStatus=SIMULATED），
+       *     不模拟真实 CA 有效签名。
+       */
       signatureRequested: boolean
+      /**
+       * @description 操作人是否已逐项确认锁单前置清单（前端二次确认）。**运行时必填**：缺省或 false
+       *     返回 400，不执行锁单；服务端仍会重新校验前置条件，不能以本字段替代校验。
+       *     未列入 schema required 是为保持相对 HEAD baseline 的兼容性（新增 required 属性
+       *     会被 oasdiff 判为破坏性变更），服务端按必填处理。
+       */
+      confirmChecklist?: boolean
     }
-    /** @description 锁单结果；id 为记录单标识。 */
+    /** @description 锁单结果；id 为记录单标识，签名均为 EXT-05 占位（caStatus=SIMULATED）。 */
     LockRecordResult: components['schemas']['IdResponse'] & {
       /**
        * @description 锁单后的状态。
@@ -1604,10 +1742,254 @@ export interface components {
       /** @description 锁单操作人用户标识。 */
       lockedBy: string
       /**
-       * @description CA 签名状态；失败不阻断锁单。
+       * @description 签名留痕状态：SIGNED 表示已生成签名摘要（EXT-05 为占位签名）；
+       *     PENDING/FAILED 保留给 CA 不可用降级场景，失败不阻断锁单。
        * @enum {string}
        */
       signatureStatus: 'SIGNED' | 'PENDING' | 'FAILED'
+      /** @description 签名占位标识（SIM-CA-<记录单标识>）；不保存签名原文/证书链。 */
+      signatureRef?: string
+      /**
+       * @description 规范化记录 JSON（字段排序、排除患者标识/审计时间/签名字段）的 SHA-256
+       *     十六进制摘要（64 字符），用于比对记录内容是否被篡改。
+       */
+      signatureHash?: string
+      /**
+       * @description CA 签名状态；EXT-05 下为 SIMULATED（占位），关闭 EXT-05 后才有 VERIFIED。
+       * @enum {string}
+       */
+      caStatus?: 'PENDING' | 'SIMULATED' | 'VERIFIED' | 'FAILED'
+      /** @description 当前修订版本号（锁单时为 0；每次修订递增）。 */
+      currentRevision?: number
+    }
+    /** @description 锁单前置条件项（由服务端统一评估，前端只展示不自算）。 */
+    LockPrecondition: {
+      /**
+       * @description 条件码：THREE_WAY_CHECK_COMPLETED/CONSENT_SIGNED/RECORD_STARTED/RECORD_ENDED/
+       *     AT_LEAST_ONE_EVENT/NOT_LOCKED。
+       * @enum {string}
+       */
+      code:
+        | 'THREE_WAY_CHECK_COMPLETED'
+        | 'CONSENT_SIGNED'
+        | 'RECORD_STARTED'
+        | 'RECORD_ENDED'
+        | 'AT_LEAST_ONE_EVENT'
+        | 'NOT_LOCKED'
+      /** @description 条件中文名称（面向用户展示）。 */
+      label: string
+      /** @description 是否满足；false 时禁止锁单。 */
+      satisfied: boolean
+      /** @description 当前值摘要（不含患者标识/临床自由文本原文）。 */
+      detail?: string | null
+    }
+    /** @description 记录单锁单状态与前置条件清单（只读）。 */
+    RecordLockStatus: {
+      /** @description 记录单标识。 */
+      recordId: string
+      /** @description 是否已锁单（lockedAt 非空）。 */
+      locked: boolean
+      /**
+       * Format: date-time
+       * @description 锁单时间；未锁单为 null。
+       */
+      lockedAt?: string | null
+      /** @description 锁单操作人用户标识；未锁单为 null。 */
+      lockedBy?: string | null
+      /**
+       * @description 记录单契约状态（DRAFT/IN_PROGRESS/LOCKED/REVISED）。
+       * @enum {string}
+       */
+      status: 'DRAFT' | 'IN_PROGRESS' | 'LOCKED' | 'REVISED'
+      /** @description 当前修订版本号（锁单前为 0）。 */
+      currentRevision: number
+      /** @description 是否满足全部前置条件且尚未锁单（服务端判定）。 */
+      canLock: boolean
+      /** @description 锁单签名占位标识；未锁单为 null。 */
+      signatureRef?: string | null
+      /** @description 锁单签名摘要；未锁单为 null。 */
+      signatureHash?: string | null
+      /**
+       * @description 锁单签名 CA 状态（EXT-05 为 SIMULATED）；未锁单为 null。
+       * @enum {string|null}
+       */
+      caStatus?: 'PENDING' | 'SIMULATED' | 'VERIFIED' | 'FAILED' | null
+      /** @description 锁单前置条件清单（固定顺序，逐项含中文说明与是否满足）。 */
+      preconditions: components['schemas']['LockPrecondition'][]
+    }
+    /** @description 创建修订版本请求；锁单后修正记录的唯一入口。 */
+    CreateRevisionRequest: {
+      /** @description 可选：提交时看到的记录单版本号；与服务端不一致返回 409（防止基于旧视图修订）。 */
+      version?: number
+      /**
+       * @description 修订原因码（白名单，0.8.1 收缩为与当前更正能力一致的集合）：
+       *     ANESTHESIA_TYPE_CHANGE（更正麻醉方式）、OTHER（其他，须在 reason 中说明）。
+       *     OMISSION/TIMING_CORRECTION 需结构化更正能力，登记为 M3-QA 前待实现（Q 台账）。
+       * @enum {string}
+       */
+      reasonCode: 'ANESTHESIA_TYPE_CHANGE' | 'OTHER'
+      /** @description 修订原因说明（必填，≤500 字符；只落库与授权用户可见，不写日志）。 */
+      reason: string
+      /** @description 本次变更摘要（必填，≤500 字符；用于版本历史展示）。 */
+      changes: string
+      corrections?: components['schemas']['RevisionCorrections']
+    }
+    /**
+     * @description 可选：修订后的记录单字段更正（仅允许麻醉方式；时间轴/用药/出入量为 append-only，
+     *     不可通过修订改写）。更正只写入修订快照，锁单时的原始记录行保持不变。
+     */
+    RevisionCorrections: {
+      /**
+       * @description 更正后的麻醉方式（写入修订快照）。
+       * @enum {string}
+       */
+      anesthesiaType?: 'GENERAL' | 'REGIONAL' | 'COMBINED' | 'LOCAL' | 'SEDATION'
+    }
+    /**
+     * @description 修订版本全量快照（jsonb）：record 记录单临床字段、events 全部时间轴事件、drugs 用药、
+     *     fluids 出入量明细、rescues 抢救记录（含 leader/rescuers）、ioSummary 出入量汇总、
+     *     signatures 锁单/上一修订签名摘要。数组按 (时间, id) 稳定排序，摘要输入按字段名排序并
+     *     排除 null，保证同内容同摘要（同毫秒记录也不因查询顺序变化）。
+     *     “全量”边界：只含**人工书写/确认**的临床内容；设备采集的 vital_sign 明细（高频采样、
+     *     质量标记与原始帧）不入快照，原因是其由采集链路按幂等键独立留痕、不参与锁单签名，
+     *     且会把快照放大到不可控体量；时间轴事件中引用的体征只保留事件本身。
+     *     不含患者标识（patientId/patientNo/patientName）、台次/申请标识、审计时间与签名字段本身。
+     */
+    RecordRevisionSnapshot: {
+      [key: string]: unknown
+    }
+    /** @description 记录单当前有效临床字段（读时投影；不写回原记录行）。 */
+    RecordEffectiveValues: {
+      /**
+       * @description 麻醉方式（original=锁单原始值，effective=叠加最新修订更正后的值）。
+       * @enum {string}
+       */
+      anesthesiaType: 'GENERAL' | 'REGIONAL' | 'COMBINED' | 'LOCAL' | 'SEDATION'
+      /**
+       * Format: date-time
+       * @description 麻醉开始时间（append-only，不参与修订更正）。
+       */
+      startedAt: string | null
+      /**
+       * Format: date-time
+       * @description 麻醉结束时间（append-only，不参与修订更正）。
+       */
+      endedAt: string | null
+    }
+    /** @description 单字段更正来源（最新修订相对锁单原始值的差异）。 */
+    RecordEffectiveCorrection: {
+      /**
+       * @description 被更正的字段名（当前仅 anesthesiaType）。
+       * @enum {string}
+       */
+      field: 'anesthesiaType'
+      /** @description 锁单原始值。 */
+      originalValue: string
+      /** @description 当前有效值（最新修订快照中的值）。 */
+      effectiveValue: string
+      /** @description 引入该更正的修订版本号（从 1 起）。 */
+      revisionNo: number
+      /**
+       * @description 该修订的原因码。
+       * @enum {string}
+       */
+      reasonCode: 'ANESTHESIA_TYPE_CHANGE' | 'OTHER'
+    }
+    /**
+     * @description 当前有效记录值投影：original 为锁单原始行字段，effective 为叠加最新修订更正后的值。
+     *     只读取证，不改变原记录与历史修订；未锁单或未修订时二者相同。
+     */
+    RecordEffectiveView: {
+      /** @description 记录单标识。 */
+      recordId: string
+      /** @description 是否已锁单。 */
+      locked: boolean
+      /**
+       * Format: date-time
+       * @description 锁单时间；未锁单为 null。
+       */
+      lockedAt?: string | null
+      /** @description 锁单操作人用户标识；未锁单为 null。 */
+      lockedBy?: string | null
+      /**
+       * @description 记录单契约状态。
+       * @enum {string}
+       */
+      status: 'DRAFT' | 'IN_PROGRESS' | 'LOCKED' | 'REVISED'
+      /** @description 最新修订版本号（锁单前/无修订为 0）。 */
+      currentRevision: number
+      original: components['schemas']['RecordEffectiveValues']
+      effective: components['schemas']['RecordEffectiveValues']
+      /** @description 最新修订相对锁单原始值的字段更正（当前仅 anesthesiaType）。 */
+      corrections: components['schemas']['RecordEffectiveCorrection'][]
+      /** @description 锁单签名占位标识；未锁单为 null。 */
+      signatureRef?: string | null
+      /** @description 锁单签名摘要；未锁单为 null。 */
+      signatureHash?: string | null
+      /**
+       * @description 锁单 CA 状态（EXT-05 为 SIMULATED）；未锁单为 null。
+       * @enum {string|null}
+       */
+      caStatus?: 'PENDING' | 'SIMULATED' | 'VERIFIED' | 'FAILED' | null
+    }
+    /** @description 单个差异字段（快照叶子路径对比）。 */
+    RevisionFieldChange: {
+      /** @description 快照字段路径，如 record.anesthesiaType、events[2].note。 */
+      field: string
+      /** @description 上一版值的字符串表示；上一版不存在为 null。 */
+      previousValue?: string | null
+      /** @description 本版值的字符串表示；本版不存在为 null。 */
+      newValue?: string | null
+    }
+    /** @description 修订版本相对上一版的差异摘要（首版相对锁单时原始记录，previousRevisionNo=0）。 */
+    RevisionDiff: {
+      /** @description 对比的上一版本号；0 表示锁单时原始记录。 */
+      previousRevisionNo: number
+      /** @description 差异摘要（如“共 3 项字段变更”或“无内容差异（仅修订说明）”）。 */
+      summary: string
+      /** @description 变更字段列表（最多 100 项，按字段路径排序）。 */
+      changedFields: components['schemas']['RevisionFieldChange'][]
+    }
+    /** @description 修订版本摘要（列表项）。 */
+    RecordRevisionSummary: {
+      /** @description 修订版本号（从 1 起，同一记录单唯一且递增）。 */
+      revisionNo: number
+      /** @description 记录单标识。 */
+      recordId: string
+      /**
+       * @description 修订原因码（0.8.1 白名单：ANESTHESIA_TYPE_CHANGE/OTHER）。
+       * @enum {string}
+       */
+      reasonCode: 'ANESTHESIA_TYPE_CHANGE' | 'OTHER'
+      /** @description 修订原因说明。 */
+      reason: string
+      /** @description 变更摘要。 */
+      changes: string
+      /** @description 修订签名占位标识（SIM-CA-<修订标识>）。 */
+      signatureRef: string
+      /** @description 修订快照规范化 JSON 的 SHA-256 摘要。 */
+      signatureHash: string
+      /**
+       * @description CA 状态；EXT-05 下为 SIMULATED。
+       * @enum {string}
+       */
+      caStatus: 'PENDING' | 'SIMULATED' | 'VERIFIED' | 'FAILED'
+      /** @description 修订创建人用户标识。 */
+      createdBy?: string
+      /**
+       * Format: date-time
+       * @description 修订创建时间（服务端时间）。
+       */
+      createdAt: string
+    }
+    /** @description 修订版本列表（revisionNo 升序）。 */
+    RecordRevisionList: {
+      items: components['schemas']['RecordRevisionSummary'][]
+    }
+    /** @description 修订版本详情；快照与签名不可改，差异相对上一版（首版相对锁单原始记录）。 */
+    RecordRevision: components['schemas']['RecordRevisionSummary'] & {
+      snapshot: components['schemas']['RecordRevisionSnapshot']
+      diff: components['schemas']['RevisionDiff']
     }
     /** @description 术后随访记录；24/48 小时。 */
     FollowUp: components['schemas']['AuditFields'] & {
@@ -2327,8 +2709,8 @@ export interface components {
       content: {
         /**
          * @example {
-         *       "code": "RECORD_STATE_CONFLICT",
-         *       "message": "记录已锁定或提交版本已过期",
+         *       "code": "STATE_CONFLICT",
+         *       "message": "状态或版本冲突，操作未生效",
          *       "traceId": "SYNTH-TRACE-0004",
          *       "details": [
          *         {
@@ -2350,12 +2732,12 @@ export interface components {
         /**
          * @example {
          *       "code": "BUSINESS_RULE_VIOLATION",
-         *       "message": "锁单前置条件未满足",
+         *       "message": "业务规则拒绝，操作未生效",
          *       "traceId": "SYNTH-TRACE-0006",
          *       "details": [
          *         {
-         *           "field": "threeWayCheck",
-         *           "reason": "三方核查未完成"
+         *           "field": "applicationId",
+         *           "reason": "申请状态不允许当前操作"
          *         }
          *       ]
          *     }
@@ -3352,15 +3734,16 @@ export interface operations {
       content: {
         /**
          * @example {
-         *       "version": 6,
-         *       "signatureRequested": true
+         *       "version": 8,
+         *       "signatureRequested": true,
+         *       "confirmChecklist": true
          *     }
          */
         'application/json': components['schemas']['LockRecordRequest']
       }
     }
     responses: {
-      /** @description 锁单结果；签名失败时 signatureStatus 为 PENDING 或 FAILED，不回滚锁单。 */
+      /** @description 锁单成功；返回锁单留痕与 CA 占位签名（caStatus=SIMULATED）。 */
       200: {
         headers: {
           [name: string]: unknown
@@ -3372,7 +3755,11 @@ export interface operations {
            *       "status": "LOCKED",
            *       "lockedAt": "2026-12-01T11:30:00+08:00",
            *       "lockedBy": "10000000-0000-4000-8000-000000000001",
-           *       "signatureStatus": "PENDING"
+           *       "signatureStatus": "SIGNED",
+           *       "signatureRef": "SIM-CA-12000000-0000-4000-8000-000000000001",
+           *       "signatureHash": "9f2c4c0f0b7a5f1e8d3a6b4c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e",
+           *       "caStatus": "SIMULATED",
+           *       "currentRevision": 0
            *     }
            */
           'application/json': components['schemas']['LockRecordResult']
@@ -3383,6 +3770,373 @@ export interface operations {
       403: components['responses']['Forbidden']
       404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+    }
+  }
+  getRecordLockStatus: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 锁单状态与前置条件清单。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "locked": false,
+           *       "lockedAt": null,
+           *       "lockedBy": null,
+           *       "status": "IN_PROGRESS",
+           *       "currentRevision": 0,
+           *       "canLock": false,
+           *       "caStatus": null,
+           *       "signatureRef": null,
+           *       "signatureHash": null,
+           *       "preconditions": [
+           *         {
+           *           "code": "THREE_WAY_CHECK_COMPLETED",
+           *           "label": "三方核查完成",
+           *           "satisfied": true,
+           *           "detail": "Time-out 与 Sign-out 均已记录"
+           *         },
+           *         {
+           *           "code": "CONSENT_SIGNED",
+           *           "label": "当前有效知情同意已签署",
+           *           "satisfied": true,
+           *           "detail": "存在 SIGNED 同意记录"
+           *         },
+           *         {
+           *           "code": "RECORD_STARTED",
+           *           "label": "已记录麻醉开始",
+           *           "satisfied": true,
+           *           "detail": "2026-12-01T08:40:00+08:00"
+           *         },
+           *         {
+           *           "code": "RECORD_ENDED",
+           *           "label": "已记录麻醉结束",
+           *           "satisfied": false,
+           *           "detail": "未记录 ANESTHESIA_END"
+           *         },
+           *         {
+           *           "code": "AT_LEAST_ONE_EVENT",
+           *           "label": "至少 1 个时间轴事件",
+           *           "satisfied": true,
+           *           "detail": "事件数 4"
+           *         },
+           *         {
+           *           "code": "NOT_LOCKED",
+           *           "label": "尚未锁单",
+           *           "satisfied": true,
+           *           "detail": "记录单未锁定"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['RecordLockStatus']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  getEffectiveAnesthesiaRecord: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 当前有效记录值（只读投影）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "locked": true,
+           *       "lockedAt": "2026-12-01T11:30:00+08:00",
+           *       "lockedBy": "10000000-0000-4000-8000-000000000001",
+           *       "status": "REVISED",
+           *       "currentRevision": 1,
+           *       "original": {
+           *         "anesthesiaType": "GENERAL",
+           *         "startedAt": "2026-12-01T08:40:00+08:00",
+           *         "endedAt": "2026-12-01T10:50:00+08:00"
+           *       },
+           *       "effective": {
+           *         "anesthesiaType": "COMBINED",
+           *         "startedAt": "2026-12-01T08:40:00+08:00",
+           *         "endedAt": "2026-12-01T10:50:00+08:00"
+           *       },
+           *       "corrections": [
+           *         {
+           *           "field": "anesthesiaType",
+           *           "originalValue": "GENERAL",
+           *           "effectiveValue": "COMBINED",
+           *           "revisionNo": 1,
+           *           "reasonCode": "ANESTHESIA_TYPE_CHANGE"
+           *         }
+           *       ],
+           *       "signatureRef": "SIM-CA-12000000-0000-4000-8000-000000000001",
+           *       "signatureHash": "9f2c4c0f0b7a5f1e8d3a6b4c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e",
+           *       "caStatus": "SIMULATED"
+           *     }
+           */
+          'application/json': components['schemas']['RecordEffectiveView']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  listRecordRevisions: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 修订版本列表；未锁单或无修订时 items 为空数组。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "revisionNo": 1,
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "reasonCode": "ANESTHESIA_TYPE_CHANGE",
+           *           "reason": "锁单后发现麻醉方式记录笔误（演示）",
+           *           "changes": "将麻醉方式由 GENERAL 更正为 COMBINED（演示）",
+           *           "signatureRef": "SIM-CA-14000000-0000-4000-8000-000000000001",
+           *           "signatureHash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+           *           "caStatus": "SIMULATED",
+           *           "createdBy": "10000000-0000-4000-8000-000000000001",
+           *           "createdAt": "2026-12-01T12:10:00+08:00"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['RecordRevisionList']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  createRecordRevision: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "version": 9,
+         *       "reasonCode": "ANESTHESIA_TYPE_CHANGE",
+         *       "reason": "锁单后发现麻醉方式记录笔误（演示）",
+         *       "changes": "将麻醉方式由 GENERAL 更正为 COMBINED（演示）",
+         *       "corrections": {
+         *         "anesthesiaType": "COMBINED"
+         *       }
+         *     }
+         */
+        'application/json': components['schemas']['CreateRevisionRequest']
+      }
+    }
+    responses: {
+      /** @description 修订版本创建成功，返回快照、签名摘要与相对上一版的差异。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "revisionNo": 1,
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "reasonCode": "ANESTHESIA_TYPE_CHANGE",
+           *       "reason": "锁单后发现麻醉方式记录笔误（演示）",
+           *       "changes": "将麻醉方式由 GENERAL 更正为 COMBINED（演示）",
+           *       "signatureRef": "SIM-CA-14000000-0000-4000-8000-000000000001",
+           *       "signatureHash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+           *       "caStatus": "SIMULATED",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
+           *       "createdAt": "2026-12-01T12:10:00+08:00",
+           *       "snapshot": {
+           *         "record": {
+           *           "anesthesiaType": "COMBINED",
+           *           "startedAt": "2026-12-01T08:40:00+08:00",
+           *           "endedAt": "2026-12-01T10:50:00+08:00"
+           *         },
+           *         "events": [],
+           *         "drugs": [],
+           *         "fluids": [],
+           *         "rescues": [
+           *           {
+           *             "resusType": "CPR",
+           *             "startedAt": "2026-12-01T09:30:00+08:00",
+           *             "endedAt": "2026-12-01T09:45:00+08:00",
+           *             "eventSummary": {
+           *               "summary": "演示抢救经过（合成）",
+           *               "interventions": [
+           *                 "胸外按压"
+           *               ]
+           *             },
+           *             "drugs": [
+           *               {
+           *                 "drugName": "肾上腺素（演示）",
+           *                 "dose": 1,
+           *                 "unit": "mg",
+           *                 "route": "IV",
+           *                 "administeredAt": "2026-12-01T09:31:00+08:00"
+           *               }
+           *             ],
+           *             "leader": {
+           *               "userId": "10000000-0000-4000-8000-000000000002",
+           *               "name": "演示负责人（合成）"
+           *             },
+           *             "rescuers": [
+           *               {
+           *                 "name": "演示护士（合成）"
+           *               }
+           *             ],
+           *             "outcome": "SUCCESS"
+           *           }
+           *         ],
+           *         "ioSummary": {
+           *           "intakeMl": 1500,
+           *           "outputMl": 400,
+           *           "balanceMl": 1100,
+           *           "fluidCount": 2
+           *         },
+           *         "signatures": {
+           *           "lockedSignatureHash": "9f2c4c0f0b7a5f1e8d3a6b4c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e",
+           *           "previousRevisionSignatureHash": null
+           *         }
+           *       },
+           *       "diff": {
+           *         "previousRevisionNo": 0,
+           *         "summary": "共 1 项字段变更",
+           *         "changedFields": [
+           *           {
+           *             "field": "record.anesthesiaType",
+           *             "previousValue": "GENERAL",
+           *             "newValue": "COMBINED"
+           *           }
+           *         ]
+           *       }
+           *     }
+           */
+          'application/json': components['schemas']['RecordRevision']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  getRecordRevision: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+        /** @description 修订版本号（从 1 起）。 */
+        revisionNo: number
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 修订版本详情。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "revisionNo": 1,
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "reasonCode": "ANESTHESIA_TYPE_CHANGE",
+           *       "reason": "锁单后发现麻醉方式记录笔误（演示）",
+           *       "changes": "将麻醉方式由 GENERAL 更正为 COMBINED（演示）",
+           *       "signatureRef": "SIM-CA-14000000-0000-4000-8000-000000000001",
+           *       "signatureHash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+           *       "caStatus": "SIMULATED",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
+           *       "createdAt": "2026-12-01T12:10:00+08:00",
+           *       "snapshot": {
+           *         "record": {
+           *           "anesthesiaType": "COMBINED",
+           *           "startedAt": "2026-12-01T08:40:00+08:00",
+           *           "endedAt": "2026-12-01T10:50:00+08:00"
+           *         },
+           *         "events": [],
+           *         "drugs": [],
+           *         "fluids": [],
+           *         "signatures": {
+           *           "lockedSignatureHash": "9f2c4c0f0b7a5f1e8d3a6b4c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e",
+           *           "previousRevisionSignatureHash": null
+           *         }
+           *       },
+           *       "diff": {
+           *         "previousRevisionNo": 0,
+           *         "summary": "共 1 项字段变更",
+           *         "changedFields": [
+           *           {
+           *             "field": "record.anesthesiaType",
+           *             "previousValue": "GENERAL",
+           *             "newValue": "COMBINED"
+           *           }
+           *         ]
+           *       }
+           *     }
+           */
+          'application/json': components['schemas']['RecordRevision']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
     }
   }
   getThreeWayCheck: {

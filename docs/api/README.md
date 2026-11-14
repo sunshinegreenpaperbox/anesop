@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.7.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟）
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.8.1`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -13,7 +13,7 @@ packages/contracts/
 │   ├── auth.yaml          # 认证、令牌、当前用户、会话
 │   ├── patient.yaml       # 患者主索引、手术申请
 │   ├── scheduling.yaml    # 术间、排程、冲突、急诊加台、停台、排程分析
-│   ├── anesthesia.yaml    # 术前访视与评估、记录单、锁单、三方核查、随访
+│   ├── anesthesia.yaml    # 术前访视与评估、记录单、锁单/修订、三方核查、随访
 │   ├── device.yaml        # 设备登记、网关批量上报（幂等）、体征窗口查询、采集健康摘要
 │   └── baseline/          # 当前已发布兼容基线（5 份快照）
 ├── rules/error-responses.js
@@ -27,9 +27,9 @@ packages/contracts/
 | `auth.yaml` | 10 | 12 | 登录、刷新、登出、当前用户、改密、会话列表、数据范围示例、用户管理（列表/详情/创建/更新/重置口令） | §2.4.1、§3.9.2、§3.9.3、§3.9.5 |
 | `patient.yaml` | 7 | 7 | 患者摘要查询/详情（POST `/search` 检索；GET 标记 deprecated）、兼容字段、历史手术申请端点（0.3.0 标记 deprecated） | §2.4.1、§2.4.2、§3.5.3 I-01a/I-01b |
 | `scheduling.yaml` | 17 | 20 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史、排程分析（利用率/准点/取消率/CSV 导出） | §2.4.2、§2.3.2、§2.7.2、§3.4.2 |
-| `anesthesia.yaml` | 29 | 42 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、预警规则版本化/告警评估与确认忽略/抢救记录 append-only（0.6.0）、实时触发/评估水位/规则待确认与历史版本/抢救人员留痕（0.7.0）、旧访视骨架读写、锁单、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
+| `anesthesia.yaml` | 32 | 46 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、预警规则版本化/告警评估与确认忽略/抢救记录 append-only（0.6.0）、实时触发/评估水位/规则待确认与历史版本/抢救人员留痕（0.7.0）、锁单/锁单前置清单/修订版本/版本差异/当前有效值投影与 CA 占位签名（0.8.0→0.8.1）、旧访视骨架读写、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
 | `device.yaml` | 4 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
-| **合计** | **67** | **86** | 5 个限界上下文骨架 | — |
+| **合计** | **70** | **90** | 5 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -262,7 +262,7 @@ packages/contracts/
 
 > 0.5.0 只新增路径/schema/可选字段，未删除或改类型既有定义；`anesthesia.yaml` 与
 > `baseline/anesthesia.yaml` 同步更新，`oasdiff`（baseline → 当前、HEAD baseline → 当前）
-> 均无破坏性变更。锁单/修订（M3-M2-03）仍只有契约骨架，本次未实现。
+> 均无破坏性变更。0.8.0（M3-M2-03）已实现锁单/修订，0.8.1 复审修正（见 §3.10）。
 
 - **记录单（按台次唯一）**：`GET /v1/anesthesia/records?scheduleId=`（`listAnesthesiaRecords`，
   `m2:record:read`）集合语义：台次不可见 403，未创建时返回空 `items`；
@@ -352,6 +352,60 @@ packages/contracts/
 - **阈值口径**：严格不等（等于阈值不触发）；`durationSeconds` 为连续越界时长；
   `MAP = dia + (sys − dia)/3` 由无创血压推导。详见 `docs/modules/m2/README.md` §13.2。
 
+### 3.10 锁单、修订与 CA 占位签名（M3-M2-03，anesthesia 0.8.1 additive）
+
+> 0.8.1 只新增路径/可选字段/新 schema，未删除或改类型既有定义；`anesthesia.yaml` 与
+> `baseline/anesthesia.yaml` 同步更新，`oasdiff`（baseline → 当前、HEAD baseline → 当前）均无
+> 破坏性变更。0.8.1 相对未发布的 0.8.0 收缩修订原因码、明确 `confirmChecklist` 运行时必填、
+> 统一 `anesthesiaType` 拼写与 409 示例；旧客户端若仍发 DOCUMENTATION_ERROR 等旧枚举会收到
+> 400（0.8.0 未提交发布，无存量调用方）。CA 不可用（EXT-05）：签名为 **SIMULATED 占位**，
+> 不模拟真实 CA 有效签名。
+
+- **锁单前置清单** `GET /v1/anesthesia/records/{recordId}/lock-status`（`getRecordLockStatus`，
+  `m2:record:read`）：返回 `locked/lockedAt/lockedBy/status/currentRevision/canLock/
+  signatureRef/signatureHash/caStatus` 与固定顺序的 `preconditions[]`（`code/label/satisfied/
+  detail`）。条件码：
+  - `THREE_WAY_CHECK_COMPLETED`：`ThreeWayCheckService.isThreeWayCheckCompleted(applicationId)`；
+  - `CONSENT_SIGNED`：申请存在当前有效 `SIGNED` 同意（WAITING_SIGN/DECLINED/REVOKED 不算）；
+  - `RECORD_STARTED` / `RECORD_ENDED`：已记录 `ANESTHESIA_START` / `ANESTHESIA_END`；
+  - `AT_LEAST_ONE_EVENT`：时间轴至少 1 个事件；
+  - `NOT_LOCKED`：尚未锁单。
+  只读接口；前端只展示，**不得自行推导**前置条件。
+- **当前有效值** `GET /v1/anesthesia/records/{recordId}/effective`
+  （`getEffectiveAnesthesiaRecord`，`m2:record:read`）：返回 `original`（锁单原始行临床字段）、
+  `effective`（叠加最新修订更正后的当前有效值，当前仅 `anesthesiaType`）、`corrections[]`
+  （字段/原值/有效值/来源 revisionNo/reasonCode）与锁单签名留痕。记录详情页/打印使用
+  `effective`；原记录行与历史修订保持不变。未锁单/未修订时 `effective` 等于 `original`。
+- **锁单** `POST /v1/anesthesia/records/{recordId}/lock`（`lockAnesthesiaRecord`，
+  `m2:record:lock`，V17 授予 SYS_ADMIN/SYS_ANESTHESIOLOGIST）：body
+  `{version, signatureRequested, confirmChecklist}`；`confirmChecklist` 为运行时必填，
+  缺省/false 返回 400（schema 未列 required 是为保持 HEAD baseline 兼容，服务端按必填校验），
+  服务端仍会重新校验前置条件（不能以确认字段替代校验）。未满足 409 `STATE_CONFLICT`，
+  `details[]` 逐项列出未满足条件码；version 过期/重复锁单 409。成功返回锁单时间/操作人、
+  `signatureStatus=SIGNED`、`caStatus=SIMULATED`、`signatureRef=SIM-CA-<recordId>`、
+  `signatureHash`（64 位十六进制）与 `currentRevision=0`。
+- **修订版本列表/详情** `GET /v1/anesthesia/records/{recordId}/revisions`
+  （`listRecordRevisions`）与 `GET .../revisions/{revisionNo}`（`getRecordRevision`，
+  `m2:record:read`）：摘要含 `revisionNo/reasonCode/reason/changes/signatureRef/signatureHash/
+  caStatus/createdAt`；详情额外含 `snapshot`（全量快照）与 `diff`
+  （`previousRevisionNo/summary/changedFields[]`，首版 `previousRevisionNo=0` 对比锁单原始记录）。
+- **创建修订** `POST /v1/anesthesia/records/{recordId}/revisions`（`createRecordRevision`，
+  `m2:record:revise`）：`reasonCode` 白名单（0.8.1）`ANESTHESIA_TYPE_CHANGE/OTHER`
+  （`OMISSION`/`TIMING_CORRECTION` 待结构化更正能力，M3-QA 前，Q-17），`reason` 与 `changes`
+  必填（≤500）；可选 `corrections.anesthesiaType`
+  只写入修订快照（时间轴/用药/出入量为 append-only，不可经修订改写）。服务端在记录单行锁内
+  分配 `revisionNo`（从 1 递增），返回 201；未锁单/version 过期/并发版本冲突 409。原记录与历史
+  修订**不可改**（数据库触发器 55000）。
+- **签名口径**（EXT-05）：`signatureHash = SHA-256(规范化快照 JSON)`。快照含记录单字段、
+  时间轴、用药、出入量、抢救记录（含 leader/rescuers）与出入量汇总，数组按 (时间, id) 稳定
+  排序；设备采集 `vital_sign` 明细不在快照范围（采集链路独立留痕，避免高频采样放大快照）。
+  规范化规则：对象键字典序、
+  null 对象字段省略、数字去尾零、时间统一 `+08:00` 毫秒 ISO-8601；排除患者标识
+  （patientId/patientNo/patientName）、台次/申请标识、审计时间与签名字段本身。修订快照的
+  `signatures.previousRevisionSignatureHash` 指向上一次修订摘要（首版为 null），形成版本哈希链；
+  锁单摘要不含签名摘要（锁单时尚未签名）。详见 `docs/modules/m2/README.md` §14.3。
+- **示例**：全部 SYNTHETIC（`SYNTH-*` / 演示患者 / 演示麻醉方式），不含真实患者数据。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -369,7 +423,7 @@ packages/contracts/
 | 401 | 未认证/令牌失效（`Unauthorized`） | 所有 operation 必备 |
 | 403 | 无权限/超出数据范围（`Forbidden`） | 需认证的 operation 必备；`security: []` 的登录/刷新与 `logout` 除外 |
 | 404 | 资源不存在或不可见（`NotFound`） | 仅路径含 `{资源参数}` 的单资源 operation；集合查询、创建接口不声明 |
-| 409 | 状态/版本/排程/锁单/唯一键冲突（`Conflict`） | 仅状态变更操作（带 `requestBody`）声明；`logout`、登录/刷新不声明。用户管理：创建账号重复、更新工号撞 `uk_sys_user_employee_no` |
+| 409 | 状态/版本/排程/锁单前置/唯一键冲突（`Conflict`） | 仅状态变更操作（带 `requestBody`）声明；`logout`、登录/刷新不声明。用户管理：创建账号重复、更新工号撞 `uk_sys_user_employee_no`；锁单前置未满足时 `details[]` 逐项列出条件码（`THREE_WAY_CHECK_COMPLETED` 等） |
 | 422 | 语义不合法（`UnprocessableEntity`） | 字段格式正确但业务规则拒绝（如患者不在主索引、术间不满足隔离要求） |
 | 201 | 创建成功 | 创建类接口；响应体返回创建后的实体（`POST three-way-checks` 首次创建为 201，更新为 200） |
 | 204 | 成功无响应体 | `POST /v1/auth/logout` |

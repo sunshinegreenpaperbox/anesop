@@ -1,12 +1,15 @@
 # M2 麻醉信息管理（模块说明）
 
 > 状态：M2-M4-01「术前访视与评估」+ M2-M5-01「知情同意与三方核查」+ M3-M2-01
-> 「麻醉记录单与时间轴」+ M3-M2-02「术中预警规则与抢救记录」落地版（2026-11-14）。
-> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.6.0；
+> 「麻醉记录单与时间轴」+ M3-M2-02「术中预警规则与抢救记录」+ M3-M2-03
+> 「锁单/修订/CA 签名（模拟）」落地版（2026-11-14）。
+> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.8.1；
 > 迁移：`db/migration/V10__m2_preop_assessment.sql`、
 > `db/migration/V11__m2_consent_threeway.sql`、
 > `db/migration/V13__m2_anesthesia_record.sql`、
-> `db/migration/V15__m2_alert_rescue.sql`；
+> `db/migration/V15__m2_alert_rescue.sql`、
+> `db/migration/V16__m2_alert_realtime_watermark_rescue_leader.sql`、
+> `db/migration/V17__m2_record_lock_revision.sql`；
 > 方案书：§2.4.3（M2 术前访视/知情同意/三方核查/麻醉计划）、§3.4.2（麻醉记录单与访视实体）、
 > §3.4.3（审计字段/乐观锁/逻辑删除）、§3.9.2（RBAC/数据权限）、§3.9.3（脱敏）、
 > §3.9.4（CA 签名；EXT-05 CA 不可用，本期为占位/自签哈希）。
@@ -33,8 +36,8 @@ M2 当前交付「术前访视与评估」与「知情同意与三方核查」�
   出入量明细及服务端汇总（入量/出量/平衡）；体征占位由 M3-M8-01 采集接入后填充。
 
 非目标（后续任务）：生命体征真实接入与质量标记（M3-M8-01，§12）、术中预警与抢救记录
-（M3-M2-02）、锁单/修订/CA 签名（M3-M2-03，§11.2）、三方核查**记录单(record)
-维度**实现（既有 `ThreeWayCheck` 契约保持不动，实现留 M3）、独立评分阈值配置表
+（M3-M2-02）、三方核查**记录单(record)维度**实现（既有 `ThreeWayCheck` 契约保持不动，
+实现留 M3）、独立评分阈值配置表
 （当前以 `anesop.m2.preop.*` 配置属性实现，院方口径与配置表结构【待确认】）、
 真实 CA 有效签名（EXT-05，见 §11）、患者端电子签名外设。
 
@@ -79,13 +82,18 @@ apps/web/src/modules/m2/
 └── __tests__/                    Vitest（术前访视 4 + 同意 5 + 核查 7）
 ```
 
-## 3. 接口（anesthesia 0.5.0）
+## 3. 接口（anesthesia 0.8.1）
 
 > 0.5.0 为 additive：新增记录单创建/按台次查询、时间轴事件读写、用药读写、输液/出入量
 > 读写与出入量汇总共 9 个 operation、新增 13 个 schema，并在 `AnesthesiaRecord` 增加只读
 > `vitalSigns` 占位数组；未删除或改类型既有定义。0.4.0 的知情同意 8 个 operation 与
 > 手术申请维度三方核查 2 个 operation 保持不变；记录单(record)维度
 > `/v1/anesthesia/records/{recordId}/three-way-checks` 保持原契约，实现留 M3。
+> 0.8.1（M3-M2-03）新增锁单状态/锁单/修订列表/修订详情/创建修订/当前有效值 6 个 operation 与
+> `RecordLockStatus`/`LockPrecondition`/`RecordRevision`/`RevisionDiff` 等 schema，
+> 并在 `AnesthesiaRecord` 增加只读锁单字段（`lockedAt/lockedBy/currentRevision/
+> signatureRef/signatureHash/caStatus`）；`LockRecordRequest` 新增可选 `confirmChecklist`，
+> `LockRecordResult` 新增 `signatureRef/signatureHash/caStatus/currentRevision`，均为 additive。
 
 | 方法 | 路径 | operationId | 权限 | 说明 |
 |---|---|---|---|---|
@@ -115,6 +123,11 @@ apps/web/src/modules/m2/
 | GET | `/v1/anesthesia/records/{recordId}/fluids` | `listFluidRecords` | `m2:record:read` | 输液/出入量明细（记录时间倒序） |
 | POST | `/v1/anesthesia/records/{recordId}/fluids` | `recordFluidRecord` | `m2:record:write` | 入量/出量明细（201）；amountMl ≤ 0 400 |
 | GET | `/v1/anesthesia/records/{recordId}/io-summary` | `getIntakeOutputSummary` | `m2:record:read` | 出入量汇总（服务端计算 balanceMl = 入量 - 出量） |
+| GET | `/v1/anesthesia/records/{recordId}/lock-status` | `getRecordLockStatus` | `m2:record:read` | 锁单状态与六项前置清单（服务端评估）；越界 404 |
+| POST | `/v1/anesthesia/records/{recordId}/lock` | `lockAnesthesiaRecord` | `m2:record:lock` | 锁单（version + confirmChecklist）；前置未满足 409 逐项列出、重复/过期 409、未确认 400 |
+| GET | `/v1/anesthesia/records/{recordId}/revisions` | `listRecordRevisions` | `m2:record:read` | 修订版本列表（revisionNo 升序） |
+| GET | `/v1/anesthesia/records/{recordId}/revisions/{revisionNo}` | `getRecordRevision` | `m2:record:read` | 修订详情（快照 + 签名摘要 + 与上一版差异）；版本不存在 404 |
+| POST | `/v1/anesthesia/records/{recordId}/revisions` | `createRecordRevision` | `m2:record:revise` | 创建修订版本（201）；未锁单/版本过期 409、原因码非法/原因缺失 400 |
 
 旧 `GET/PUT /v1/anesthesia/preop-visits/{visitId}`（0.2.0 骨架）保留不动、不删除既有字段
 （ADR-0011 弃用窗口）；新代码使用 preop-assessments。契约 0.3.0 为 additive：新增路径与
@@ -283,8 +296,9 @@ GET                   → items（版本倒序）+ completed（最新版本是�
 (创建，按台次唯一) ─→ DRAFT ──ANESTHESIA_START──→ ONGOING ──ANESTHESIA_END──→ ONGOING(endedAt)
                           │                            │
                           └─ PUT（麻醉方式）            └─ PUT / 事件追加（version+1）
-契约状态映射：DRAFT → DRAFT，ONGOING → IN_PROGRESS（0.5.0 未扩展契约枚举）
-锁单：LOCKED/REVISED 由 M3-M2-03 以新迁移扩展（V13 CHECK 仅允许 DRAFT/ONGOING）
+契约状态映射：DRAFT → DRAFT，ONGOING → IN_PROGRESS
+锁单（V17/0.8.1）：ONGOING ──锁单──→ LOCKED ──首次修订──→ REVISED（此后保持 REVISED）
+锁单后内容只读，current_revision 每次修订 +1；DRAFT 不可锁单（需先记录开始/结束）
 ```
 
 - 一个台次（`schedule_id`）只允许一张记录单：服务层先查重（409）+ 唯一索引
@@ -298,8 +312,8 @@ GET                   → items（版本倒序）+ completed（最新版本是�
   `version` 只增；已逻辑删除行不可改；`DELETE/TRUNCATE` 一律拒绝（均 55000）。守卫依赖数据库
   触发器，生产运行账号不得拥有 DDL 权限（否则可 `ALTER TABLE ... DISABLE TRIGGER` 绕过），
   迁移与运行账号分离见 `docs/db/README.md` §5.3。
-- 锁单前（本期全部状态）无「不可修改」语义，仍属发布准入待办：M3-M2-03 落地前，记录单
-  可改但所有时间轴/用药/出入量明细已 append-only 留痕。
+- 锁单后「不可修改」由 V17 触发器与服务层双保险强制（§14.4）；锁单前记录单可改，但时间轴/
+  用药/出入量明细已 append-only 留痕。
 
 ### 5.4 时间轴、append-only 与麻精双人核对（M3-M2-01）
 
@@ -327,10 +341,10 @@ GET                   → items（版本倒序）+ completed（最新版本是�
 - **出入量**：明细 `direction IN (INTAKE, OUTPUT)`、`amount_ml > 0`；汇总 SQL 按方向 FILTER
   聚合，`balanceMl = intakeMl - outputMl`、`fluidCount` 为明细条数；前端只展示服务端结果，
   不自行累加覆盖。
-- **待 M3-M2-03 锁单集成**：锁单时须校验（1）三方核查完成
-  （`ThreeWayCheckService.isThreeWayCheckCompleted`）、（2）记录完整性（至少
-  `ANESTHESIA_START` 与 `ANESTHESIA_END`）、（3）版本一致；锁单后事件/用药/出入量追加应
-  统一返回 409（契约已为 POST 事件/用药/出入量声明 409，服务层在本期预留「锁定」检查点）。
+- **锁单集成（M3-M2-03 已落地）**：锁单时校验（1）三方核查完成
+  （`ThreeWayCheckService.isThreeWayCheckCompleted`）、（2）当前有效 SIGNED 同意、
+  （3）记录开始/结束时间完整且至少 1 个事件、（4）版本一致；锁单后事件/用药/出入量追加
+  统一返回 409，数据库 BEFORE INSERT 触发器（V17）拒绝绕过服务层的直写（§14）。
 
 ## 6. 数据、审计与脱敏
 
@@ -445,11 +459,23 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
   均 55000）→ 审计动作齐全且无 PHI；双线程并发追加（CyclicBarrier）断言 seq 连续 1–2、
   两事件均保存、version=3；权限 403 与跨科室 403/422/404；V13 结构/唯一索引/CHECK/触发器/
   权限/注释断言。
+- `RecordRevisionSnapshotBuilderTest`（5 用例）：规范化 JSON 键排序/null 省略/数字归一化 →
+  “同内容同摘要、不同内容不同摘要”；快照排除患者标识与审计时间；差异叶子路径与无差异摘要；
+  解析后快照与内存快照摘要一致（10.000 vs 10.0 不误报）。
+- `RecordLockServiceImplTest`（10 用例）：前置清单六项与 fail-safe（同意不可读）、未满足 409
+  条件码 + result=0 审计、确认清单 400、重复/过期锁单 409、锁单写锁列与 SIMULATED 签名 +
+  RECORD_LOCK/RECORD_SIGN 审计、条件更新 0 行 409、未锁单修订 409、修订快照/差异/签名落库、
+  版本不存在 404。
+- `RecordLockRevisionApiIntegrationTest`（5 用例，嵌入式 PG16）：前置清单与 409 明细/确认 400/
+  锁单成功与重复 409/审计无 PHI；锁后事件/用药/出入量/保存 409 + 数据库直写 55000；修订
+  原因码 400、全量快照（事件/用药/出入量/汇总/锁单摘要）、差异、版本链摘要、append-only 55000、
+  原记录内容不变；双线程并发修订 revisionNo=1/2 且 current_revision=2；越权 403/跨科室 404、
+  护士默认无 lock/revise 授权、V17 结构/权限/触发器/注释断言。
 - 前端 Vitest：术前访视 4 用例 + 知情同意 5 用例（加载/创建/签署/撤销/403）+
   三方核查 7 用例（空态/Time-out/Sign-out 完成/必选逐项确认/二次确认取消/Time-out 预填/403）+
   麻醉记录单 6 用例（空态创建/时间轴与汇总/追加事件/麻精双人核对拦截/出入量/只读态）；
   E2E：签署 + CA 占位、核对逐项确认 + 二次确认 + 核查完成、记录单创建→事件→出入量汇总、
-  麻精双人核对拦截与提交（E2E-03 锁单修订为 M3-M2-03）。
+  麻精双人核对拦截与提交、E2E-03 锁单→编辑被拒→带原因修订→新版本可见。
 - 实测覆盖率见验收报告（`./scripts/mvn.sh -B -f apps/api/pom.xml verify` 的 JaCoCo 汇总），
   m2-impl 保持在核心域 ≥80/70 门禁以上（新增 S-1…S-7 用例后重新实测）；
   根 pom 的 `coverage-core-m2` profile 已按 `src/main/java/com/anesop/m2/impl/package-info.java`
@@ -469,8 +495,9 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
 6. CA 真实签名不可用（EXT-05）：签署为占位/自签哈希（SIMULATED），不能作为法律意义上的
    电子签名；生产若要求合规 CA，须接入院内 CA 并改造签名与验签流程（§11）。
 7. 知情同意模板为 SYNTHETIC 演示文本，真实院方文本尚未经医务处/法务审核，不得直接用于临床。
-8. 记录单未实现锁单（M3-M2-03）：当前只保证时间轴/用药/出入量 append-only 与乐观锁，
-   锁单后的「不可改 + 修订版本 + CA 签名」仍待实现；`status` 枚举扩展需新迁移（V13 不改）。
+8. 锁单/修订已落地（§14），但 CA 仍为 SIMULATED 占位：无 PDF 生成、可信时间戳、证书链与
+   验签链路；锁单后仅禁止事件/用药/出入量追加，抢救记录/告警处置是否也应冻结待临床确认
+   （§14.9 Q-3）。
 9. 生命体征为占位：`AnesthesiaRecord.vitalSigns` 本期固定空数组，真实采集/质量标记由
    M3-M8-01 接入（§12）；设备数据未接入前不得在记录单展示伪造体征。
 10. 用药只记录药品字典名/剂量/途径与麻精核对，不含配伍、输注泵速率、批号/效期与库存联动；
@@ -520,21 +547,24 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
 - 就诊记录侧的“签名是否有效”不得依赖 `SIMULATED` 状态做法律判断；关闭 EXT-05 后需新增
   `VERIFIED` 流程（CA 验签、证书链、时间戳）并以新迁移/契约版本落地。
 
-### 11.2 M3 锁单集成点
+### 11.2 M3 锁单集成点（M3-M2-03 已落地）
 
-- “当前有效同意”（M3 读取口径）：同一申请下 `status='SIGNED'` 且 `signed_at` 最新的一条记录；
-  同一申请最多一条 SIGNED 由 `uk_consent_record_signed_application` 强制，`DECLINED`/`REVOKED`
-  不占位。M3 不得取 `WAITING_SIGN`、已拒绝或已撤销记录，也不得按“最新创建”推断。
-- M3 锁单前必须校验：
-  1. 记录单本身完成（事件/生命体征/签名）；
-  2. `m2-api` 的 `ThreeWayCheckService.isThreeWayCheckCompleted(applicationId) == true`；
-  3. 存在上述“最新有效 SIGNED”同意（是否阻断锁单/开场待 Q-1 确认，当前只登记）。
-- 调用约定：同步调用 `m2-api` 接口（不读 `m2_anes.three_way_check` 表、不复制查询）；
-  方法对非法标识/无记录返回 `false`（fail-safe）。
-- 未完成时锁单返回 409（沿用 `record lock` 既有语义），并在审计 detail 记录
-  `threeWayCheckCompleted=false`；M3 需补一条集成用例覆盖“核查未完成禁止锁单”。
-- 记录单(record)维度的 `ThreeWayCheck` 契约/表实现留 M3；本任务只交付申请维度核查，
-  两者通过 `applicationId` 关联，M3 落地时须保证完成判定口径一致（§5.2）。
+- “当前有效同意”（锁单读取口径）：同一申请下 `status='SIGNED'` 且 `signed_at` 最新的一条
+  记录；同一申请最多一条 SIGNED 由 `uk_consent_record_signed_application` 强制，
+  `DECLINED`/`REVOKED` 不占位。锁单不得取 `WAITING_SIGN`、已拒绝或已撤销记录，也不得按
+  “最新创建”推断。
+- 锁单前置（`RecordLockServiceImpl` 统一评估，§14.2）：
+  1. `ThreeWayCheckService.isThreeWayCheckCompleted(applicationId) == true`；
+  2. 申请存在当前有效 SIGNED 同意（读不到同意记录时按未完成 fail-safe 处理）；
+  3. 记录开始/结束时间完整（`ANESTHESIA_START`/`ANESTHESIA_END`）且至少 1 个时间轴事件；
+  4. 尚未锁单。
+- 调用约定：同步调用 `m2-api` 接口（不读 `m2_anes.three_way_check` / `consent_record` 表、
+  不复制查询）；核查方法对非法标识/无记录返回 `false`。
+- 未满足时锁单返回 409（`details[]` 逐项列出未满足条件码），并以独立事务写
+  `RECORD_LOCK result=0` 失败审计；`isThreeWayCheckCompleted` 的“未完成禁止锁单”已由
+  `RecordLockRevisionApiIntegrationTest` 覆盖。
+- 记录单(record)维度的 `ThreeWayCheck` 契约/表实现仍留 M3 后续任务；当前只交付申请维度
+  核查，两者通过 `applicationId` 关联。
 
 ## 12. 设备采集接入（M3-M8-01）
 
@@ -800,3 +830,133 @@ anesop:
    升级路径为事件异步化（RabbitMQ）+ 批量合并，接口与水位语义不变。
 6. DRAFT 不评估是临床安全选择；若未来需要“术前预警”，应新增独立规则集与契约，不在本记录
    窗口内扩展。
+
+## 14. 锁单、修订与 CA 占位签名（M3-M2-03，契约 0.8.1 + V17）
+
+### 14.1 接口与权限
+
+| 能力 | 端点（operationId） | 权限 |
+|---|---|---|
+| 锁单状态与前置清单 | `GET /records/{recordId}/lock-status`（`getRecordLockStatus`） | `m2:record:read` |
+| 锁单 | `POST /records/{recordId}/lock`（`lockAnesthesiaRecord`） | `m2:record:lock`（V17 授 SYS_ADMIN/SYS_ANESTHESIOLOGIST） |
+| 修订列表/详情 | `GET /records/{recordId}/revisions`、`GET .../revisions/{revisionNo}` | `m2:record:read` |
+| 当前有效值 | `GET /records/{recordId}/effective`（`getEffectiveAnesthesiaRecord`） | `m2:record:read` |
+| 创建修订 | `POST /records/{recordId}/revisions`（`createRecordRevision`） | `m2:record:revise`（V17 授 SYS_ADMIN/SYS_ANESTHESIOLOGIST） |
+
+- 数据范围沿台次/申请可见性：单记录越界/跨科室 404；缺权限由方法级授权 403。
+- 护士（SYS_NURSE_ANESTHETIST）默认**不授** `m2:record:lock`/`m2:record:revise`：
+  锁单与修订的责任人是麻醉医师；护士是否可修订待临床确认（§14.9 Q-1）。
+- SYS_ADMIN 保留锁单/修订能力作为 break-glass（运维/排障），审计 detail 标注
+  `administratorOperation=true`（“管理员操作”）；是否仅麻醉医师可执行待临床确认（Q-3）。
+
+### 14.2 锁单前置、幂等与并发
+
+- 六项前置固定顺序（服务端评估、前端只展示）：`THREE_WAY_CHECK_COMPLETED`、
+  `CONSENT_SIGNED`、`RECORD_STARTED`、`RECORD_ENDED`、`AT_LEAST_ONE_EVENT`、`NOT_LOCKED`。
+- 未满足 → 409 `STATE_CONFLICT`，`details[]` 每项 `field=条件码`、`reason=中文说明`；
+  同时以独立事务写 `RECORD_LOCK result=0` 失败审计（只记条件码，不含 PHI/原因原文）。
+- `confirmChecklist` 缺省/false → 400（服务端仍重新校验全部前置，确认字段不能替代校验）。
+- 锁单在 `SELECT ... FOR UPDATE` 记录单行内执行：重复锁单 409、version 过期 409、
+  条件更新 0 行 409；锁单只写锁字段与状态，不改变麻醉方式/开始结束时间（数据库守卫拒绝）。
+- 锁单前读不到同意记录（不可见/异常）按“未满足”fail-safe 处理，宁可阻止锁单。
+
+### 14.3 CA 占位签名与稳定序列化（EXT-05）
+
+- CA 不可用（EXT-05）：**不模拟真实 CA 有效签名**，只生成
+  `signatureRef = SIM-CA-<记录单/修订标识>`、`ca_status = SIMULATED` 与 SHA-256 摘要；
+  不保存签名原文/图片/证书链，不产生 PDF/可信时间戳。
+- 摘要输入为规范化快照 JSON，规则：
+  1. 对象键按字典序排序；
+  2. 值为 null 的对象字段不参与（数组内元素顺序保持服务端稳定排序）；
+  3. 数字去尾零（`BigDecimal.stripTrailingZeros().toPlainString()`，10.000 → `10`）；
+  4. 时间统一 `+08:00` 毫秒精度 ISO-8601；
+  5. 排除患者标识（`patientId/patientNo/patientName`）、台次/申请标识、审计时间
+     （`createdAt/createdBy/updatedAt/updatedBy` 与录入时间）与签名字段本身。
+- 快照结构：`record`（anesthesiaType/startedAt/endedAt）、`events`（全部时间轴，含 note/
+  entryReason）、`drugs`、`fluids`、`rescues`（全部抢救记录，含 eventSummary/drugs/
+  leader/rescuers/outcome）、`ioSummary`（intake/output/balance/fluidCount）、
+  `signatures`（`lockedSignatureHash`、`previousRevisionSignatureHash`）。
+- 快照数组按 `(时间, 标识)` 稳定升序：事件 `occurredAt+seq+id`、用药 `administeredAt+id`、
+  出入量 `recordedAt+id`、抢救 `startedAt+id`；不依赖 Mapper 查询顺序，避免同毫秒乱序导致
+  摘要不稳定。抢救记录的 `createdAt/createdBy` 属审计字段，不入快照。
+- “全量”边界：只含人工书写/确认的临床内容；设备采集的 `vital_sign` 明细（高频采样、质量
+  标记、原始帧）**不在快照范围**——由采集链路按幂等键独立留痕、不参与锁单签名，且会放大
+  快照体量。`contentHash(snapshot)` 只对临床内容取摘要（排除 `signatures`），用于验证
+  “改回旧内容 → 内容摘要复原”；正式 `signatureHash` 仍含版本链。
+- 修订摘要包含上一修订摘要 → 版本哈希链（首版 `previousRevisionSignatureHash=null`）；
+  锁单摘要不含签名摘要（锁单时尚未签名）。实现类 `RecordRevisionSnapshotBuilder`，
+  单测 `RecordRevisionSnapshotBuilderTest` 断言“同内容同摘要、不同内容不同摘要”。
+
+### 14.4 锁单不可变（服务层 + 数据库双保险）
+
+- 服务层：`update`/`appendEvent`/`recordDrug`/`recordFluid` 在锁单后统一 409
+  `STATE_CONFLICT`；用药/出入量写入前先锁记录单行，避免与并发锁单竞态。
+- 数据库（V17）：
+  - `fn_record_child_locked_guard` + 四个 BEFORE INSERT 触发器：记录 `locked_at` 非空时拒绝
+    `record_event`/`drug_administration`/`fluid_record`/`resuscitation_record` 插入
+    （SQLSTATE 55000）；抢救记录锁单后冻结（Q-2），临床确需补录走下一修订版本能力；
+  - `fn_anesthesia_record_guard`（CREATE OR REPLACE）：锁字段写一次、锁单后内容列不可变、
+    `status` 只允许 `ONGOING→LOCKED`、`LOCKED→REVISED`，`current_revision` 每次只能 +1 且
+    与 `REVISED` 一致，`version` 只增；DELETE/TRUNCATE 一律拒绝；
+  - `record_revision` append-only（UPDATE/DELETE/TRUNCATE 拒绝，55000）；新增 BEFORE INSERT
+    链守卫：父记录已锁单、`revision_no = current_revision + 1`、`previous_signature_hash`
+    与上一修订摘要一致（首版为空），伪造/跳号/断链直插一律 55000。
+- 运行账号不得拥有 DDL 权限，否则可 `DISABLE TRIGGER` 绕过（见 `docs/db/README.md` §5.3）。
+
+### 14.5 修订模型（原值保留、可比对）
+
+- 修订只写 `record_revision` 快照，**不修改锁单时的记录行**：原始麻醉方式/时间/事件保持
+  锁单值；更正后的内容只存在于修订快照，首版差异对比 `previousRevisionNo=0`（锁单原始记录），
+  后续版本对比上一修订快照。
+- `reasonCode` 白名单（0.8.1 收缩）：`ANESTHESIA_TYPE_CHANGE`（更正麻醉方式）、`OTHER`
+  （须在原因说明）；`OMISSION`/`TIMING_CORRECTION` 需结构化更正能力，登记为 M3-QA 前待实现
+  （`docs/decisions.md` Q-17），不保留“只能写说明、不能结构化改内容”的误导性枚举。
+  `reason` 与 `changes` 必填（≤500，只落库/授权用户可见，不写日志/审计原文）。
+- 可选 `corrections.anesthesiaType` 仅写快照：时间轴/用药/出入量为 append-only，不能经修订
+  改写（漏记须新增事件并填 `entryReason`）；后续修订未提交 corrections 时沿用上一版快照的
+  麻醉方式（更正是累积的，不会“改回”锁单原值）。
+- 版本号在记录单行锁内分配（`current_revision+1`），`(record_id, revision_no)` 唯一兜底；
+  并发修订串行化为 1、2…（集成测试双线程验证）。
+- 当前有效版本投影：`GET /effective` 返回 `original`（锁单原始行字段）与 `effective`
+  （叠加最新修订更正后的值，当前仅 `anesthesiaType`）及 `corrections[]` 来源；记录详情页/
+  打印使用 `effective`，原记录行与历史修订始终不可变。未锁单/未修订时二者相同。
+
+### 14.6 审计与无 PHI
+
+- 动作：`RECORD_LOCK`（锁单成功/失败前置）、`RECORD_REVISE`（修订成功）、
+  `RECORD_SIGN`（锁单/修订签名，scope=LOCK/REVISION，含 `signatureRef/signatureHash/caStatus`）。
+- detail 只含记录/台次标识、状态、版本号、原因码、拒绝码、签名占位标识与摘要；不含患者姓名/
+  院内患者号、原因/变更摘要原文、签名人员姓名。重复锁单/版本过期/未锁单修订/并发冲突同样写
+  `result=0` 失败审计（独立事务，只记拒绝码）；SYS_ADMIN 的 break-glass 标注
+  `administratorOperation=true`。
+- 前端界面显式标注“CA 占位 SIMULATED / EXT-05，非真实 CA 有效签名”；不得用于法律意义上的
+  电子签名判断。
+
+### 14.7 测试
+
+见 §8 的 `RecordRevisionSnapshotBuilderTest`（抢救入快照、同毫秒排序稳定、改回旧内容
+contentHash 复原）/ `RecordLockServiceImplTest`（失败审计）/ `ResuscitationServiceImplTest`
+（锁后抢救 409）/ `RecordLockRevisionApiIntegrationTest`（真实 PG16：先录抢救→锁单→修订、
+hash 随抢救内容变化、effective 投影、锁后抢救 409/直插 55000、链触发器拒绝伪造版本）、
+前端 `RecordLockView.spec.ts` 与 E2E-03（锁单→编辑被拒→带原因修订→新版本可见、effective
+展示修订值且原值仍可追溯）。
+
+### 14.8 局限与后续
+
+1. CA 占位：无真实签名/时间戳/证书链与验签工具；关闭 EXT-05 后需新增 `VERIFIED` 流程与契约。
+2. 无 PDF 生成与打印留痕；锁单后“未签名记录质控高亮”未实现（方案书 §3.9.4）。
+3. 锁单后冻结事件/用药/出入量/抢救记录；告警处置是否随锁单冻结待临床确认（Q-2/Q-3）。
+   如临床确需锁单后补录抢救，需下一修订版本能力（登记 Q-18），不绕过冻结。
+4. 修订仅允许更正麻醉方式；更复杂的字段更正（时间/用药/事件）需结构化更正契约与临床规则，
+   `OMISSION`/`TIMING_CORRECTION` 原因码暂不开放（Q-17）。
+5. 锁单前置未纳入“生命体征已采集/麻醉小结完成”等记录完整性项（契约 0.8.1 只列六项）。
+
+### 14.9 Q 登记（待临床确认，只登记不改实现）
+
+| 编号 | 事项 | 当前实现 | 待确认点 |
+|---|---|---|---|
+| Q-1 | 护士能否锁单/修订 | 仅授 SYS_ADMIN/SYS_ANESTHESIOLOGIST | 麻醉护士是否可修订记录？由麻醉科/护理部确认 |
+| Q-2 | 锁单后冻结范围 | 事件/用药/出入量/抢救记录均冻结 | 抢救记录锁单后补录是否走下一修订版本？由麻醉科确认（§14.8-3） |
+| Q-3 | 是否仅麻醉医师可锁单/修订 | 保留 SYS_ADMIN break-glass 并审计标注 | 管理员是否只应排障、不参与临床签名？由医务处/麻醉科确认 |
+| Q-4 | 记录完整性前置 | 开始/结束 + ≥1 事件 | 是否要求麻醉小结/生命体征/签名完成后才允许锁单？ |
+| Q-5 | 修订原因码 | 0.8.1 仅 ANESTHESIA_TYPE_CHANGE/OTHER | OMISSION/TIMING_CORRECTION 待结构化更正能力（M3-QA 前，Q-17） |
