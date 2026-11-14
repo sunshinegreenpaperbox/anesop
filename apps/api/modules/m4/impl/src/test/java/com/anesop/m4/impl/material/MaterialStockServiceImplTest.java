@@ -66,6 +66,11 @@ class MaterialStockServiceImplTest {
     private static final String DEPT = "f1000000-0000-4000-8000-000000000002";
     private static final String UDI = "06937000000001^SN-DEMO-001";
     private static final Instant NOW = Instant.parse("2026-11-14T01:00:00Z");
+    /**
+     * 夹具“今日”必须与注入的固定 Clock 对齐：此前用真实 {@code LocalDate.now()} 构造
+     * “昨日过期”夹具，跨自然日后相对固定 Clock 的今天可能仍在效期内，导致 422 断言偶发失败。
+     */
+    private static final LocalDate TODAY = LocalDate.ofInstant(NOW, ZoneOffset.ofHours(8));
     private static final AuthPrincipal CALLER =
             new AuthPrincipal(ACTOR, "synth_nurse", "jti-1", NOW.plusSeconds(900), "sid-1");
     private static final AuthRequestContext CONTEXT =
@@ -145,7 +150,7 @@ class MaterialStockServiceImplTest {
 
         CreateStockMovementRequest expired = request(
                 CreateStockMovementRequest.MovementTypeEnum.IN, "1", "BATCH-1",
-                LocalDate.now(ZoneOffset.ofHours(8)).minusDays(1));
+                TODAY.minusDays(1));
         assertThatThrownBy(() -> service.createMovement(expired, CALLER, CONTEXT))
                 .isInstanceOf(M4UnprocessableException.class).hasMessageContaining("过效期");
     }

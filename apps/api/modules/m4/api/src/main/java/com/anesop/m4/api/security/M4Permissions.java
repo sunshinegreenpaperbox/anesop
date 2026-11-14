@@ -12,6 +12,8 @@ package com.anesop.m4.api.security;
  * （药品目录全院可读，麻醉医师用药录入需要读）；{@code m4:drug:write} 仅授予 SYS_ADMIN 与
  * SYS_PHARMACIST；{@code m4:narcotic:manage} 授予 SYS_ADMIN/SYS_PHARMACIST/
  * SYS_ANESTHESIOLOGIST（五专登记由临床与药房共同完成，麻醉护士暂不授予维护权）。
+ * 报表域（V24，data-only）新增 {@code m4:report:read|export}：授予 SYS_ADMIN/SYS_OR_MANAGER/
+ * SYS_QC_MANAGER（管理口径，D-21）；临床个人工作量视图待绩效方案确认后另开。
  */
 public final class M4Permissions {
 
@@ -80,6 +82,18 @@ public final class M4Permissions {
 
     /** Spring Security 授权表达式中的 UDI 管理权限：{@code PERM_m4:udi:manage}。 */
     public static final String AUTHORITY_UDI_MANAGE = "PERM_" + UDI_MANAGE;
+
+    /** 工作量统计与多维报表只读（V24，data-only；按数据范围裁剪）。 */
+    public static final String REPORT_READ = "m4:report:read";
+
+    /** 报表 CSV 导出（V24，data-only；导出另写审计 REPORT_EXPORT）。 */
+    public static final String REPORT_EXPORT = "m4:report:export";
+
+    /** Spring Security 授权表达式中的报表只读权限：{@code PERM_m4:report:read}。 */
+    public static final String AUTHORITY_REPORT_READ = "PERM_" + REPORT_READ;
+
+    /** Spring Security 授权表达式中的报表导出权限：{@code PERM_m4:report:export}。 */
+    public static final String AUTHORITY_REPORT_EXPORT = "PERM_" + REPORT_EXPORT;
 
     private M4Permissions() {
     }

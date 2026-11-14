@@ -72,6 +72,8 @@ class UdiTraceServiceImplTest {
     private static final String UDI_PI = "SN-DEMO-001";
     private static final String UDI = UDI_DI + "^" + UDI_PI;
     private static final Instant NOW = Instant.parse("2026-11-14T01:00:00Z");
+    /** 夹具“今日”与注入的固定 Clock 对齐（见 MaterialStockServiceImplTest 同类说明）。 */
+    private static final LocalDate TODAY = LocalDate.ofInstant(NOW, ZoneOffset.ofHours(8));
     private static final AuthPrincipal CALLER =
             new AuthPrincipal(ACTOR, "synth_nurse", "jti-1", NOW.plusSeconds(900), "sid-1");
     private static final AuthRequestContext CONTEXT =
@@ -153,7 +155,7 @@ class UdiTraceServiceImplTest {
 
         when(materialMapper.selectByMaterialId(MATERIAL_ID)).thenReturn(material());
         RegisterUdiInstanceRequest expired = registerRequest();
-        expired.setExpiryDate(LocalDate.now(ZoneOffset.ofHours(8)).minusDays(1));
+        expired.setExpiryDate(TODAY.minusDays(1));
         assertThatThrownBy(() -> service.register(expired, CALLER, CONTEXT))
                 .isInstanceOf(M4UnprocessableException.class).hasMessageContaining("过效期");
 
@@ -263,7 +265,7 @@ class UdiTraceServiceImplTest {
     @Test
     void useRejectsExpiredInstanceAndStockShortage() {
         UdiInstanceEntity expired = instance("IN_STOCK");
-        expired.setExpiryDate(LocalDate.now(ZoneOffset.ofHours(8)).minusDays(1));
+        expired.setExpiryDate(TODAY.minusDays(1));
         when(udiMapper.selectByUdiCodeForUpdate(UDI)).thenReturn(expired);
         assertThatThrownBy(() -> service.use(UDI, useRequest(), CALLER, CONTEXT))
                 .isInstanceOf(M4UnprocessableException.class).hasMessageContaining("过效期");
