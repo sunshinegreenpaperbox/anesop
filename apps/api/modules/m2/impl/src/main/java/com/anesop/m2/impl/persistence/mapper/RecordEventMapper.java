@@ -35,6 +35,12 @@ public interface RecordEventMapper extends BaseMapper<RecordEventEntity> {
             """)
     int selectNextSeq(@Param("recordId") UUID recordId);
 
+    /** 记录单时间轴事件数（锁单前置：至少 1 个事件）。 */
+    @Select("""
+            SELECT count(*) FROM m2_anes.record_event WHERE record_id = #{recordId}
+            """)
+    int countByRecord(@Param("recordId") UUID recordId);
+
     /** 记录单内最新事件的发生时间（无事件返回 null），用于补录原因判定。 */
     @Select("""
             SELECT MAX(occurred_at) FROM m2_anes.record_event WHERE record_id = #{recordId}

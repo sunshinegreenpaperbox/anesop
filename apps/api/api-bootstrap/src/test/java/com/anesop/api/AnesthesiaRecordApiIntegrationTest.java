@@ -575,23 +575,26 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
                 WHERE conname = 'ck_fluid_record_amount'
                 """, String.class)).contains("amount_ml > 0");
 
+        // V17 在 append-only 触发器之外新增“锁单后禁止 INSERT”守卫（BEFORE INSERT）。
         assertThat(triggerNames("record_event")).containsExactly(
-                "trg_record_event_no_delete", "trg_record_event_no_truncate",
-                "trg_record_event_no_update");
+                "trg_record_event_locked_insert", "trg_record_event_no_delete",
+                "trg_record_event_no_truncate", "trg_record_event_no_update");
         assertThat(triggerNames("drug_administration")).containsExactly(
-                "trg_drug_administration_no_delete", "trg_drug_administration_no_truncate",
-                "trg_drug_administration_no_update");
+                "trg_drug_administration_locked_insert", "trg_drug_administration_no_delete",
+                "trg_drug_administration_no_truncate", "trg_drug_administration_no_update");
         assertThat(triggerNames("fluid_record")).containsExactly(
-                "trg_fluid_record_no_delete", "trg_fluid_record_no_truncate",
-                "trg_fluid_record_no_update");
+                "trg_fluid_record_locked_insert", "trg_fluid_record_no_delete",
+                "trg_fluid_record_no_truncate", "trg_fluid_record_no_update");
         assertThat(triggerNames("anesthesia_record")).containsExactly(
                 "trg_anesthesia_record_guard_delete", "trg_anesthesia_record_guard_truncate",
                 "trg_anesthesia_record_guard_update");
 
+        // V17 追加 m2:record:lock / m2:record:revise（锁单与修订）。
         assertThat(jdbcTemplate.queryForList("""
                 SELECT code FROM m0_platform.sys_permission
                 WHERE code LIKE 'm2:record:%' ORDER BY code
-                """, String.class)).containsExactly("m2:record:read", "m2:record:write");
+                """, String.class)).containsExactly("m2:record:lock", "m2:record:read",
+                "m2:record:revise", "m2:record:write");
         Integer grants = jdbcTemplate.queryForObject("""
                 SELECT count(*) FROM m0_platform.sys_role_permission rp
                 JOIN m0_platform.sys_permission p ON p.id = rp.permission_id
@@ -600,7 +603,8 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
                                      'a0000000-0000-4000-8000-000000000002',
                                      'a0000000-0000-4000-8000-000000000003')
                 """, Integer.class);
-        assertThat(grants).isEqualTo(6);
+        // read/write 各授 3 个角色（6），lock/revise 各授 SYS_ADMIN/SYS_ANESTHESIOLOGIST（4）。
+        assertThat(grants).isEqualTo(10);
 
         Integer tablesWithoutComment = jdbcTemplate.queryForObject("""
                 SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -740,16 +744,20 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
 
     private void clearRecordRows() {
         // append-only 临床表：测试夹具临时 DISABLE TRIGGER USER 清理后立即恢复。
+        // V17 的 record_revision FK 指向记录单，必须先清理（修订版本 append-only）。
+        jdbcTemplate.execute("ALTER TABLE m2_anes.record_revision DISABLE TRIGGER USER");
         jdbcTemplate.execute("ALTER TABLE m2_anes.fluid_record DISABLE TRIGGER USER");
         jdbcTemplate.execute("ALTER TABLE m2_anes.drug_administration DISABLE TRIGGER USER");
         jdbcTemplate.execute("ALTER TABLE m2_anes.record_event DISABLE TRIGGER USER");
         jdbcTemplate.execute("ALTER TABLE m2_anes.anesthesia_record DISABLE TRIGGER USER");
         try {
+            jdbcTemplate.update("DELETE FROM m2_anes.record_revision");
             jdbcTemplate.update("DELETE FROM m2_anes.fluid_record");
             jdbcTemplate.update("DELETE FROM m2_anes.drug_administration");
             jdbcTemplate.update("DELETE FROM m2_anes.record_event");
             jdbcTemplate.update("DELETE FROM m2_anes.anesthesia_record");
         } finally {
+            jdbcTemplate.execute("ALTER TABLE m2_anes.record_revision ENABLE TRIGGER USER");
             jdbcTemplate.execute("ALTER TABLE m2_anes.fluid_record ENABLE TRIGGER USER");
             jdbcTemplate.execute("ALTER TABLE m2_anes.drug_administration ENABLE TRIGGER USER");
             jdbcTemplate.execute("ALTER TABLE m2_anes.record_event ENABLE TRIGGER USER");

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -18,6 +19,7 @@ import com.anesop.contracts.scheduling.model.Schedule;
 import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m0.api.security.AuthPrincipal;
 import com.anesop.m1.api.schedule.SchedulingService;
+import com.anesop.m2.api.error.M2ConflictException;
 import com.anesop.m2.api.error.M2ValidationException;
 import com.anesop.m2.impl.config.RecordProperties;
 import com.anesop.m2.impl.persistence.entity.AnesthesiaRecordEntity;
@@ -214,6 +216,24 @@ class ResuscitationServiceImplTest {
     }
 
     @Test
+    void lockedRecordRejectsResuscitationWrite() {
+        AnesthesiaRecordEntity locked = record();
+        locked.setLockedAt(NOW.minusSeconds(60));
+        when(recordMapper.selectById(RECORD_ID)).thenReturn(locked);
+        when(recordMapper.selectByIdForUpdate(RECORD_ID)).thenReturn(locked);
+        Schedule schedule = new Schedule();
+        schedule.setScheduleId(SCHEDULE_ID.toString());
+        when(schedulingService.get(SCHEDULE_ID.toString(), CALLER)).thenReturn(schedule);
+
+        assertThatThrownBy(() -> service.create(RECORD_ID.toString(),
+                request(NOW.minusSeconds(1200), NOW.minusSeconds(900), "演示", "SUCCESS"), CALLER,
+                null))
+                .isInstanceOf(M2ConflictException.class)
+                .hasMessageContaining("已锁单");
+        verify(resuscitationMapper, never()).insertRecord(any());
+    }
+
+    @Test
     void outOfScopeRecordIsNotFound() {
         when(recordMapper.selectById(RECORD_ID)).thenReturn(record());
         when(schedulingService.get(SCHEDULE_ID.toString(), CALLER))
@@ -257,6 +277,8 @@ class ResuscitationServiceImplTest {
 
     private void stubVisibleRecord() {
         when(recordMapper.selectById(RECORD_ID)).thenReturn(record());
+        // create() 先在记录单行锁内判定冻结；list/其它用例不调用，故用 lenient 避免严格桩报错。
+        lenient().when(recordMapper.selectByIdForUpdate(RECORD_ID)).thenReturn(record());
         Schedule schedule = new Schedule();
         schedule.setScheduleId(SCHEDULE_ID.toString());
         when(schedulingService.get(SCHEDULE_ID.toString(), CALLER)).thenReturn(schedule);

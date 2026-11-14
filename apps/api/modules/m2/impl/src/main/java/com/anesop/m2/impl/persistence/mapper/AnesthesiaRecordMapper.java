@@ -43,7 +43,9 @@ public interface AnesthesiaRecordMapper extends BaseMapper<AnesthesiaRecordEntit
      */
     @Select("""
             SELECT id, schedule_id, application_id, patient_id, room_id, status, anesthesia_type,
-                   started_at, ended_at, created_at, created_by, updated_at, updated_by,
+                   started_at, ended_at, locked_at, locked_by, current_revision,
+                   lock_signature_ref, lock_signature_hash, lock_ca_status,
+                   created_at, created_by, updated_at, updated_by,
                    version, deleted
               FROM m2_anes.anesthesia_record
              WHERE id = #{id}
@@ -87,7 +89,9 @@ public interface AnesthesiaRecordMapper extends BaseMapper<AnesthesiaRecordEntit
      */
     @Select("""
             SELECT id, schedule_id, application_id, patient_id, room_id, status, anesthesia_type,
-                   started_at, ended_at, created_at, created_by, updated_at, updated_by,
+                   started_at, ended_at, locked_at, locked_by, current_revision,
+                   lock_signature_ref, lock_signature_hash, lock_ca_status,
+                   created_at, created_by, updated_at, updated_by,
                    version, deleted
               FROM m2_anes.anesthesia_record
              WHERE room_id = #{roomId}
@@ -98,4 +102,60 @@ public interface AnesthesiaRecordMapper extends BaseMapper<AnesthesiaRecordEntit
              ORDER BY started_at DESC
             """)
     List<AnesthesiaRecordEntity> selectOngoingByRoom(@Param("roomId") UUID roomId);
+
+    /**
+     * 锁单（M3-M2-03）：一次性写入锁单时间/操作人/CA 占位签名并置 LOCKED，
+     * {@code WHERE id=? AND version=? AND locked_at IS NULL}；返回 0 行表示版本过期、
+     * 已锁单或并发锁单，服务层映射 409。锁单不改变记录内容（数据库守卫强制）。
+     */
+    @Update("""
+            UPDATE m2_anes.anesthesia_record
+               SET locked_at = #{lockedAt},
+                   locked_by = #{lockedBy},
+                   status = 'LOCKED',
+                   lock_signature_ref = #{signatureRef},
+                   lock_signature_hash = #{signatureHash},
+                   lock_ca_status = #{caStatus},
+                   updated_at = #{updatedAt},
+                   updated_by = #{updatedBy},
+                   version = version + 1
+             WHERE id = #{id}
+               AND version = #{version}
+               AND locked_at IS NULL
+               AND deleted = false
+            """)
+    int lockRecord(@Param("id") UUID id,
+            @Param("version") Long version,
+            @Param("lockedAt") Instant lockedAt,
+            @Param("lockedBy") UUID lockedBy,
+            @Param("signatureRef") String signatureRef,
+            @Param("signatureHash") String signatureHash,
+            @Param("caStatus") String caStatus,
+            @Param("updatedAt") Instant updatedAt,
+            @Param("updatedBy") UUID updatedBy);
+
+    /**
+     * 推进修订版本号（M3-M2-03）：置 REVISED 并把 current_revision 从上一版本 +1，
+     * {@code WHERE id=? AND version=? AND locked_at IS NOT NULL AND current_revision=?}；
+     * 返回 0 行表示并发修订或版本过期，服务层映射 409。
+     */
+    @Update("""
+            UPDATE m2_anes.anesthesia_record
+               SET status = 'REVISED',
+                   current_revision = #{revisionNo},
+                   updated_at = #{updatedAt},
+                   updated_by = #{updatedBy},
+                   version = version + 1
+             WHERE id = #{id}
+               AND version = #{version}
+               AND locked_at IS NOT NULL
+               AND current_revision = #{previousRevision}
+               AND deleted = false
+            """)
+    int markRevision(@Param("id") UUID id,
+            @Param("version") Long version,
+            @Param("previousRevision") Integer previousRevision,
+            @Param("revisionNo") Integer revisionNo,
+            @Param("updatedAt") Instant updatedAt,
+            @Param("updatedBy") UUID updatedBy);
 }

@@ -71,6 +71,18 @@ public final class M2Permissions {
     /** Spring Security 授权表达式中的麻醉记录单书写权限：{@code PERM_m2:record:write}。 */
     public static final String AUTHORITY_RECORD_WRITE = "PERM_" + RECORD_WRITE;
 
+    /** 麻醉记录单锁单（V17 授予 SYS_ADMIN/SYS_ANESTHESIOLOGIST）。 */
+    public static final String RECORD_LOCK = "m2:record:lock";
+
+    /** 麻醉记录单修订（锁单后修正唯一入口；V17 授予 SYS_ADMIN/SYS_ANESTHESIOLOGIST）。 */
+    public static final String RECORD_REVISE = "m2:record:revise";
+
+    /** Spring Security 授权表达式中的锁单权限：{@code PERM_m2:record:lock}。 */
+    public static final String AUTHORITY_RECORD_LOCK = "PERM_" + RECORD_LOCK;
+
+    /** Spring Security 授权表达式中的修订权限：{@code PERM_m2:record:revise}。 */
+    public static final String AUTHORITY_RECORD_REVISE = "PERM_" + RECORD_REVISE;
+
     /** 术中预警规则与告警只读（规则列表、记录单告警列表）。 */
     public static final String ALERT_READ = "m2:alert:read";
 

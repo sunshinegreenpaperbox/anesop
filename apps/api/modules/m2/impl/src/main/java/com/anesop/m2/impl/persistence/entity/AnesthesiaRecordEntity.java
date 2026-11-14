@@ -30,6 +30,18 @@ public class AnesthesiaRecordEntity {
     private String anesthesiaType;
     private Instant startedAt;
     private Instant endedAt;
+    /** 锁单时间（V17）；非空表示已锁单，记录内容不可直接修改，修正只能新增修订版本。 */
+    private Instant lockedAt;
+    /** 锁单操作人用户标识（V17）；与 lockedAt 同时写入，写入后不可改。 */
+    private UUID lockedBy;
+    /** 当前修订版本号（V17，未锁单 0；每次修订 +1，对应 record_revision.revision_no）。 */
+    private Integer currentRevision;
+    /** 锁单签名占位标识（EXT-05：SIM-CA-&lt;记录单标识&gt;）。 */
+    private String lockSignatureRef;
+    /** 锁单签名摘要（规范化记录 JSON 的 SHA-256 十六进制 64 字符）。 */
+    private String lockSignatureHash;
+    /** 锁单 CA 状态（EXT-05 为 SIMULATED）。 */
+    private String lockCaStatus;
     private Instant createdAt;
     private UUID createdBy;
     private Instant updatedAt;
@@ -111,6 +123,54 @@ public class AnesthesiaRecordEntity {
 
     public void setEndedAt(Instant endedAt) {
         this.endedAt = endedAt;
+    }
+
+    public Instant getLockedAt() {
+        return lockedAt;
+    }
+
+    public void setLockedAt(Instant lockedAt) {
+        this.lockedAt = lockedAt;
+    }
+
+    public UUID getLockedBy() {
+        return lockedBy;
+    }
+
+    public void setLockedBy(UUID lockedBy) {
+        this.lockedBy = lockedBy;
+    }
+
+    public Integer getCurrentRevision() {
+        return currentRevision;
+    }
+
+    public void setCurrentRevision(Integer currentRevision) {
+        this.currentRevision = currentRevision;
+    }
+
+    public String getLockSignatureRef() {
+        return lockSignatureRef;
+    }
+
+    public void setLockSignatureRef(String lockSignatureRef) {
+        this.lockSignatureRef = lockSignatureRef;
+    }
+
+    public String getLockSignatureHash() {
+        return lockSignatureHash;
+    }
+
+    public void setLockSignatureHash(String lockSignatureHash) {
+        this.lockSignatureHash = lockSignatureHash;
+    }
+
+    public String getLockCaStatus() {
+        return lockCaStatus;
+    }
+
+    public void setLockCaStatus(String lockCaStatus) {
+        this.lockCaStatus = lockCaStatus;
     }
 
     public Instant getCreatedAt() {

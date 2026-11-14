@@ -11,6 +11,7 @@ import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m0.api.security.AuthPrincipal;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m1.api.schedule.SchedulingService;
+import com.anesop.m2.api.error.M2ConflictException;
 import com.anesop.m2.api.error.M2ValidationException;
 import com.anesop.m2.api.rescue.ResuscitationService;
 import com.anesop.m2.impl.config.RecordProperties;
@@ -39,6 +40,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 抢救记录服务实现（M3-M2-02，契约 anesthesia.yaml 0.7.0）。
+ *
+ * <p>锁单后冻结（Q-2）：记录单 locked_at 非空时拒绝新增（409），与“记录内容不可变”一致；
+ * 数据库 BEFORE INSERT 触发器（V17）为第二道防线（55000）。如临床确需锁单后补录抢救，
+ * 走下一修订版本能力（登记 Q，不绕过冻结）。
  *
  * <p>append-only 留痕：只 INSERT 不 UPDATE/DELETE（数据库触发器兜底 55000）；时间窗必须落在
  * 该记录单的麻醉时间窗内（startedAt ≥ 记录开始；endedAt ≥ startedAt；endedAt ≤ 记录结束或
@@ -103,6 +108,15 @@ public class ResuscitationServiceImpl implements ResuscitationService {
     public ResuscitationRecord create(String recordId, CreateResuscitationRequest request,
             AuthPrincipal caller, AuthRequestContext context) {
         AnesthesiaRecordEntity record = requireVisibleRecord(recordId, caller);
+        // 与并发锁单串行化：先锁记录单行，再判定冻结状态（数据库触发器兜底）。
+        AnesthesiaRecordEntity locked = recordMapper.selectByIdForUpdate(record.getId());
+        if (locked == null) {
+            throw new NoSuchElementException("麻醉记录单不存在或不可见");
+        }
+        if (locked.getLockedAt() != null) {
+            throw new M2ConflictException("记录单已锁单，不可新增抢救记录；如需补录请走下一修订版本（Q-2）");
+        }
+        record = locked;
         if (request == null) {
             throw new M2ValidationException("body", "请求体不能为空");
         }

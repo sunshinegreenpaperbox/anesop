@@ -503,6 +503,7 @@ class AnesthesiaRecordServiceImplTest {
     @Test
     void recordNarcoticRequiresTwoPersonCheck() {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
 
         AdministerDrugRequest missing = drugRequest(true);
@@ -527,6 +528,7 @@ class AnesthesiaRecordServiceImplTest {
     @Test
     void recordNarcoticPersistsCheckerAndAuditsDrugName() {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
         stubEligibleChecker(CHECKER);
         when(drugMapper.insertDrug(any())).thenReturn(1);
@@ -546,6 +548,7 @@ class AnesthesiaRecordServiceImplTest {
     @Test
     void recordNarcoticRejectsCheckerWhoIsMissingDisabledOrUnauthorized() {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
 
         when(userAdminService.get(CHECKER))
@@ -577,6 +580,7 @@ class AnesthesiaRecordServiceImplTest {
     @Test
     void recordNonNarcoticRejectsCheckerFields() {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
 
         AdministerDrugRequest request = drugRequest(false);
@@ -588,6 +592,7 @@ class AnesthesiaRecordServiceImplTest {
     @Test
     void recordDrugValidatesRequiredFields() {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
 
         AdministerDrugRequest request = drugRequest(false);
@@ -623,11 +628,43 @@ class AnesthesiaRecordServiceImplTest {
         assertThat(list.getItems().get(0).getDose()).isEqualByComparingTo("120");
     }
 
+    @Test
+    void lockedRecordRejectsUpdateEventDrugAndFluidWrites() {
+        AnesthesiaRecordEntity locked = ongoingRecord();
+        locked.setLockedAt(Instant.parse("2026-12-01T03:30:00Z"));
+        locked.setLockedBy(ACTOR);
+        locked.setLockSignatureRef("SIM-CA-" + RECORD_ID);
+        locked.setLockSignatureHash("a".repeat(64));
+        locked.setLockCaStatus("SIMULATED");
+        locked.setStatus("LOCKED");
+        when(recordMapper.selectById(RECORD_UUID)).thenReturn(locked);
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(locked);
+        when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("IN_PROGRESS"));
+
+        UpdateAnesthesiaRecordRequest update = new UpdateAnesthesiaRecordRequest();
+        update.setVersion(4);
+        assertThatThrownBy(() -> service.update(RECORD_ID, update, CALLER, CONTEXT))
+                .isInstanceOf(M2ConflictException.class)
+                .hasMessageContaining("锁单");
+        assertThatThrownBy(() -> service.appendEvent(RECORD_ID,
+                eventRequest("CUSTOM", "2026-12-01T08:52:00+08:00"), CALLER, CONTEXT))
+                .isInstanceOf(M2ConflictException.class);
+        assertThatThrownBy(() -> service.recordDrug(RECORD_ID, drugRequest(false), CALLER, CONTEXT))
+                .isInstanceOf(M2ConflictException.class);
+        assertThatThrownBy(() -> service.recordFluid(RECORD_ID, fluidRequest("INTAKE", 500),
+                CALLER, CONTEXT))
+                .isInstanceOf(M2ConflictException.class);
+        verify(drugMapper, never()).insertDrug(any());
+        verify(fluidMapper, never()).insertFluid(any());
+        verify(eventMapper, never()).insertEvent(any());
+    }
+
     // ---------------------------------------------------------------- fluids --
 
     @Test
     void recordFluidValidatesAmountAndAudits() {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
 
         RecordFluidRequest invalid = fluidRequest("INTAKE", 0);

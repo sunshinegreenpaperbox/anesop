@@ -246,6 +246,9 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
             AuthPrincipal caller, AuthRequestContext context) {
         AnesthesiaRecordEntity entity = requireRecord(recordId);
         Schedule schedule = requireVisibleSchedule(entity, caller);
+        if (entity.getLockedAt() != null) {
+            throw new M2ConflictException("记录单已锁单，内容不可修改；修正请新增修订版本");
+        }
         if (request == null) {
             throw new M2ValidationException("body", "请求体不能为空");
         }
@@ -319,6 +322,10 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         AnesthesiaRecordEntity entity = recordMapper.selectByIdForUpdate(visible.getId());
         if (entity == null) {
             throw new NoSuchElementException("麻醉记录单不存在或不可见");
+        }
+        if (entity.getLockedAt() != null) {
+            // 锁单后事件只能通过修订版本追溯；数据库 BEFORE INSERT 触发器（V17）为第二道防线。
+            throw new M2ConflictException("记录单已锁单，不可追加事件；请新增修订版本");
         }
         Instant floor = entity.getStartedAt() != null ? entity.getStartedAt() : entity.getCreatedAt();
         if (floor != null && occurredAt.isBefore(floor)) {
@@ -426,8 +433,16 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
     @Transactional(rollbackFor = Exception.class)
     public DrugAdministration recordDrug(String recordId, AdministerDrugRequest request,
             AuthPrincipal caller, AuthRequestContext context) {
-        AnesthesiaRecordEntity entity = requireRecord(recordId);
-        requireVisibleSchedule(entity, caller);
+        AnesthesiaRecordEntity visible = requireRecord(recordId);
+        requireVisibleSchedule(visible, caller);
+        // 锁单与用药写入竞争：先锁记录单行，再判定锁单状态（数据库触发器兜底）。
+        AnesthesiaRecordEntity entity = recordMapper.selectByIdForUpdate(visible.getId());
+        if (entity == null) {
+            throw new NoSuchElementException("麻醉记录单不存在或不可见");
+        }
+        if (entity.getLockedAt() != null) {
+            throw new M2ConflictException("记录单已锁单，不可追加用药；请新增修订版本");
+        }
         if (request == null) {
             throw new M2ValidationException("body", "请求体不能为空");
         }
@@ -522,8 +537,15 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
     @Transactional(rollbackFor = Exception.class)
     public FluidRecord recordFluid(String recordId, RecordFluidRequest request, AuthPrincipal caller,
             AuthRequestContext context) {
-        AnesthesiaRecordEntity entity = requireRecord(recordId);
-        requireVisibleSchedule(entity, caller);
+        AnesthesiaRecordEntity visible = requireRecord(recordId);
+        requireVisibleSchedule(visible, caller);
+        AnesthesiaRecordEntity entity = recordMapper.selectByIdForUpdate(visible.getId());
+        if (entity == null) {
+            throw new NoSuchElementException("麻醉记录单不存在或不可见");
+        }
+        if (entity.getLockedAt() != null) {
+            throw new M2ConflictException("记录单已锁单，不可追加出入量；请新增修订版本");
+        }
         if (request == null) {
             throw new M2ValidationException("body", "请求体不能为空");
         }
@@ -717,6 +739,15 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         dto.setUpdatedAt(offset(entity.getUpdatedAt()));
         dto.setUpdatedBy(string(entity.getUpdatedBy()));
         dto.setVersion(entity.getVersion() == null ? 0 : entity.getVersion().intValue());
+        // 0.8.0 锁单留痕（EXT-05 占位签名）：未锁单为 null，锁单后只读。
+        dto.setLockedAt(offset(entity.getLockedAt()));
+        dto.setLockedBy(string(entity.getLockedBy()));
+        Integer currentRevision = entity.getCurrentRevision();
+        dto.setCurrentRevision(currentRevision == null ? Integer.valueOf(0) : currentRevision);
+        dto.setSignatureRef(entity.getLockSignatureRef());
+        dto.setSignatureHash(entity.getLockSignatureHash());
+        dto.setCaStatus(entity.getLockCaStatus() == null ? null
+                : AnesthesiaRecord.CaStatusEnum.fromValue(entity.getLockCaStatus()));
         return dto;
     }
 

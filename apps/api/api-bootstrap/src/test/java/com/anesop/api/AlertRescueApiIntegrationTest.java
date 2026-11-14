@@ -737,10 +737,14 @@ class AlertRescueApiIntegrationTest extends AbstractApiIntegrationTest {
         jdbcTemplate.update("DELETE FROM m2_anes.device_registry WHERE gateway_id = ?", GATEWAY);
         jdbcTemplate.update("DELETE FROM m2_anes.anesthesia_vital WHERE device_id = ?", DEVICE);
         jdbcTemplate.update("DELETE FROM m2_anes.alert_watermark");
+        // V17 record_revision FK 指向记录单：先清修订版本（append-only 触发器临时停用）。
+        jdbcTemplate.execute("ALTER TABLE m2_anes.record_revision DISABLE TRIGGER USER");
         jdbcTemplate.execute("ALTER TABLE m2_anes.anesthesia_record DISABLE TRIGGER USER");
         try {
+            jdbcTemplate.update("DELETE FROM m2_anes.record_revision");
             jdbcTemplate.update("DELETE FROM m2_anes.anesthesia_record");
         } finally {
+            jdbcTemplate.execute("ALTER TABLE m2_anes.record_revision ENABLE TRIGGER USER");
             jdbcTemplate.execute("ALTER TABLE m2_anes.anesthesia_record ENABLE TRIGGER USER");
         }
     }

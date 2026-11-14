@@ -6,22 +6,31 @@ import com.anesop.contracts.anesthesia.model.AnesthesiaRecord;
 import com.anesop.contracts.anesthesia.model.AnesthesiaRecordList;
 import com.anesop.contracts.anesthesia.model.CreateAnesthesiaRecordRequest;
 import com.anesop.contracts.anesthesia.model.CreateRecordEventRequest;
+import com.anesop.contracts.anesthesia.model.CreateRevisionRequest;
 import com.anesop.contracts.anesthesia.model.DrugAdministration;
 import com.anesop.contracts.anesthesia.model.DrugAdministrationList;
 import com.anesop.contracts.anesthesia.model.FluidRecord;
 import com.anesop.contracts.anesthesia.model.FluidRecordList;
 import com.anesop.contracts.anesthesia.model.IntakeOutputSummary;
+import com.anesop.contracts.anesthesia.model.LockRecordRequest;
+import com.anesop.contracts.anesthesia.model.LockRecordResult;
 import com.anesop.contracts.anesthesia.model.RecordEvent;
+import com.anesop.contracts.anesthesia.model.RecordEffectiveView;
 import com.anesop.contracts.anesthesia.model.RecordEventList;
 import com.anesop.contracts.anesthesia.model.RecordFluidRequest;
+import com.anesop.contracts.anesthesia.model.RecordLockStatus;
+import com.anesop.contracts.anesthesia.model.RecordRevision;
+import com.anesop.contracts.anesthesia.model.RecordRevisionList;
 import com.anesop.contracts.anesthesia.model.UpdateAnesthesiaRecordRequest;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m2.api.record.AnesthesiaRecordService;
+import com.anesop.m2.api.record.RecordLockService;
 import com.anesop.m2.api.security.M2Permissions;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -50,11 +59,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class AnesthesiaRecordController {
 
     private final AnesthesiaRecordService recordService;
+    private final RecordLockService lockService;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
             justification = "Spring 注入的单例服务由容器管理，控制器不修改其内部状态")
-    public AnesthesiaRecordController(AnesthesiaRecordService recordService) {
+    public AnesthesiaRecordController(AnesthesiaRecordService recordService,
+            RecordLockService lockService) {
         this.recordService = recordService;
+        this.lockService = lockService;
     }
 
     @GetMapping("/records")
@@ -156,5 +168,68 @@ public class AnesthesiaRecordController {
     public IntakeOutputSummary ioSummary(@AuthenticationPrincipal Jwt jwt,
             @PathVariable("recordId") String recordId) {
         return recordService.ioSummary(recordId, AuthPrincipals.from(jwt));
+    }
+
+    @GetMapping("/records/{recordId}/lock-status")
+    @PreAuthorize("hasAuthority('" + M2Permissions.AUTHORITY_RECORD_READ + "')")
+    @Operation(operationId = "getRecordLockStatus", summary = "查询锁单状态与前置条件清单")
+    public RecordLockStatus lockStatus(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("recordId") String recordId) {
+        return lockService.lockStatus(recordId, AuthPrincipals.from(jwt));
+    }
+
+    @PostMapping("/records/{recordId}/lock")
+    @PreAuthorize("hasAuthority('" + M2Permissions.AUTHORITY_RECORD_LOCK + "')")
+    @Operation(operationId = "lockAnesthesiaRecord", summary = "锁单（生成 CA 占位签名）")
+    public LockRecordResult lock(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("recordId") String recordId,
+            @Valid @RequestBody LockRecordRequest request,
+            AuthRequestContext context) {
+        return lockService.lock(recordId, request, AuthPrincipals.from(jwt), context,
+                isAdministrator(jwt));
+    }
+
+    @GetMapping("/records/{recordId}/effective")
+    @PreAuthorize("hasAuthority('" + M2Permissions.AUTHORITY_RECORD_READ + "')")
+    @Operation(operationId = "getEffectiveAnesthesiaRecord",
+            summary = "查询当前有效记录值（锁单原始行 + 最新修订更正）")
+    public RecordEffectiveView effective(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("recordId") String recordId) {
+        return lockService.effective(recordId, AuthPrincipals.from(jwt));
+    }
+
+    @GetMapping("/records/{recordId}/revisions")
+    @PreAuthorize("hasAuthority('" + M2Permissions.AUTHORITY_RECORD_READ + "')")
+    @Operation(operationId = "listRecordRevisions", summary = "查询修订版本列表")
+    public RecordRevisionList listRevisions(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("recordId") String recordId) {
+        return lockService.listRevisions(recordId, AuthPrincipals.from(jwt));
+    }
+
+    @GetMapping("/records/{recordId}/revisions/{revisionNo}")
+    @PreAuthorize("hasAuthority('" + M2Permissions.AUTHORITY_RECORD_READ + "')")
+    @Operation(operationId = "getRecordRevision", summary = "查询修订版本详情与差异")
+    public RecordRevision getRevision(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("recordId") String recordId,
+            @PathVariable("revisionNo") String revisionNo) {
+        return lockService.getRevision(recordId, revisionNo, AuthPrincipals.from(jwt));
+    }
+
+    @PostMapping("/records/{recordId}/revisions")
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAuthority('" + M2Permissions.AUTHORITY_RECORD_REVISE + "')")
+    @Operation(operationId = "createRecordRevision", summary = "创建修订版本（锁单后修正唯一入口）")
+    public RecordRevision createRevision(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("recordId") String recordId,
+            @Valid @RequestBody CreateRevisionRequest request,
+            AuthRequestContext context) {
+        return lockService.createRevision(recordId, request, AuthPrincipals.from(jwt), context,
+                isAdministrator(jwt));
+    }
+
+    /** SYS_ADMIN 的锁单/修订属 break-glass；审计标注管理员操作（Q-3，待临床确认）。 */
+    private static boolean isAdministrator(Jwt jwt) {
+        List<String> roles = jwt.getClaimAsStringList("roles");
+        return roles != null && roles.contains("SYS_ADMIN");
     }
 }

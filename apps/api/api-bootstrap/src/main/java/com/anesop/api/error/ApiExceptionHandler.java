@@ -16,6 +16,7 @@ import com.anesop.m1.api.schedule.SchedulingConflictException;
 import com.anesop.m1.api.schedule.SchedulingValidationException;
 import com.anesop.m2.api.acquisition.GatewayAuthException;
 import com.anesop.m2.api.error.M2ConflictException;
+import com.anesop.m2.api.error.M2LockPreconditionException;
 import com.anesop.m2.api.error.M2UnprocessableException;
 import com.anesop.m2.api.error.M2ValidationException;
 import com.anesop.m2.api.preop.PreopConflictException;
@@ -255,14 +256,29 @@ public class ApiExceptionHandler {
     }
 
     /**
-     * 知情同意/三方核查状态冲突（M2-M5-01）：409 {@code STATE_CONFLICT}。
-     * 重复签署、已撤销后再次签署、版本过期、同模板版本重复创建、核查并发版本冲突。
+     * M2 状态/版本冲突（知情同意/三方核查/麻醉记录锁单与修订）：409 {@code STATE_CONFLICT}。
+     * 重复签署、已撤销后再次签署、版本过期、重复锁单、锁单后写入、未锁单修订等统一文案。
      */
     @ExceptionHandler(M2ConflictException.class)
     public ResponseEntity<Error> handleM2Conflict(M2ConflictException exception,
             HttpServletRequest request) {
-        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "同意/核查状态或版本冲突，操作未生效",
-                request);
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "状态或版本冲突，操作未生效", request);
+    }
+
+    /**
+     * 锁单前置条件未满足（M3-M2-03）：409 {@code STATE_CONFLICT}，{@code details[]} 逐项列出
+     * 未满足条件（field=条件码，reason=中文说明），供前端展示前置清单；不回显患者标识或
+     * 数据库约束名。
+     */
+    @ExceptionHandler(M2LockPreconditionException.class)
+    public ResponseEntity<Error> handleM2LockPrecondition(
+            M2LockPreconditionException exception, HttpServletRequest request) {
+        List<ErrorDetail> details = new ArrayList<>();
+        for (M2LockPreconditionException.UnmetCondition unmet : exception.unmetConditions()) {
+            details.add(ErrorResponses.detail(unmet.code(), unmet.message()));
+        }
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT",
+                "锁单前置条件未满足，操作未生效", request, details);
     }
 
     /**
