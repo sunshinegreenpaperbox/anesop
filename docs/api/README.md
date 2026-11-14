@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口）
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -15,7 +15,8 @@ packages/contracts/
 │   ├── scheduling.yaml    # 术间、排程、冲突、急诊加台、停台、排程分析
 │   ├── anesthesia.yaml    # 术前访视与评估、记录单、锁单/修订、三方核查、随访
 │   ├── device.yaml        # 设备登记、网关批量上报（幂等）、体征窗口查询、采集健康摘要
-│   └── baseline/          # 当前已发布兼容基线（5 份快照）
+│   ├── drug.yaml          # 药品目录、麻精专册/交接/基数/日结、药房适配器状态
+│   └── baseline/          # 当前已发布兼容基线（6 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -29,7 +30,8 @@ packages/contracts/
 | `scheduling.yaml` | 17 | 20 | 手术申请创建/列表/详情/模拟导入/取消、术间列表、排程查询/创建/详情/调整、冲突即时检测、急诊加台（审批 + 抢占）、停台、变更历史、排程分析（利用率/准点/取消率/CSV 导出） | §2.4.2、§2.3.2、§2.7.2、§3.4.2 |
 | `anesthesia.yaml` | 37 | 54 | 术前访视与评估（0.3.0）、知情同意模板/停用/记录/签署/拒绝/撤销（0.4.0）、申请维度三方核查（0.4.0）、麻醉记录单创建/查询/保存与时间轴/用药/输液出入量（0.5.0）、预警规则版本化/告警评估与确认忽略/抢救记录 append-only（0.6.0）、实时触发/评估水位/规则待确认与历史版本/抢救人员留痕（0.7.0）、锁单/锁单前置清单/修订版本/版本差异/当前有效值投影与 CA 占位签名（0.8.0→0.8.1）、复苏记录入室/Aldrete 评估时间序列/转出 SBAR 与达标快照（0.9.0）、旧访视骨架读写、记录维度三方核查读写、随访 | §2.4.3、§3.4.2、§3.9.4 |
 | `device.yaml` | 4 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
-| **合计** | **75** | **98** | 5 个限界上下文骨架 | — |
+| `drug.yaml` | 10 | 15 | 药品目录（列表/检索/详情/创建/更新）、五专科室选择、麻精专册登记、专柜交接、基数维护、日结/班结（平账）、药房适配器状态（EXT-02 SIMULATED） | §2.5、§3.4、§3.9.2 |
+| **合计** | **84** | **112** | 6 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -475,6 +477,39 @@ packages/contracts/
   调整说明属自由文本，落库与审计前经 `PhiMasker` 脱敏（评审 S-1）。
   `GET .../pain-management`（`listPainManagement`）按录入时间升序返回。
 - **示例**：全部 SYNTHETIC（演示随访护士/演示并发症/演示镇痛方案），不含真实患者标识。
+
+### 3.13 药品目录与麻精五专（M4-M15-01，drug 0.1.0 新增域）
+
+> 0.1.0 是**新增域**（10 条路径 / 15 个 operation / 21 个 schema；复审追加
+> `/v1/narcotic/departments` 与 `DepartmentOption/DepartmentList`），不改动既有五份契约；
+> `drug.yaml` 与 `baseline/drug.yaml` 同步落地，`oasdiff`（baseline → 当前、HEAD baseline →
+> 当前）均无破坏性变更（HEAD 无该域快照时自动 SKIP）。**T-4 收口**：麻醉记录用药的
+> `narcotic` 改为服务端按本域字典判定（见 §3.7 补充说明与 ADR-0018）。
+
+- **药品目录**（`m4:drug:read` 读 / `m4:drug:write` 写）：`GET/POST /v1/drugs`、
+  `GET/PUT /v1/drugs/{drugId}`、`GET /v1/drugs/search?q=`。编码/名称/通用名按
+  trim + 忽略大小写唯一，重复 409；别名全局唯一且与其他药品名称/通用名双向互斥，冲突 409；
+  编码创建后不可改；
+  更新必须回传 `version`（过期 409）；不存在 404。目录全院可读，维护仅 SYS_ADMIN/
+  SYS_PHARMACIST（V20）。`narcotic`/`highRisk` 是主数据布尔字段，`narcotic` 是麻醉记录
+  麻精判定的唯一权威。
+- **麻精五专**（全部需 `m4:narcotic:manage`，并按科室数据范围过滤）：
+  - `POST/GET /v1/narcotic/registers`：专册登记（药品/批号/数量/处方号/使用人/去向 +
+    双人签字）。药品未收录 422；双人同一人 400（`details[0].field=secondSignerId`）；
+    科室越界 403；append-only（数据库 55000）。
+  - `POST/GET /v1/narcotic/cabinet-handovers`：专柜交接（班次/交班/接班/品种数量明细 +
+    双人签字）。交班 = 接班 400（`handoverToId`）、签字同一人 400（`secondSignerId`）。
+  - `GET/PUT /v1/narcotic/baselines`：基数（品种 + 柜唯一，数量 ≥ 0；更新回传 `version`，
+    过期 409）。
+  - `POST /v1/narcotic/daily-closes`：日结/班结。`期初 + 入库 − 使用 − 退回 = 期末`；
+    不平 409，`details[0]` 给出期望值/实盘值；同柜 + 业务日 + 班次重复 409；append-only。
+  - `GET /v1/narcotic/daily-closes/{closeId}`：详情；不存在或越界统一 404。
+- **药房适配器** `GET /v1/drugs/pharmacy-adapter/status`（`m4:drug:read`）：EXT-02
+  `mode=SIMULATED`，每次调用执行无外部 I/O 的模拟探测并留痕；失败时
+  `available=false, degraded=true`（本地字典继续可用），审计 `ADAPTER_SYNC`。
+- **数据范围**：药品目录不按数据范围过滤；五专按科室（ALL 全院 / SITE/DEPT 授权组织 /
+  SELF/ROOM fail-closed 403）。最小实现与待确认项见 `docs/modules/m4/README.md` 与 ADR-0018。
+- **示例**：全部 SYNTHETIC（演示药品/批号/处方号/使用人/签字人），不含真实患者标识。
 
 ## 4. 错误模型
 

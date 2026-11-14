@@ -13,7 +13,8 @@
 > + V16（M2 预警实时触发水位/记录术间快照/规则待确认/抢救人员留痕，M3-M2-02 评审修复）
 > + V17（M2 锁单/修订/CA 占位签名，M3-M2-03）
 > + V18（M2 复苏记录/Aldrete 评估/转出交接，M3-M10-01）
-> + V19（M2 术后随访/镇痛与并发症，M3-M11-01）；
+> + V19（M2 术后随访/镇痛与并发症，M3-M11-01）
+> + V20（M4 药品目录/麻精五专/基数/日结/药房适配器，M4-M15-01）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -42,6 +43,8 @@ db/
 │   ├── V17__m2_record_lock_revision.sql    # m2_anes 修订版本/锁单留痕 + m2:record:lock/revise（M3-M2-03）
 │   ├── V18__m2_pacu_recovery.sql           # m2_anes 复苏记录/Aldrete 评估/转出 + m2:pacu:*（M3-M10-01）
 │   ├── V19__m2_followup_pain.sql           # m2_anes 术后随访/镇痛 + m2:followup:*（M3-M11-01）
+│   ├── V20__m4_drug_dictionary.sql         # m4_drug 药品目录/五专/基数/日结/适配器 + m4:*（M4-M15-01）
+│   └── ../seed/demo/V101__demo_drug_synthetic.sql # 演示药品 3 条（仅 dev/test/uat）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -65,6 +68,7 @@ db/
 | `m1_sched` | M1 手术排程 | 手术申请、排程/台次、术间 |
 | `m2_anes` | M2 麻醉记录 | 术前访视（V10）、知情同意/三方核查（V11）、记录单/事件/用药/出入量（V13）、设备登记与体征（V4/V14）、预警/抢救（V15/V16）、锁单/修订（V17）、复苏记录/Aldrete/转出（V18）、术后随访/镇痛（V19） |
 | `m3_staff` | M3 人员资质 | 人员档案、授权 |
+| `m4_drug` | M4 药品目录与麻精五专 | 药品目录/别名、专册、专柜交接、基数、日结、药房适配器日志（V20） |
 | `m4_supply` | M4 耗材追溯 | 批次、消耗 |
 | `m5_drug` | M5 药品管理 | 麻精台账、处方 |
 | `m6_stats` | M6 工作量统计 | 统计周期与结果 |
@@ -510,6 +514,37 @@ SYS_NURSE_ANESTHETIST）。不改写 V1–V18 既有列与数据。
   医务处/麻醉科签字。
 - **运行时权限**：append-only 与随访前置守卫依赖触发器，应用运行账号不得拥有 DDL 权限
   （见 §5.3）。
+
+### 4.15 V20（M4 药品目录与麻精五专）回滚说明
+
+V20 属 expand 段：新增 schema `m4_drug` 与 7 张表——`drug`（编码/名称/通用名
+lower(btrim) 唯一、麻精/高危标志、状态 ACTIVE/INACTIVE、乐观锁 version）、`drug_alias`
+（同药品内唯一 + 全局 lower(btrim) 唯一）、`narcotic_register`（专册，append-only，双人签字不同人 CHECK）、
+`cabinet_handover`（专柜交接，append-only，交班 ≠ 接班 + 双人签字 CHECK、明细 jsonb）、
+`drug_baseline`（品种 + 柜唯一、数量 ≥ 0、科室不可改、version）、`daily_close`（平账
+CHECK、同柜 + 业务日 + 班次唯一、append-only）、`pharmacy_adapter_log`（EXT-02 同步留痕）；
+触发器：专册/交接/日结 UPDATE/DELETE/TRUNCATE 一律 55000；`drug` 守卫编码/创建留痕不可改、
+version 只增；`drug_baseline` 守卫品种/柜/科室不可改、version 只增；权限点
+`m4:drug:read|write`、`m4:narcotic:manage` 与新增角色 SYS_PHARMACIST（最小授权）。
+**演示药品不在 V20**：3 条 SYNTHETIC 药品（舒芬太尼/丙泊酚/吗啡）在独立演示 location
+`db/seed/demo/V101__demo_drug_synthetic.sql`，生产路径 `m4_drug.drug` 为空。不改写 V1–V19
+既有列与数据。
+
+- **应用回滚**：下线 `/v1/drugs*`、`/v1/narcotic*`、`/v1/drugs/pharmacy-adapter/status`
+  端点与前端药品目录/麻精五专菜单；M2 用药登记恢复旧口径（客户端声明 + 双人核对），
+  字典表保留不影响旧代码；五专与适配器审计不得随回滚删除。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份 + 麻精账归档，顺序不可颠倒）：
+  先 `DROP TRIGGER`（专册/交接/日结各 3 个 + `trg_drug_guard` + `trg_drug_baseline_guard`）
+  → `DROP FUNCTION m4_drug.fn_reject_mutation/fn_reject_truncate/fn_drug_guard/
+  fn_drug_baseline_guard()` → 按 `pharmacy_adapter_log` → `daily_close` →
+  `drug_baseline` → `cabinet_handover` → `narcotic_register` → `drug_alias` → `drug`
+  顺序 `DROP TABLE`（先 `pg_dump -t` 导出并校验行数）→ `DROP SCHEMA m4_drug` →
+  删除 SYS_PHARMACIST 的授权与角色 → 删除三个权限点。
+- **重放**：修复后重新执行 V20 会重建空 schema/表（生产无演示药品）；五专记录**不得直接回灌**
+  （append-only），如需恢复须按原标识/原时间重新登记并注明补录原因（须麻精管理员与临床确认）。
+- **临床/合规风险**：麻精账属法定留痕，回滚前必须归档到离线审计库并由药房/麻醉科/医务处
+  签字；回滚窗口内五专登记能力缺失，须改用纸质台账并保证双人签字。
+- **运行时权限**：append-only 与平账守卫依赖触发器，应用运行账号不得拥有 DDL 权限（见 §5.3）。
 
 ## 5. 运行方式
 

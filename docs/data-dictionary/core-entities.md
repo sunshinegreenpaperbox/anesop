@@ -558,6 +558,38 @@ V11 守卫触发器保证身份列与 `signer_name/signer_relation/sign_method` 
 终态不可改、已签署只能携带原因撤销且签名留痕不可改写、DELETE/TRUNCATE 拒绝。
 CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成法律意义上的电子签名。
 
+### 3.11 药品目录 `m4_drug.drug` / `m4_drug.drug_alias`（V20 已实现，M4-M15-01）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键 | 契约 `Drug.drugId` |
+| `code` | varchar(64) | 是 | 院内药品编码（lower 唯一，创建后不可改） | §2.5 |
+| `name` | varchar(200) | 是 | 药品名称（trim+lower 唯一；麻醉记录按名称解析麻精属性） | §2.5、T-4 |
+| `generic_name` | varchar(200) | 否 | 通用名（trim+lower 部分唯一，NULL 除外；参与名称解析） | §2.5 |
+| `specification` / `unit` / `dosage_form` / `category` | varchar | 是 | 规格/单位/剂型/分类（剂型与分类字典【待确认】） | §2.5 |
+| `narcotic` | boolean | 是 | 是否麻精药品（**判定唯一权威**） | §2.5、ADR-0018 |
+| `high_risk` | boolean | 是 | 是否高危（高警示）药品，仅提示 | §2.5 |
+| `status` | varchar(16) | 是 | ACTIVE/INACTIVE（停用只读历史，不删除） | M4-M15-01 |
+| `version` | integer | 是 | 乐观锁（更新必须回传） | §3.4.3 |
+| 审计字段 | — | 是 | `created_at/created_by/updated_at/updated_by` | §3.4.3 |
+| `drug_alias.alias` | varchar(64) | 是 | 别名（同药品内唯一 + 全局 lower(btrim) 唯一；与其他药品名称/通用名双向互斥） | T-4 名称解析前提 |
+
+说明：目录全院可读；别名唯一性是“按名称判定麻精”的语义前提，不是可选项。
+
+### 3.12 麻精五专 `narcotic_register` / `cabinet_handover` / `drug_baseline` / `daily_close`（V20 已实现）
+
+| 表 | 关键字段 | 说明 | 来源/备注 |
+|---|---|---|---|
+| `m4_drug.narcotic_register` | `drug_id`、`drug_name` 快照、`batch_no`、`quantity>0`、`unit`、`prescription_no`、`used_by`(≤64)、`department_id`、`usage_at`、`destination`、`first_signer_*`、`second_signer_*` | 专册登记；**双人签字不同人**；append-only | §2.5 麻精五专 |
+| `m4_drug.cabinet_handover` | `cabinet_code`、`department_id`、`shift(DAY/NIGHT)`、`handed_over_at`、`handover_from_*`、`handover_to_*`、`items` jsonb、`first_signer_*`、`second_signer_*` | 专柜交接；交班 ≠ 接班、双人签字不同人；append-only | §2.5 |
+| `m4_drug.drug_baseline` | `drug_id + cabinet_code` 唯一、`department_id`、`quantity≥0`、`version` | 基数；品种/柜/科室不可改、version 只增；跨科 upsert 409/403 | §2.5 |
+| `m4_drug.daily_close` | `close_date`、`shift`、`cabinet_code`、`department_id`、`opening/inbound/used/returned/closing_quantity` | 日结/班结；`期初+入库−使用−退回=期末` CHECK；同柜+日+班次唯一；append-only | §2.5【待确认】Q-2/Q-3 |
+| `m4_drug.pharmacy_adapter_log` | `adapter_code(EXT-02)`、`operation`、`success`、`degraded`、`detail` jsonb | 药房适配器（SIMULATED）同步留痕；不存凭据/处方明细 | §3.9 集成 EXT-02 |
+
+说明：五专表只存使用人姓名摘要与处方号，不含患者标识；班次两班制、日结数据来源与差异
+容忍度均为【待确认】（见 `docs/modules/m4/README.md` §11 与 ADR-0018）。科室必须为启用
+`org_type=DEPT` 组织；SELF 范围按本人所属科室推导（B-3/S-5）。
+
 ## 4. 与契约的对应
 
 | 契约 Schema | 数据库实体 | 说明 |
@@ -590,6 +622,12 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 | `PainManagement`、`PainManagementList`、`RecordPainManagementRequest`、`PainAdjustment`、`PainManagementModality`、`PainManagementEffect` | `m2_anes.pain_management` | 镇痛方式/参数/效果/调整记录（V19，append-only） |
 | `FollowUp`、`FollowUpPage`、`CreateFollowUpRequest`（旧占位） | 未落表 | 早期 `/follow-ups` 契约占位，未实现；0.10.0 实现的是 `/followups`（见 §16.9 Q-6） |
 | `CurrentUser`、`DataScope` | `sys_user`、`sys_role_data_scope` 等 | 权限投影，不是单表 |
+| `Drug`、`DrugList`、`CreateDrugRequest`、`UpdateDrugRequest` | `m4_drug.drug`、`m4_drug.drug_alias` | 药品目录、别名唯一、麻精/高危标志、乐观锁（V20） |
+| `NarcoticRegister`、`NarcoticRegisterList`、`CreateNarcoticRegisterRequest` | `m4_drug.narcotic_register` | 麻精专册 append-only、双人签字不同人（V20） |
+| `CabinetHandover`、`CabinetHandoverList`、`CreateCabinetHandoverRequest`、`CabinetHandoverItem` | `m4_drug.cabinet_handover` | 专柜交接 append-only、品种数量明细 jsonb（V20） |
+| `DrugBaseline`、`DrugBaselineList`、`UpdateDrugBaselinesRequest` | `m4_drug.drug_baseline` | 基数（品种 + 柜唯一、乐观锁）（V20） |
+| `DailyClose`、`CreateDailyCloseRequest` | `m4_drug.daily_close` | 日结/班结、平账 CHECK、append-only（V20） |
+| `PharmacyAdapterStatus` | `m4_drug.pharmacy_adapter_log` | 药房适配器（EXT-02 SIMULATED）状态与降级留痕（V20） |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
 
 ## 5. 【待确认】汇总

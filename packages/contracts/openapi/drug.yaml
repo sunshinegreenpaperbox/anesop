@@ -1,0 +1,1889 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 药品目录与麻精五专契约（drug）
+  summary: 药品主数据、麻精专册/专柜交接/基数/日结、药房适配器状态
+  description: |
+    ANESOP 药品域契约，对应方案书 §2.5（药品与耗材管理、麻精五专）、§3.4（领域模型）、
+    §3.9.2（RBAC 与数据权限）、§3.9.3（脱敏）与 E-M15。契约版本 0.1.0 为首个版本（additive）。
+    硬规则：
+    1) 药品目录为全院可读主数据（`m4:drug:read`）；维护（创建/更新）需要 `m4:drug:write`。
+       编码、名称、通用名（非空）按 trim + 忽略大小写院内唯一；别名全局唯一，且名称/通用名
+       不得与其他药品别名冲突、别名不得与其他药品名称/通用名冲突（冲突 409）。归一化唯一
+       是麻醉记录按名称解析麻精属性只有一个候选的语义前提。
+    2) 麻精五专（专人/专柜/专册/专账/专处方）记录需要 `m4:narcotic:manage`：
+       专册登记、专柜交接、基数维护与日结/班结；科室必须显式选择且为启用 `org_type=DEPT`
+       组织（不存在/停用/非科室 422），SELF 范围按本人所属科室推导。专册与交接为
+       **append-only**，更正只能新增记录；
+       每笔记录必须有 **两名不同的签字人**（firstSignerId ≠ secondSignerId，服务端 400，
+       数据库 CHECK 兜底）；日结必须满足 **期初 + 入库 − 使用 − 退回 = 期末**，
+       不平时服务端返回 409，`details[]` 给出期望值与实盘值（数据库 CHECK 兜底）。
+    3) 药品字典是麻精判定的唯一权威：麻醉记录用药的 `narcotic` 由服务端按本域字典判定
+       （客户端声明只做一致性校验），字典未收录 → 400；名称/通用名/别名归一化后命中多个
+       药品 → 422 `DRUG_AMBIGUOUS`（fail-closed）。本契约不接收“客户端自定义麻精标志”。
+    4) 药房系统对接属 EXT-02（外部适配器，当前 **SIMULATED**）：不直连药房生产库，
+       只读状态与最近一次模拟同步结果；适配器不可用时降级为“本地字典继续可用 + 状态可见”，
+       不阻塞临床记录。
+    5) 脱敏：专册登记只保存 **使用人姓名摘要**（`usedBy`，≤64）与处方号（`prescriptionNo`），
+       不保存患者姓名/院内患者号/身份证号/手机号；审计与日志不含处方原文与人员姓名。
+       专册/交接/日结的 `departmentId` 用于科室数据范围过滤（五专按科室/角色限制）。
+    所有示例均为 SYNTHETIC 合成数据。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 药品目录
+    description: 药品主数据（编码/名称/通用名/规格/单位/剂型/分类/麻精/高危/别名）维护与检索。
+  - name: 麻精五专
+    description: 专册登记、专柜交接、基数维护、日结/班结（双人签字、平账校验、append-only）。
+  - name: 药房适配器
+    description: 药房系统适配器（EXT-02）状态与最近一次模拟同步结果，不承载药品主数据写入。
+paths:
+  /v1/drugs:
+    get:
+      operationId: listDrugs
+      tags:
+        - 药品目录
+      summary: 查询药品目录
+      description: 按关键字（名称/通用名/别名/编码）与状态过滤，分页返回；全院可读。
+      parameters:
+        - name: keyword
+          in: query
+          required: false
+          description: 关键字（编码/名称/通用名/别名，模糊匹配，忽略大小写）。
+          schema:
+            type: string
+            maxLength: 64
+        - name: status
+          in: query
+          required: false
+          description: 状态过滤；缺省返回全部状态。
+          schema:
+            type: string
+            enum:
+              - ACTIVE
+              - INACTIVE
+        - name: page
+          in: query
+          required: false
+          description: 页码，从 1 开始。
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          required: false
+          description: 每页条数（1–200）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 药品目录分页结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrugList'
+              example:
+                items:
+                  - drugId: '2a000000-0000-4000-8000-000000000001'
+                    code: DRUG-SUF-001
+                    name: 舒芬太尼（演示）
+                    genericName: 枸橼酸舒芬太尼注射液（演示）
+                    specification: 50ug/1ml
+                    unit: 支
+                    dosageForm: INJECTION
+                    category: OPIOID
+                    narcotic: true
+                    highRisk: true
+                    aliases:
+                      - 舒芬（演示）
+                    status: ACTIVE
+                    remark: SYNTHETIC 演示药品
+                    createdAt: '2026-11-14T08:00:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
+                    updatedAt: '2026-11-14T08:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                    version: 1
+                page: 1
+                size: 20
+                total: 1
+                totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createDrug
+      tags:
+        - 药品目录
+      summary: 创建药品
+      description: |
+        创建药品主数据。编码/名称/通用名按 trim + 忽略大小写唯一，别名全局唯一且与既有
+        药品名称/通用名双向互斥（冲突 409）。麻精标志（narcotic）是高危字段，仅药师/管理员维护。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDrugRequest'
+            example:
+              code: DRUG-SUF-001
+              name: 舒芬太尼（演示）
+              genericName: 枸橼酸舒芬太尼注射液（演示）
+              specification: 50ug/1ml
+              unit: 支
+              dosageForm: INJECTION
+              category: OPIOID
+              narcotic: true
+              highRisk: true
+              aliases:
+                - 舒芬（演示）
+              remark: SYNTHETIC 演示药品
+      responses:
+        '201':
+          description: 创建成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Drug'
+              example:
+                drugId: '2a000000-0000-4000-8000-000000000001'
+                code: DRUG-SUF-001
+                name: 舒芬太尼（演示）
+                genericName: 枸橼酸舒芬太尼注射液（演示）
+                specification: 50ug/1ml
+                unit: 支
+                dosageForm: INJECTION
+                category: OPIOID
+                narcotic: true
+                highRisk: true
+                aliases:
+                  - 舒芬（演示）
+                status: ACTIVE
+                remark: SYNTHETIC 演示药品
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T08:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/drugs/search:
+    get:
+      operationId: searchDrugs
+      tags:
+        - 药品目录
+      summary: 按名称/别名检索药品（用药录入联想）
+      description: |
+        精确/前缀检索药品名称、通用名与别名，供麻醉记录用药录入联想；只返回启用（ACTIVE）药品。
+        q 为空或全空白时返回空列表（不报错），避免联想接口在输入框清空时刷错误提示。
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: 检索词（名称/通用名/别名，忽略大小写，最长 64）。
+          schema:
+            type: string
+            maxLength: 64
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数上限（1–50，默认 20）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: 命中药品（按名称排序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrugList'
+              example:
+                items:
+                  - drugId: '2a000000-0000-4000-8000-000000000001'
+                    code: DRUG-SUF-001
+                    name: 舒芬太尼（演示）
+                    genericName: 枸橼酸舒芬太尼注射液（演示）
+                    specification: 50ug/1ml
+                    unit: 支
+                    dosageForm: INJECTION
+                    category: OPIOID
+                    narcotic: true
+                    highRisk: true
+                    aliases:
+                      - 舒芬（演示）
+                    status: ACTIVE
+                    createdAt: '2026-11-14T08:00:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
+                    updatedAt: '2026-11-14T08:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                    version: 1
+                page: 1
+                size: 20
+                total: 1
+                totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/drugs/{drugId}:
+    get:
+      operationId: getDrug
+      tags:
+        - 药品目录
+      summary: 查询药品详情
+      description: 返回药品主数据与别名；不存在或不可见统一 404。
+      parameters:
+        - $ref: '#/components/parameters/DrugId'
+      responses:
+        '200':
+          description: 药品详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Drug'
+              example:
+                drugId: '2a000000-0000-4000-8000-000000000001'
+                code: DRUG-SUF-001
+                name: 舒芬太尼（演示）
+                genericName: 枸橼酸舒芬太尼注射液（演示）
+                specification: 50ug/1ml
+                unit: 支
+                dosageForm: INJECTION
+                category: OPIOID
+                narcotic: true
+                highRisk: true
+                aliases:
+                  - 舒芬（演示）
+                status: ACTIVE
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T08:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateDrug
+      tags:
+        - 药品目录
+      summary: 更新药品
+      description: |
+        全量保存药品（编码不可改）。必须回传 version 做乐观锁，冲突 409；名称/通用名/别名
+        交叉冲突同样 409。麻精标志变更属高危操作：审计记录 before/after 的
+        narcotic/highRisk 摘要（不含患者信息）。
+      parameters:
+        - $ref: '#/components/parameters/DrugId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDrugRequest'
+            example:
+              name: 舒芬太尼（演示）
+              genericName: 枸橼酸舒芬太尼注射液（演示）
+              specification: 50ug/1ml
+              unit: 支
+              dosageForm: INJECTION
+              category: OPIOID
+              narcotic: true
+              highRisk: true
+              aliases:
+                - 舒芬（演示）
+                - 舒芬太尼（演示别名）
+              remark: SYNTHETIC 演示药品（改名）
+              version: 1
+      responses:
+        '200':
+          description: 更新成功，返回更新后的药品。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Drug'
+              example:
+                drugId: '2a000000-0000-4000-8000-000000000001'
+                code: DRUG-SUF-001
+                name: 舒芬太尼（演示）
+                genericName: 枸橼酸舒芬太尼注射液（演示）
+                specification: 50ug/1ml
+                unit: 支
+                dosageForm: INJECTION
+                category: OPIOID
+                narcotic: true
+                highRisk: true
+                aliases:
+                  - 舒芬（演示）
+                  - 舒芬太尼（演示别名）
+                status: ACTIVE
+                remark: SYNTHETIC 演示药品（改名）
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T09:30:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/drugs/pharmacy-adapter/status:
+    get:
+      operationId: getPharmacyAdapterStatus
+      tags:
+        - 药房适配器
+      summary: 查询药房适配器状态（EXT-02）
+      description: |
+        返回 EXT-02 药房适配器状态：当前为 SIMULATED（未接入真实药房系统），
+        `available=false` 表示模拟同步失败，`degraded=true` 表示已降级为本地字典可用；
+        最近一次同步时间与待同步条数用于运维排障。该端点不返回任何患者或处方明细。
+      responses:
+        '200':
+          description: 适配器状态。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PharmacyAdapterStatus'
+              example:
+                adapterCode: EXT-02
+                name: 药房系统适配器（模拟）
+                mode: SIMULATED
+                available: true
+                degraded: false
+                lastSyncedAt: '2026-11-14T08:00:00+08:00'
+                pendingSyncCount: 0
+                message: 未接入真实药房系统（EXT-02），当前为模拟同步
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/narcotic/departments:
+    get:
+      operationId: listNarcoticDepartments
+      tags:
+        - 麻精五专
+      summary: 查询调用者可访问的科室（五专科室选择）
+      description: |
+        返回当前调用者数据范围内可见的启用科室（org_type=DEPT），用于五专页面显式选择科室，
+        禁止前端用当前用户标识冒充科室。ALL 返回全部启用科室；SITE 返回授予院区子树；
+        DEPT 返回授权科室；SELF 返回本人绑定科室；ROOM/无数据范围 403。
+        返回项只含科室标识/编码/名称，不含人员与患者信息。
+      responses:
+        '200':
+          description: 可见科室列表（按编码排序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepartmentList'
+              example:
+                items:
+                  - departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    code: DEPT-ANES
+                    name: 麻醉科（合成）
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/narcotic/registers:
+    get:
+      operationId: listNarcoticRegisters
+      tags:
+        - 麻精五专
+      summary: 查询麻精专册登记
+      description: |
+        按科室、药品与时间范围查询专册（append-only）。数据范围：`m4:narcotic:manage` +
+        科室数据范围（ALL 全院；DEPT/SITE 只返回授权科室；SELF/ROOM 不适用五专 → 403）。
+      parameters:
+        - name: departmentId
+          in: query
+          required: false
+          description: 科室标识过滤；超出数据范围 403。
+          schema:
+            type: string
+        - name: drugId
+          in: query
+          required: false
+          description: 药品标识过滤。
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: 使用时间下界（含）。
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: 使用时间上界（含）。
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数上限（1–200，默认 100）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: 专册登记列表（按使用时间倒序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NarcoticRegisterList'
+              example:
+                items:
+                  - registerId: '2b000000-0000-4000-8000-000000000001'
+                    drugId: '2a000000-0000-4000-8000-000000000001'
+                    drugName: 舒芬太尼（演示）
+                    batchNo: BATCH-SYNTH-0001
+                    quantity: 1
+                    unit: 支
+                    prescriptionNo: RX-SYNTH-0001
+                    usedBy: 演示使用人（合成）
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    usageAt: '2026-11-14T09:10:00+08:00'
+                    destination: 术中镇痛（演示）
+                    firstSignerId: '10000000-0000-4000-8000-000000000003'
+                    firstSignerName: 演示给药人（合成）
+                    secondSignerId: '10000000-0000-4000-8000-000000000004'
+                    secondSignerName: 演示核对人（合成）
+                    createdAt: '2026-11-14T09:12:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000003'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createNarcoticRegister
+      tags:
+        - 麻精五专
+      summary: 登记麻精专册（append-only）
+      description: |
+        登记一笔麻精药品使用：药品必须已收录于字典（否则 422），批号/数量/处方号/使用人/
+        去向必填；两名签字人必须不同（否则 400，`details[0].field=secondSignerId`）。
+        写成功后审计 `NARCOTIC_REGISTER`（不含处方号原文与人员姓名）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNarcoticRegisterRequest'
+            example:
+              drugId: '2a000000-0000-4000-8000-000000000001'
+              batchNo: BATCH-SYNTH-0001
+              quantity: 1
+              unit: 支
+              prescriptionNo: RX-SYNTH-0001
+              usedBy: 演示使用人（合成）
+              departmentId: 'f1000000-0000-4000-8000-000000000002'
+              usageAt: '2026-11-14T09:10:00+08:00'
+              destination: 术中镇痛（演示）
+              firstSignerId: '10000000-0000-4000-8000-000000000003'
+              firstSignerName: 演示给药人（合成）
+              secondSignerId: '10000000-0000-4000-8000-000000000004'
+              secondSignerName: 演示核对人（合成）
+      responses:
+        '201':
+          description: 登记成功，返回登记记录。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NarcoticRegister'
+              example:
+                registerId: '2b000000-0000-4000-8000-000000000001'
+                drugId: '2a000000-0000-4000-8000-000000000001'
+                drugName: 舒芬太尼（演示）
+                batchNo: BATCH-SYNTH-0001
+                quantity: 1
+                unit: 支
+                prescriptionNo: RX-SYNTH-0001
+                usedBy: 演示使用人（合成）
+                departmentId: 'f1000000-0000-4000-8000-000000000002'
+                usageAt: '2026-11-14T09:10:00+08:00'
+                destination: 术中镇痛（演示）
+                firstSignerId: '10000000-0000-4000-8000-000000000003'
+                firstSignerName: 演示给药人（合成）
+                secondSignerId: '10000000-0000-4000-8000-000000000004'
+                secondSignerName: 演示核对人（合成）
+                createdAt: '2026-11-14T09:12:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000003'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/narcotic/cabinet-handovers:
+    get:
+      operationId: listCabinetHandovers
+      tags:
+        - 麻精五专
+      summary: 查询专柜交接记录
+      description: 按柜号/科室查询专柜交接（append-only，按交接时间倒序）。
+      parameters:
+        - name: cabinetCode
+          in: query
+          required: false
+          description: 专柜编码。
+          schema:
+            type: string
+            maxLength: 32
+        - name: departmentId
+          in: query
+          required: false
+          description: 科室标识；超出数据范围 403。
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数上限（1–200，默认 100）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: 交接记录列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CabinetHandoverList'
+              example:
+                items:
+                  - handoverId: '2c000000-0000-4000-8000-000000000001'
+                    cabinetCode: CAB-ANES-01
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    shift: DAY
+                    handedOverAt: '2026-11-14T16:00:00+08:00'
+                    handoverFromId: '10000000-0000-4000-8000-000000000003'
+                    handoverFromName: 演示交班人（合成）
+                    handoverToId: '10000000-0000-4000-8000-000000000004'
+                    handoverToName: 演示接班人（合成）
+                    items:
+                      - drugId: '2a000000-0000-4000-8000-000000000001'
+                        drugName: 舒芬太尼（演示）
+                        quantity: 4
+                        unit: 支
+                    firstSignerId: '10000000-0000-4000-8000-000000000003'
+                    firstSignerName: 演示交班人（合成）
+                    secondSignerId: '10000000-0000-4000-8000-000000000004'
+                    secondSignerName: 演示接班人（合成）
+                    createdAt: '2026-11-14T16:02:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000003'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createCabinetHandover
+      tags:
+        - 麻精五专
+      summary: 登记专柜交接（append-only）
+      description: |
+        登记班次交接：交班/接班人与两名签字人必须为不同人员（同一人 400，字段
+        `secondSignerId`）；品种数量明细至少 1 条、数量 ≥ 0。审计 `NARCOTIC_HANDOVER`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCabinetHandoverRequest'
+            example:
+              cabinetCode: CAB-ANES-01
+              departmentId: 'f1000000-0000-4000-8000-000000000002'
+              shift: DAY
+              handedOverAt: '2026-11-14T16:00:00+08:00'
+              handoverFromId: '10000000-0000-4000-8000-000000000003'
+              handoverFromName: 演示交班人（合成）
+              handoverToId: '10000000-0000-4000-8000-000000000004'
+              handoverToName: 演示接班人（合成）
+              items:
+                - drugId: '2a000000-0000-4000-8000-000000000001'
+                  quantity: 4
+                  unit: 支
+              firstSignerId: '10000000-0000-4000-8000-000000000003'
+              firstSignerName: 演示交班人（合成）
+              secondSignerId: '10000000-0000-4000-8000-000000000004'
+              secondSignerName: 演示接班人（合成）
+      responses:
+        '201':
+          description: 交接登记成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CabinetHandover'
+              example:
+                handoverId: '2c000000-0000-4000-8000-000000000001'
+                cabinetCode: CAB-ANES-01
+                departmentId: 'f1000000-0000-4000-8000-000000000002'
+                shift: DAY
+                handedOverAt: '2026-11-14T16:00:00+08:00'
+                handoverFromId: '10000000-0000-4000-8000-000000000003'
+                handoverFromName: 演示交班人（合成）
+                handoverToId: '10000000-0000-4000-8000-000000000004'
+                handoverToName: 演示接班人（合成）
+                items:
+                  - drugId: '2a000000-0000-4000-8000-000000000001'
+                    drugName: 舒芬太尼（演示）
+                    quantity: 4
+                    unit: 支
+                firstSignerId: '10000000-0000-4000-8000-000000000003'
+                firstSignerName: 演示交班人（合成）
+                secondSignerId: '10000000-0000-4000-8000-000000000004'
+                secondSignerName: 演示接班人（合成）
+                createdAt: '2026-11-14T16:02:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000003'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/narcotic/baselines:
+    get:
+      operationId: listDrugBaselines
+      tags:
+        - 麻精五专
+      summary: 查询麻精基数
+      description: 按柜号/科室查询基数（品种 + 数量）。数据范围同专册（科室过滤）。
+      parameters:
+        - name: cabinetCode
+          in: query
+          required: false
+          description: 专柜编码。
+          schema:
+            type: string
+            maxLength: 32
+        - name: departmentId
+          in: query
+          required: false
+          description: 科室标识；超出数据范围 403。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 基数列表（按柜号 + 药品名排序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrugBaselineList'
+              example:
+                items:
+                  - baselineId: '2d000000-0000-4000-8000-000000000001'
+                    drugId: '2a000000-0000-4000-8000-000000000001'
+                    drugName: 舒芬太尼（演示）
+                    cabinetCode: CAB-ANES-01
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    quantity: 10
+                    unit: 支
+                    updatedAt: '2026-11-14T08:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                    version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: updateDrugBaselines
+      tags:
+        - 麻精五专
+      summary: 维护麻精基数（按品种 + 柜幂等 upsert）
+      description: |
+        批量维护基数：一条记录由 `drugId + cabinetCode` 唯一确定；新建时 `version` 可省略，
+        更新时必须回传当前 `version`，过期 409。数量 ≥ 0。审计 `NARCOTIC_BASELINE`
+        （逐条记录品种与数量变更，不含患者信息）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDrugBaselinesRequest'
+            example:
+              items:
+                - drugId: '2a000000-0000-4000-8000-000000000001'
+                  cabinetCode: CAB-ANES-01
+                  departmentId: 'f1000000-0000-4000-8000-000000000002'
+                  quantity: 12
+                  version: 1
+      responses:
+        '200':
+          description: 维护成功，返回该柜号的完整基数列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrugBaselineList'
+              example:
+                items:
+                  - baselineId: '2d000000-0000-4000-8000-000000000001'
+                    drugId: '2a000000-0000-4000-8000-000000000001'
+                    drugName: 舒芬太尼（演示）
+                    cabinetCode: CAB-ANES-01
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    quantity: 12
+                    unit: 支
+                    updatedAt: '2026-11-14T10:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                    version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/narcotic/daily-closes:
+    post:
+      operationId: createDailyClose
+      tags:
+        - 麻精五专
+      summary: 日结/班结（平账校验，append-only）
+      description: |
+        提交日结/班结：服务端校验 **期初 + 入库 − 使用 − 退回 = 期末**；不平返回 409，
+        `details[]` 给出 `openingQuantity/inboundQuantity/usedQuantity/returnedQuantity/
+        closingQuantity` 与期望值。平账后写入 append-only 日结记录并审计 `NARCOTIC_DAILY_CLOSE`。
+        科室数据范围不满足 403；同一柜号 + 日期 + 班次重复日结 409。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDailyCloseRequest'
+            example:
+              closeDate: '2026-11-14'
+              shift: DAY
+              cabinetCode: CAB-ANES-01
+              departmentId: 'f1000000-0000-4000-8000-000000000002'
+              openingQuantity: 10
+              inboundQuantity: 4
+              usedQuantity: 3
+              returnedQuantity: 1
+              closingQuantity: 10
+      responses:
+        '201':
+          description: 日结成功，返回平账结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyClose'
+              example:
+                closeId: '2e000000-0000-4000-8000-000000000001'
+                closeDate: '2026-11-14'
+                shift: DAY
+                cabinetCode: CAB-ANES-01
+                departmentId: 'f1000000-0000-4000-8000-000000000002'
+                openingQuantity: 10
+                inboundQuantity: 4
+                usedQuantity: 3
+                returnedQuantity: 1
+                closingQuantity: 10
+                balanced: true
+                createdAt: '2026-11-14T16:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000003'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/narcotic/daily-closes/{closeId}:
+    get:
+      operationId: getDailyClose
+      tags:
+        - 麻精五专
+      summary: 查询日结/班结详情
+      description: 返回指定日结记录；不存在或超出科室数据范围统一 404。
+      parameters:
+        - $ref: '#/components/parameters/CloseId'
+      responses:
+        '200':
+          description: 日结详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyClose'
+              example:
+                closeId: '2e000000-0000-4000-8000-000000000001'
+                closeDate: '2026-11-14'
+                shift: DAY
+                cabinetCode: CAB-ANES-01
+                departmentId: 'f1000000-0000-4000-8000-000000000002'
+                openingQuantity: 10
+                inboundQuantity: 4
+                usedQuantity: 3
+                returnedQuantity: 1
+                closingQuantity: 10
+                balanced: true
+                createdAt: '2026-11-14T16:10:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000003'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
+  parameters:
+    DrugId:
+      name: drugId
+      in: path
+      required: true
+      description: 药品标识（UUID 字符串）。
+      schema:
+        type: string
+    CloseId:
+      name: closeId
+      in: path
+      required: true
+      description: 日结/班结记录标识（UUID 字符串）。
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: 请求参数校验失败（字段缺失/越界/双人签字为同一人/科室格式非法）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0201
+            details:
+              - field: secondSignerId
+                reason: 第二签字人不得与第一签字人为同一人
+    Unauthorized:
+      description: 未认证或令牌已失效（fail-closed）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0202
+            details: []
+    Forbidden:
+      description: 已认证但缺权限（m4:drug:read|write、m4:narcotic:manage）或科室数据范围不足。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0203
+            details:
+              - field: permission
+                reason: 需要 m4:narcotic:manage 权限与对应科室数据范围
+    NotFound:
+      description: 药品/日结记录不存在或不可见（不泄露其他科室数据的存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-0204
+            details: []
+    Conflict:
+      description: 编码/名称/通用名/别名归一化重复或交叉冲突、基数跨科改写、乐观锁版本过期、日结不平或重复日结。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: STATE_CONFLICT
+            message: 状态或版本冲突，操作未生效
+            traceId: SYNTH-TRACE-0205
+            details:
+              - field: closingQuantity
+                reason: 平账校验未通过：期望 10，实盘 9（期初 10 + 入库 4 − 使用 3 − 退回 1）
+    UnprocessableEntity:
+      description: 业务规则拒绝：药品未收录于字典（不能用于专册/交接登记）等。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 药品或科室不在可用范围内
+            traceId: SYNTH-TRACE-0206
+            details:
+              - field: drugId
+                reason: 药品未收录于药品字典
+  schemas:
+    ErrorDetail:
+      type: object
+      description: 错误明细项，用于字段级校验失败或数据范围说明。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 相关字段名或资源标识。
+        reason:
+          type: string
+          description: 可读的失败原因，不包含堆栈、SQL 实参与患者标识。
+    Error:
+      type: object
+      description: 统一错误响应；不暴露堆栈、SQL 实参、令牌与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    Drug:
+      type: object
+      description: 药品主数据（SYNTHETIC 示例）；narcotic 为麻精判定权威字段。
+      required:
+        - drugId
+        - code
+        - name
+        - specification
+        - unit
+        - dosageForm
+        - category
+        - narcotic
+        - highRisk
+        - aliases
+        - status
+        - createdAt
+        - createdBy
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        drugId:
+          type: string
+          description: 药品标识。
+        code:
+          type: string
+          maxLength: 64
+          description: 院内药品编码（唯一，创建后不可改）。
+        name:
+          type: string
+          maxLength: 200
+          description: 药品名称（院内字典名，唯一；麻醉记录按此名解析麻精属性）。
+        genericName:
+          type: string
+          maxLength: 200
+          description: 通用名（可选；参与名称解析）。
+        specification:
+          type: string
+          maxLength: 100
+          description: 规格（如 50ug/1ml）。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位（支/瓶/片/袋等）。
+        dosageForm:
+          type: string
+          maxLength: 32
+          description: 剂型编码（INJECTION/TABLET 等，院内字典）。
+        category:
+          type: string
+          maxLength: 32
+          description: 分类编码（院内药典分类；具体取值由院方确认【待确认】）。
+        narcotic:
+          type: boolean
+          description: 是否麻精药品（麻醉、精神类）；由本字典判定，客户端不得自行声明。
+        highRisk:
+          type: boolean
+          description: 是否高危药品（高警示）；用于提醒，不替代医师判断。
+        aliases:
+          type: array
+          description: 别名（全局唯一；用于用药录入联想与麻精解析）。
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 64
+        status:
+          type: string
+          description: 状态：ACTIVE=启用（可录入），INACTIVE=停用（只读历史）。
+          enum:
+            - ACTIVE
+            - INACTIVE
+        remark:
+          type: string
+          maxLength: 500
+          description: 备注（可选，不含患者信息）。
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号（从 1 起）。
+          minimum: 1
+    DrugList:
+      type: object
+      description: 药品分页结果。
+      required:
+        - items
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        items:
+          type: array
+          description: 药品列表。
+          items:
+            $ref: '#/components/schemas/Drug'
+        page:
+          type: integer
+          description: 当前页码，从 1 开始。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页条数。
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          description: 符合条件的总数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数；total 为 0 时为 0。
+          minimum: 0
+    CreateDrugRequest:
+      type: object
+      description: 创建药品请求；code/name 唯一，aliases 全局唯一。
+      required:
+        - code
+        - name
+        - specification
+        - unit
+        - dosageForm
+        - category
+        - narcotic
+        - highRisk
+      properties:
+        code:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          description: 院内药品编码（唯一）。
+        name:
+          type: string
+          maxLength: 200
+          description: 药品名称（唯一）。
+        genericName:
+          type: string
+          maxLength: 200
+          description: 通用名（可选）。
+        specification:
+          type: string
+          maxLength: 100
+          description: 规格。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        dosageForm:
+          type: string
+          maxLength: 32
+          description: 剂型编码。
+        category:
+          type: string
+          maxLength: 32
+          description: 分类编码。
+        narcotic:
+          type: boolean
+          description: 是否麻精药品。
+        highRisk:
+          type: boolean
+          description: 是否高危药品。
+        aliases:
+          type: array
+          description: 别名（可选，全局唯一）。
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 64
+        remark:
+          type: string
+          maxLength: 500
+          description: 备注（可选）。
+    UpdateDrugRequest:
+      type: object
+      description: 更新药品请求（编码不可改；必须回传 version）。
+      required:
+        - name
+        - specification
+        - unit
+        - dosageForm
+        - category
+        - narcotic
+        - highRisk
+        - version
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          description: 药品名称（唯一）。
+        genericName:
+          type: string
+          maxLength: 200
+          description: 通用名（可选）。
+        specification:
+          type: string
+          maxLength: 100
+          description: 规格。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        dosageForm:
+          type: string
+          maxLength: 32
+          description: 剂型编码。
+        category:
+          type: string
+          maxLength: 32
+          description: 分类编码。
+        narcotic:
+          type: boolean
+          description: 是否麻精药品（变更属高危操作，记审计）。
+        highRisk:
+          type: boolean
+          description: 是否高危药品。
+        aliases:
+          type: array
+          description: 别名（全量替换；省略表示清空）。
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 64
+        remark:
+          type: string
+          maxLength: 500
+          description: 备注（可选）。
+        version:
+          type: integer
+          description: 乐观锁版本号（必须等于当前版本）。
+          minimum: 1
+    NarcoticRegister:
+      type: object
+      description: 麻精专册登记（append-only）。
+      required:
+        - registerId
+        - drugId
+        - drugName
+        - batchNo
+        - quantity
+        - unit
+        - prescriptionNo
+        - usedBy
+        - departmentId
+        - usageAt
+        - destination
+        - firstSignerId
+        - firstSignerName
+        - secondSignerId
+        - secondSignerName
+        - createdAt
+        - createdBy
+      properties:
+        registerId:
+          type: string
+          description: 专册登记标识。
+        drugId:
+          type: string
+          description: 药品标识（字典）。
+        drugName:
+          type: string
+          description: 药品名称快照（字典名）。
+        batchNo:
+          type: string
+          maxLength: 64
+          description: 批号。
+        quantity:
+          type: number
+          description: 数量（> 0）。
+          exclusiveMinimum: 0
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        prescriptionNo:
+          type: string
+          maxLength: 64
+          description: 处方号（可留；审计只记“已登记”不记原文）。
+        usedBy:
+          type: string
+          maxLength: 64
+          description: 使用人姓名摘要（不含患者标识）。
+        departmentId:
+          type: string
+          description: 科室标识（数据范围过滤依据）。
+        usageAt:
+          type: string
+          format: date-time
+          description: 使用时间。
+        destination:
+          type: string
+          maxLength: 100
+          description: 去向（术中/术后镇痛等，自由文本）。
+        firstSignerId:
+          type: string
+          description: 第一签字人用户标识。
+        firstSignerName:
+          type: string
+          maxLength: 64
+          description: 第一签字人姓名摘要。
+        secondSignerId:
+          type: string
+          description: 第二签字人用户标识（不得与第一签字人相同）。
+        secondSignerName:
+          type: string
+          maxLength: 64
+          description: 第二签字人姓名摘要。
+        createdAt:
+          type: string
+          format: date-time
+          description: 登记时间。
+        createdBy:
+          type: string
+          description: 登记人用户标识。
+    NarcoticRegisterList:
+      type: object
+      description: 专册登记列表。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NarcoticRegister'
+    CreateNarcoticRegisterRequest:
+      type: object
+      description: 专册登记请求（双人签字必须不同人）。
+      required:
+        - drugId
+        - batchNo
+        - quantity
+        - unit
+        - prescriptionNo
+        - usedBy
+        - departmentId
+        - usageAt
+        - destination
+        - firstSignerId
+        - firstSignerName
+        - secondSignerId
+        - secondSignerName
+      properties:
+        drugId:
+          type: string
+          description: 药品标识（必须已收录于字典）。
+        batchNo:
+          type: string
+          maxLength: 64
+          description: 批号。
+        quantity:
+          type: number
+          description: 数量（> 0）。
+          exclusiveMinimum: 0
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        prescriptionNo:
+          type: string
+          maxLength: 64
+          description: 处方号。
+        usedBy:
+          type: string
+          maxLength: 64
+          description: 使用人姓名摘要。
+        departmentId:
+          type: string
+          description: 科室标识（必须在调用者数据范围内）。
+        usageAt:
+          type: string
+          format: date-time
+          description: 使用时间（不得晚于服务端时间 + 容差）。
+        destination:
+          type: string
+          maxLength: 100
+          description: 去向。
+        firstSignerId:
+          type: string
+          description: 第一签字人用户标识。
+        firstSignerName:
+          type: string
+          maxLength: 64
+          description: 第一签字人姓名摘要。
+        secondSignerId:
+          type: string
+          description: 第二签字人用户标识（不得与第一签字人相同）。
+        secondSignerName:
+          type: string
+          maxLength: 64
+          description: 第二签字人姓名摘要。
+    CabinetHandoverItem:
+      type: object
+      description: 专柜交接品种数量明细。
+      required:
+        - drugId
+        - drugName
+        - quantity
+        - unit
+      properties:
+        drugId:
+          type: string
+          description: 药品标识。
+        drugName:
+          type: string
+          description: 药品名称快照。
+        quantity:
+          type: number
+          description: 数量（≥ 0）。
+          minimum: 0
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+    CabinetHandover:
+      type: object
+      description: 专柜交接记录（append-only）。
+      required:
+        - handoverId
+        - cabinetCode
+        - departmentId
+        - shift
+        - handedOverAt
+        - handoverFromId
+        - handoverFromName
+        - handoverToId
+        - handoverToName
+        - items
+        - firstSignerId
+        - firstSignerName
+        - secondSignerId
+        - secondSignerName
+        - createdAt
+        - createdBy
+      properties:
+        handoverId:
+          type: string
+          description: 交接记录标识。
+        cabinetCode:
+          type: string
+          maxLength: 32
+          description: 专柜编码。
+        departmentId:
+          type: string
+          description: 科室标识。
+        shift:
+          type: string
+          description: 班次（白班/夜班两班制为演示口径，具体班次由院方确认【待确认】）。
+          enum:
+            - DAY
+            - NIGHT
+        handedOverAt:
+          type: string
+          format: date-time
+          description: 交接时间。
+        handoverFromId:
+          type: string
+          description: 交班人用户标识。
+        handoverFromName:
+          type: string
+          maxLength: 64
+          description: 交班人姓名摘要。
+        handoverToId:
+          type: string
+          description: 接班人用户标识（不得与交班人相同）。
+        handoverToName:
+          type: string
+          maxLength: 64
+          description: 接班人姓名摘要。
+        items:
+          type: array
+          description: 品种数量明细（至少 1 条）。
+          items:
+            $ref: '#/components/schemas/CabinetHandoverItem'
+        firstSignerId:
+          type: string
+          description: 第一签字人用户标识。
+        firstSignerName:
+          type: string
+          maxLength: 64
+          description: 第一签字人姓名摘要。
+        secondSignerId:
+          type: string
+          description: 第二签字人用户标识（不得与第一签字人相同）。
+        secondSignerName:
+          type: string
+          maxLength: 64
+          description: 第二签字人姓名摘要。
+        createdAt:
+          type: string
+          format: date-time
+          description: 登记时间。
+        createdBy:
+          type: string
+          description: 登记人用户标识。
+    CabinetHandoverList:
+      type: object
+      description: 专柜交接列表。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CabinetHandover'
+    CreateCabinetHandoverRequest:
+      type: object
+      description: 专柜交接登记请求（双人签字 + 交班/接班人必须互不相同）。
+      required:
+        - cabinetCode
+        - departmentId
+        - shift
+        - handedOverAt
+        - handoverFromId
+        - handoverFromName
+        - handoverToId
+        - handoverToName
+        - items
+        - firstSignerId
+        - firstSignerName
+        - secondSignerId
+        - secondSignerName
+      properties:
+        cabinetCode:
+          type: string
+          maxLength: 32
+          description: 专柜编码。
+        departmentId:
+          type: string
+          description: 科室标识（必须在调用者数据范围内）。
+        shift:
+          type: string
+          description: 班次。
+          enum:
+            - DAY
+            - NIGHT
+        handedOverAt:
+          type: string
+          format: date-time
+          description: 交接时间。
+        handoverFromId:
+          type: string
+          description: 交班人用户标识。
+        handoverFromName:
+          type: string
+          maxLength: 64
+          description: 交班人姓名摘要。
+        handoverToId:
+          type: string
+          description: 接班人用户标识。
+        handoverToName:
+          type: string
+          maxLength: 64
+          description: 接班人姓名摘要。
+        items:
+          type: array
+          description: 品种数量明细（1–200 条；药品必须已收录于字典）。
+          minItems: 1
+          maxItems: 200
+          items:
+            type: object
+            required:
+              - drugId
+              - quantity
+              - unit
+            properties:
+              drugId:
+                type: string
+                description: 药品标识。
+              quantity:
+                type: number
+                description: 数量（≥ 0）。
+                minimum: 0
+              unit:
+                type: string
+                maxLength: 16
+                description: 单位。
+        firstSignerId:
+          type: string
+          description: 第一签字人用户标识。
+        firstSignerName:
+          type: string
+          maxLength: 64
+          description: 第一签字人姓名摘要。
+        secondSignerId:
+          type: string
+          description: 第二签字人用户标识（不得与第一签字人相同）。
+        secondSignerName:
+          type: string
+          maxLength: 64
+          description: 第二签字人姓名摘要。
+    DrugBaseline:
+      type: object
+      description: 麻精基数（品种 + 柜唯一）。
+      required:
+        - baselineId
+        - drugId
+        - drugName
+        - cabinetCode
+        - departmentId
+        - quantity
+        - unit
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        baselineId:
+          type: string
+          description: 基数记录标识。
+        drugId:
+          type: string
+          description: 药品标识。
+        drugName:
+          type: string
+          description: 药品名称快照。
+        cabinetCode:
+          type: string
+          maxLength: 32
+          description: 专柜编码。
+        departmentId:
+          type: string
+          description: 科室标识。
+        quantity:
+          type: number
+          description: 基数数量（≥ 0）。
+          minimum: 0
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号。
+          minimum: 1
+    DepartmentOption:
+      type: object
+      description: 科室选项（启用、org_type=DEPT）；用于五专页面显式选择科室。
+      required:
+        - departmentId
+        - code
+        - name
+      properties:
+        departmentId:
+          type: string
+          description: 科室组织标识。
+        code:
+          type: string
+          maxLength: 64
+          description: 科室编码（院内唯一）。
+        name:
+          type: string
+          maxLength: 100
+          description: 科室名称。
+    DepartmentList:
+      type: object
+      description: 调用者可访问的科室列表。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DepartmentOption'
+    DrugBaselineList:
+      type: object
+      description: 基数列表。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DrugBaseline'
+    UpdateDrugBaselinesRequest:
+      type: object
+      description: 基数批量维护（按 drugId + cabinetCode upsert）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 基数条目（1–200 条）。
+          minItems: 1
+          maxItems: 200
+          items:
+            type: object
+            required:
+              - drugId
+              - cabinetCode
+              - departmentId
+              - quantity
+            properties:
+              drugId:
+                type: string
+                description: 药品标识（必须已收录于字典）。
+              cabinetCode:
+                type: string
+                maxLength: 32
+                description: 专柜编码。
+              departmentId:
+                type: string
+                description: 科室标识（必须在调用者数据范围内）。
+              quantity:
+                type: number
+                description: 基数数量（≥ 0）。
+                minimum: 0
+              version:
+                type: integer
+                description: 当前版本（新建可省略；更新必填且必须匹配，否则 409）。
+                minimum: 1
+    DailyClose:
+      type: object
+      description: 麻精日结/班结（append-only，平账后落库）。
+      required:
+        - closeId
+        - closeDate
+        - shift
+        - cabinetCode
+        - departmentId
+        - openingQuantity
+        - inboundQuantity
+        - usedQuantity
+        - returnedQuantity
+        - closingQuantity
+        - balanced
+        - createdAt
+        - createdBy
+      properties:
+        closeId:
+          type: string
+          description: 日结记录标识。
+        closeDate:
+          type: string
+          format: date
+          description: 日结日期（业务日，Asia/Shanghai）。
+        shift:
+          type: string
+          description: 班次。
+          enum:
+            - DAY
+            - NIGHT
+        cabinetCode:
+          type: string
+          maxLength: 32
+          description: 专柜编码。
+        departmentId:
+          type: string
+          description: 科室标识。
+        openingQuantity:
+          type: number
+          description: 期初数量。
+          minimum: 0
+        inboundQuantity:
+          type: number
+          description: 入库数量。
+          minimum: 0
+        usedQuantity:
+          type: number
+          description: 使用数量。
+          minimum: 0
+        returnedQuantity:
+          type: number
+          description: 退回数量。
+          minimum: 0
+        closingQuantity:
+          type: number
+          description: 期末（实盘）数量；必须等于期初 + 入库 − 使用 − 退回。
+          minimum: 0
+        balanced:
+          type: boolean
+          description: 是否平账（成功落库的记录恒为 true；不平不落库）。
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+    CreateDailyCloseRequest:
+      type: object
+      description: 日结/班结请求；服务端校验期初 + 入库 − 使用 − 退回 = 期末。
+      required:
+        - closeDate
+        - shift
+        - cabinetCode
+        - departmentId
+        - openingQuantity
+        - inboundQuantity
+        - usedQuantity
+        - returnedQuantity
+        - closingQuantity
+      properties:
+        closeDate:
+          type: string
+          format: date
+          description: 日结日期（业务日）。
+        shift:
+          type: string
+          description: 班次。
+          enum:
+            - DAY
+            - NIGHT
+        cabinetCode:
+          type: string
+          maxLength: 32
+          description: 专柜编码。
+        departmentId:
+          type: string
+          description: 科室标识（必须在调用者数据范围内）。
+        openingQuantity:
+          type: number
+          description: 期初数量（≥ 0）。
+          minimum: 0
+        inboundQuantity:
+          type: number
+          description: 入库数量（≥ 0）。
+          minimum: 0
+        usedQuantity:
+          type: number
+          description: 使用数量（≥ 0）。
+          minimum: 0
+        returnedQuantity:
+          type: number
+          description: 退回数量（≥ 0）。
+          minimum: 0
+        closingQuantity:
+          type: number
+          description: 期末（实盘）数量（≥ 0）。
+          minimum: 0
+    PharmacyAdapterStatus:
+      type: object
+      description: 药房适配器（EXT-02）状态；SIMULATED 表示未接入真实药房系统。
+      required:
+        - adapterCode
+        - name
+        - mode
+        - available
+        - degraded
+        - pendingSyncCount
+        - message
+      properties:
+        adapterCode:
+          type: string
+          description: 适配器编号（EXT-02）。
+        name:
+          type: string
+          description: 适配器名称。
+        mode:
+          type: string
+          description: 运行模式：SIMULATED=模拟（未接入真实系统），LIVE=真实对接（本期未启用）。
+          enum:
+            - SIMULATED
+            - LIVE
+        available:
+          type: boolean
+          description: 最近一次同步是否成功（false 表示适配器不可用）。
+        degraded:
+          type: boolean
+          description: 是否降级（true 表示本地字典继续可用，仅外部同步失败）。
+        lastSyncedAt:
+          type: string
+          format: date-time
+          description: 最近一次同步时间；从未同步时为 null。
+        pendingSyncCount:
+          type: integer
+          description: 待同步条数（模拟）。
+          minimum: 0
+        message:
+          type: string
+          description: 状态说明（固定文案，不含外部系统凭据）。
