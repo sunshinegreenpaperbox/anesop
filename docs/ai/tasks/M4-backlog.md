@@ -21,8 +21,8 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 | ID | 任务 | 写域 | 依赖 | 状态 |
 |---|---|---|---|---|
 | M4-M15-01 | 药品目录与麻精五专（字典/五专/基数/日结班结/药房适配器模拟） | 新契约 drug.yaml、m4 模块、V20、前端 | M3 | Review（blocking 已清） |
-| M4-M13-01 | 人员档案、分级授权、排班、培训 | 新契约 staff.yaml、m4 模块、V21、前端 | M3-M0-* | Ready |
-| M4-M14-01 | 耗材主数据、出入库、UDI、高值追溯、SPD 模拟 | 新契约 material.yaml、m4 模块、V22、前端 | M4-M15-01 | Blocked |
+| M4-M13-01 | 人员档案、分级授权、排班、培训 | 新契约 staff.yaml、m4 模块、V21/V22、前端 | M3-M0-* | Review（blocking 已清） |
+| M4-M14-01 | 耗材主数据、出入库、UDI、高值追溯、SPD 模拟 | 新契约 material.yaml、m4 模块、V23、前端 | M4-M15-01 | Blocked |
 | M4-M16-01 | 工作量统计、多维报表、导出 | 报表接口/契约、m4 模块、前端 | M4-M13-01、M3 | Blocked |
 | M4-M17-01 | 质控指标、不良事件 RCA、病历质量抽查、上报导出 | m4 模块、契约、前端 | M4-M16-01 | Blocked |
 | M4-QA-01 | 管理域专项测试、覆盖率、导出脱敏与权限回归 | 测试/文档 | M4-M15-01…M4-M17-01 | Blocked |
@@ -50,6 +50,20 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
   五专留痕/日结平账/权限 403/导出无 PHI；文档：m4 README、docs/db、docs/api、data-dictionary。
 
 ### M4-M13-01 人员档案与分级授权/排班/培训
+
+> **Review（2026-11-14，第二轮）**：契约 `staff.yaml 0.1.1`（10 路径/15 operation，新增
+> `/v1/staff/departments` 科室选项 + 双人审批/撤销时点/notApplicable）、V21（`m4_staff` 5 表 +
+> 当前视图 + append-only 授权历史 + 排班双唯一冲突 + 权限点 m4:staff:read|write /
+> m4:schedule:manage / m4:training:manage）、V22（授权治理列 + `m4:staff:authorize` +
+> SYS_AUTH_MANAGER（DEPT）；麻醉医师收敛只读）、
+> m4-api/impl（档案/授权校验/排班/培训）、bootstrap 4 个控制器、前端四页（档案/分级授权/
+> 人员排班/培训提醒）+ Vitest 17 例 + E2E 1 条、文档（模块 README §14–§22、ADR-0019、
+> docs-api §3.14、docs-db §4.16、data-dictionary）已完成。**R1–R5 映射、班次定义、术间多人、
+> 换班审批、职称/职级字典等口径未确认，标【待确认】并登记 ADR-0019**；授权校验是 M1/M5
+> 集成点（`StaffAuthorizationService.evaluate`），但 M1/M5 侧接入留待对应任务（Q-10）。
+> 独立评审 B-1（自授/审批人/双人审批）、B-2（履职角色）、B-3（fail-open）、B-4（回溯版本）
+> 与 S-1/S-2/S-3/S-4/S-5/S-6/S-7 已修；待确认清单见 `docs/modules/m4/README.md` §22 与
+> ADR-0019（新增 Q-20/Q-21）。M4-M16-01 可解锁。
 - 目标：麻醉医师/护士档案（资质、分级授权 R1–R5 与术式/年龄段映射）、排班（班次/术间）、
   培训记录与到期提醒（系统内提醒/报表）；与 m0 用户/角色/数据范围关联。
 - 契约：`staff.yaml`（或 auth 扩展，优先新域 staff.yaml）；迁移 V21；权限 `m4:staff:*`；
@@ -58,7 +72,7 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 
 ### M4-M14-01 耗材/UDI/SPD
 - 目标：耗材主数据（UDI/规格/批次/效期）、出入库、高值耗材一物一码追溯（与台次/记录
-  关联）、SPD 适配器模拟（EXT-03）；契约 `material.yaml`；V22；权限 `m4:material:*`。
+  关联）、SPD 适配器模拟（EXT-03）；契约 `material.yaml`；V23（V22 已被 M4-M13-01 评审占用）；权限 `m4:material:*`。
 - 验收：唯一码全链路追溯（入库→使用→计费）、效期/批次校验、越权、审计、SPD 降级模拟。
 
 ### M4-M16-01 工作量与多维报表
