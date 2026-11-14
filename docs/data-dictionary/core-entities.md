@@ -647,6 +647,12 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 | `DailyClose`、`CreateDailyCloseRequest` | `m4_drug.daily_close` | 日结/班结、平账 CHECK、append-only（V20） |
 | `PharmacyAdapterStatus` | `m4_drug.pharmacy_adapter_log` | 药房适配器（EXT-02 SIMULATED）状态与降级留痕（V20） |
 | `Staff`、`StaffList`、`CreateStaffRequest`、`UpdateStaffRequest`、`StaffQualification`、`StaffQualificationInput`、`DepartmentOption`、`DepartmentList` | `m4_staff.staff_profile`、`m4_staff.staff_qualification` | 人员档案、执业资质、科室选项、乐观锁（V21） |
+| `Material`、`MaterialList`、`CreateMaterialRequest`、`UpdateMaterialRequest`、`MaterialStatusRequest` | `m4_material.material` | 耗材目录、编码/名称/UDI-DI 唯一、高值/效期标志、启停（ACTIVE/INACTIVE）、乐观锁（V23） |
+| `MaterialStockLevel`、`MaterialStockLevelList` | `m4_material.material_stock` | 批次库存（材料 + 批次 + 科室唯一、数量 >= 0）（V23） |
+| `StockMovement`、`StockMovementList`、`CreateStockMovementRequest` | `m4_material.stock_movement` | 出入库流水 IN/OUT/RETURN/ADJUST、append-only、余额快照；RETURN=退回供应商/中心库（V23） |
+| `UdiInstance`、`RegisterUdiInstanceRequest`、`UseUdiInstanceRequest`、`UdiTrace`、`MaterialTraceSummary`、`RecordLink` | `m4_material.udi_instance` | UDI 一物一码、状态机 IN_STOCK/USED/RETURNED、recordId/scheduleId 逻辑关联（V23） |
+| `SpdAdapterStatus`、`SpdSyncResult` | `m4_material.spd_sync_log` | SPD 适配器（EXT-03 SIMULATED）状态与降级留痕（V23） |
+| `DepartmentOption`、`DepartmentList`（material） | 读时投影（`m0_platform.sys_org` / `sys_user_org`） | 出入库/UDI 登记的科室选项，按数据范围收敛（V23） |
 | `StaffAuthorization`、`StaffAuthorizationHistory`、`UpdateStaffAuthorizationRequest` | `m4_staff.staff_authorization`（+ 视图 `staff_authorization_current`） | append-only 授权版本链、当前版本视图（V21） |
 | `AuthorizationCheckRequest`、`AuthorizationCheckResult`、`AuthorizationCheckReason` | 读时判定（无新表） | 授权校验（排程/术中集成点），原因码见契约枚举（V21） |
 | `StaffSchedule`、`StaffScheduleList`、`CreateStaffScheduleRequest`、`UpdateStaffScheduleRequest`、`CancelStaffScheduleRequest` | `m4_staff.staff_schedule` | 排班冲突唯一约束、取消留痕（V21） |
@@ -677,3 +683,17 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 10. 术中预警默认阈值（SpO2<90、HR<50/>120、MAP<65、EtCO2 30–50）与持续时长全部【待确认】，
     须临床顾问逐条确认；抢救类型/转归枚举（`CPR/AIRWAY/VASOPRESSOR/DEFIBRILLATION/OTHER`、
     `SUCCESS/PARTIAL/FAILED/UNKNOWN`）同为【待确认】。
+
+11. **Q-1 UDI 解析规则**：GS1/HIBCC 分隔符与校验位、PI 内嵌批号/效期/序列号解析、扫码枪
+    前后缀；本期内部编码为 `UDI-DI^UDI-PI` 且只做字符串唯一（V23/ADR-0020）。
+12. **Q-2 批次策略**：同批号跨供应商合并、跨科室调拨/合并记账、近效期阈值与预警渠道。
+13. **Q-3 高值口径**：高值耗材金额阈值与目录范围；`material.high_value` 由院内维护，
+    不内置金额字段（避免把财务口径写死成临床规则）。
+14. **Q-4 SPD 口径**：EXT-03 真实接口协议、同步频率、失败重试与对账；本期为模拟适配器，
+    失败降级为本地库存可用并留痕。
+15. **Q-5 计费衔接**：UDI 使用是否触发计费/耗材计费单据、退费与红冲流程（M5/财务域）。
+16. **Q-6 角色分工**：高值到货验收由护士还是库管执行（`m4:udi:manage` 当前授予 OR 管理员
+    与麻醉护士，职责分离口径待确认）。
+17. **Q-7 院内退库/复库**：本期 RETURN 只表示退回供应商/中心库（UDI 终态 RETURNED，单向）；
+    退回二级库后复库再用、退库后重新入库是否复用原 UDI/批次/效期、是否需退库单与审批，
+    待院方确认（ADR-0020 Q-6）。

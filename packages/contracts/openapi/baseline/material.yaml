@@ -1,0 +1,1786 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 耗材主数据、出入库、UDI 追溯与 SPD 适配器契约（material）
+  summary: 耗材主数据、批次库存、出入库、UDI 一物一码追溯、SPD 适配器状态与模拟同步
+  description: |
+    ANESOP 耗材域契约，对应方案书 §2.5（药品与耗材管理）、§3.4（领域模型）、
+    §3.9.2（RBAC 与数据权限）、§3.9.3（脱敏）与 E-M14。契约版本 0.1.0 为首个版本（additive）。
+    硬规则：
+    1) 耗材目录为全院可读主数据（`m4:material:read`）；维护（创建/更新/启停）需要
+       `m4:material:write`。编码、名称按 trim + 忽略大小写院内唯一；UDI-DI 非空时也唯一
+       （同一 DI 只能对应一个院内耗材，否则一物一码无法定位主数据）——冲突 409。
+       编码创建后不可改；更新必须回传 version，过期 409（乐观锁）。启用/停用走
+       `PATCH /v1/materials/{materialId}/status`（ACTIVE/INACTIVE）；存在 UDI 实例或库存 > 0
+       时修改/清空 UDI-DI → 409。
+    2) 出入库需要 `m4:material:write`，按科室数据范围（ALL/SITE/DEPT）隔离；SELF/ROOM
+       不适用于仓库管理（fail-closed 403）。`stock_movement` 为 **append-only** 流水，
+       更正只能通过反向 ADJUST 并填写原因，历史不得改写。
+       数量不足（OUT/RETURN/负向 ADJUST 超过批次库存）→ 409，`details[]` 给出可用量与
+       请求量；批次不符（同一 material + 批次 + 科室的效期与已登记批次不一致）→ 409；
+       过期批次 OUT → 422；效期已过或必填效期缺失 → 422；ADJUST 缺少原因 → 400。
+       RETURN 语义为**退回供应商或中心库**（库存减少、UDI 标记 RETURNED，单向终态）；
+       RETURN 携带 udi 时以 UDI 实例的批次/效期扣减，请求批次/效期与实例不一致 → 422。
+       院内退库（退回二级库后不再使用/复库再用）登记口径【待确认】，见 ADR-0020 Q-6。
+    3) 高值耗材（highValue=true）**一物一码**：入库只能逐件 `POST /udi-instances` 登记
+       （创建 UDI 实例 + 批次库存 +1 + IN 流水，三者同事务）；使用只能
+       `POST /udi-instances/{udi}/use`（绑定 recordId 与台次，状态 IN_STOCK→USED，
+       库存 −1 并写出库流水）。禁止对高值耗材使用裸数量的 IN/OUT/ADJUST（422），
+       避免绕过追溯链。重复登记同一 UDI-DI + UDI-PI → 409；重复使用非 IN_STOCK 实例 → 409。
+       UDI 实例绑定记录时校验记录存在且对调用者可见（不存在/不可见 422，不泄露存在性），
+       `scheduleId` 与记录所属台次不一致 → 422。
+    4) UDI 编码口径：本契约内部规范编码 `udi = udiDi + "^" + udiPi`（路径参数需 URL 编码，
+       `^` → `%5E`）。GS1/HIBCC 的 DI/PI 解析、分隔符与校验位规则 **【待确认】**（见
+       ADR-0020），本期只做字符串唯一与长度校验，不解析 DI 内部结构、不校验证书与 GUDID。
+    5) SPD 适配器属 EXT-03（外部适配器，当前 **SIMULATED**）：不直连 SPD/SPD 供应链系统，
+       同步为模拟操作；失败时降级为“本地耗材库存继续可用 + 状态可见 + 日志留痕”，
+       不阻塞临床记录与本地出入库。状态查询与库存同为科室数据范围（SELF/ROOM 403）。
+    6) 脱敏：出入库只保存 **操作人标识与姓名摘要**（≤64）、来源/去向文本（≤100）与原因
+       （≤200），不保存患者姓名/院内患者号/身份证号/手机号；UDI 追溯只回传 recordId 与
+       scheduleId，不回传患者信息与临床自由文本。审计与日志不含 UDI 原文全串（只记 UDI-DI
+       与状态摘要）。
+    所有示例均为 SYNTHETIC 合成数据。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 耗材目录
+    description: 耗材主数据（编码/名称/规格/单位/UDI-DI/高值/效期管理）维护与检索。
+  - name: 出入库
+    description: 批次库存、出入库流水（IN/OUT/RETURN/ADJUST）与数量/效期/批次校验。
+  - name: UDI 追溯
+    description: UDI 实例一物一码登记、使用绑定记录/台次、material→UDI→record 追溯链。
+  - name: SPD 适配器
+    description: SPD 供应链适配器（EXT-03）状态与模拟同步，失败降级并留痕。
+paths:
+  /v1/materials:
+    get:
+      operationId: listMaterials
+      tags:
+        - 耗材目录
+      summary: 查询耗材目录
+      description: |
+        按关键字（编码/名称/UDI-DI）与状态、高值标志过滤，分页返回；全院可读。
+        目录不按科室数据范围过滤（主数据全院共享），库存与追溯查询才按科室隔离。
+      parameters:
+        - name: keyword
+          in: query
+          required: false
+          description: 关键字（编码/名称/UDI-DI，模糊匹配，忽略大小写）。
+          schema:
+            type: string
+            maxLength: 64
+        - name: status
+          in: query
+          required: false
+          description: 状态过滤；缺省返回全部状态。
+          schema:
+            type: string
+            enum:
+              - ACTIVE
+              - INACTIVE
+        - name: highValue
+          in: query
+          required: false
+          description: 是否只看高值耗材；缺省返回全部。
+          schema:
+            type: boolean
+        - name: page
+          in: query
+          required: false
+          description: 页码，从 1 开始。
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          required: false
+          description: 每页条数（1–200）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 耗材目录分页结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialList'
+              example:
+                items:
+                  - materialId: '4a000000-0000-4000-8000-000000000001'
+                    code: MAT-CVC-001
+                    name: 中心静脉导管（演示）
+                    specification: 7F 三腔
+                    unit: 套
+                    category: CATHETER
+                    udiDi: '06937000000001'
+                    highValue: true
+                    expiryManaged: true
+                    status: ACTIVE
+                    remark: SYNTHETIC 演示耗材
+                    createdAt: '2026-11-14T08:00:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
+                    updatedAt: '2026-11-14T08:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                    version: 1
+                page: 1
+                size: 20
+                total: 1
+                totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createMaterial
+      tags:
+        - 耗材目录
+      summary: 创建耗材
+      description: |
+        创建耗材主数据。编码/名称按 trim + 忽略大小写唯一；UDI-DI 非空时唯一（冲突 409）。
+        高值标志与效期管理标志影响出入库校验：高值耗材必须逐件 UDI 登记，效期管理耗材
+        出入库必须带批次与效期。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMaterialRequest'
+            example:
+              code: MAT-CVC-001
+              name: 中心静脉导管（演示）
+              specification: 7F 三腔
+              unit: 套
+              category: CATHETER
+              udiDi: '06937000000001'
+              highValue: true
+              expiryManaged: true
+              remark: SYNTHETIC 演示耗材
+      responses:
+        '201':
+          description: 创建成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Material'
+              example:
+                materialId: '4a000000-0000-4000-8000-000000000001'
+                code: MAT-CVC-001
+                name: 中心静脉导管（演示）
+                specification: 7F 三腔
+                unit: 套
+                category: CATHETER
+                udiDi: '06937000000001'
+                highValue: true
+                expiryManaged: true
+                status: ACTIVE
+                remark: SYNTHETIC 演示耗材
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T08:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/materials/search:
+    get:
+      operationId: searchMaterials
+      tags:
+        - 耗材目录
+      summary: 按名称/编码/UDI-DI 检索耗材（扫码与录入联想）
+      description: |
+        检索启用（ACTIVE）耗材的编码、名称与 UDI-DI，供耗材录入与扫码联想；
+        q 为空或全空白时返回空列表（不报错），避免输入框清空时刷错误提示。
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: 检索词（编码/名称/UDI-DI，忽略大小写，最长 64）。
+          schema:
+            type: string
+            maxLength: 64
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数（1–50）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: 检索结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialList'
+              example:
+                items:
+                  - materialId: '4a000000-0000-4000-8000-000000000001'
+                    code: MAT-CVC-001
+                    name: 中心静脉导管（演示）
+                    specification: 7F 三腔
+                    unit: 套
+                    category: CATHETER
+                    udiDi: '06937000000001'
+                    highValue: true
+                    expiryManaged: true
+                    status: ACTIVE
+                    createdAt: '2026-11-14T08:00:00+08:00'
+                    createdBy: '10000000-0000-4000-8000-000000000001'
+                    updatedAt: '2026-11-14T08:00:00+08:00'
+                    updatedBy: '10000000-0000-4000-8000-000000000001'
+                    version: 1
+                page: 1
+                size: 20
+                total: 1
+                totalPages: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/materials/departments:
+    get:
+      operationId: listMaterialDepartments
+      tags:
+        - 出入库
+      summary: 查询调用者可访问的科室（库存/UDI 归属）
+      description: |
+        返回调用者数据范围内（ALL/SITE/DEPT）的启用科室，供出入库与 UDI 登记显式选择；
+        不返回患者或人员信息，也不返回超出数据范围的科室。SELF/ROOM 范围 fail-closed 403。
+      responses:
+        '200':
+          description: 调用者可访问的科室列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepartmentList'
+              example:
+                items:
+                  - departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    code: DEPT-ANES
+                    name: 麻醉科（演示）
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/materials/stock:
+    get:
+      operationId: listMaterialStock
+      tags:
+        - 出入库
+      summary: 查询批次库存（按材料 + 批次 + 科室）
+      description: |
+        返回调用者数据范围内（ALL/SITE/DEPT）的批次库存，按材料 + 批次 + 科室唯一；
+        数量为 append-only 出入库流水的余额快照。SELF/ROOM 范围 fail-closed 403。
+      parameters:
+        - name: materialId
+          in: query
+          required: false
+          description: 耗材标识过滤。
+          schema:
+            type: string
+        - name: departmentId
+          in: query
+          required: false
+          description: 科室标识过滤（必须在调用者数据范围内）。
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数（1–200）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: 批次库存列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialStockLevelList'
+              example:
+                items:
+                  - stockId: '4b000000-0000-4000-8000-000000000001'
+                    materialId: '4a000000-0000-4000-8000-000000000001'
+                    materialCode: MAT-CVC-001
+                    materialName: 中心静脉导管（演示）
+                    batchNo: BATCH-DEMO-001
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    quantity: 3
+                    unit: 套
+                    expiryDate: '2027-12-31'
+                    updatedAt: '2026-11-14T08:00:00+08:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/materials/{materialId}:
+    get:
+      operationId: getMaterial
+      tags:
+        - 耗材目录
+      summary: 查询耗材详情
+      description: 返回耗材主数据；不存在 404。目录全院可读，不按科室数据范围过滤。
+      parameters:
+        - $ref: '#/components/parameters/MaterialId'
+      responses:
+        '200':
+          description: 耗材详情。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Material'
+              example:
+                materialId: '4a000000-0000-4000-8000-000000000001'
+                code: MAT-CVC-001
+                name: 中心静脉导管（演示）
+                specification: 7F 三腔
+                unit: 套
+                category: CATHETER
+                udiDi: '06937000000001'
+                highValue: true
+                expiryManaged: true
+                status: ACTIVE
+                remark: SYNTHETIC 演示耗材
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T08:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateMaterial
+      tags:
+        - 耗材目录
+      summary: 更新耗材（乐观锁）
+      description: |
+        更新耗材主数据；编码不可改，必须回传 version，过期 409。名称/UDI-DI 冲突 409。
+        把 highValue 从 false 改为 true 时，若该耗材已有未按 UDI 登记的库存批次，返回 409
+        （需先清零或改用逐件登记，避免出现无法追溯的高值库存）。
+      parameters:
+        - $ref: '#/components/parameters/MaterialId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMaterialRequest'
+            example:
+              name: 中心静脉导管（演示）
+              specification: 7F 三腔
+              unit: 套
+              category: CATHETER
+              udiDi: '06937000000001'
+              highValue: true
+              expiryManaged: true
+              remark: SYNTHETIC 演示耗材（更新）
+              version: 1
+      responses:
+        '200':
+          description: 更新成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Material'
+              example:
+                materialId: '4a000000-0000-4000-8000-000000000001'
+                code: MAT-CVC-001
+                name: 中心静脉导管（演示）
+                specification: 7F 三腔
+                unit: 套
+                category: CATHETER
+                udiDi: '06937000000001'
+                highValue: true
+                expiryManaged: true
+                status: ACTIVE
+                remark: SYNTHETIC 演示耗材（更新）
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T09:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/materials/{materialId}/status:
+    patch:
+      operationId: updateMaterialStatus
+      tags:
+        - 耗材目录
+      summary: 启用/停用耗材（PATCH 状态）
+      description: |
+        将耗材置为启用（ACTIVE）或停用（INACTIVE），需要 `m4:material:write`。
+        停用后不再允许新的出入库与 UDI 登记，历史库存/流水/追溯只读保留；状态未变化时
+        幂等返回当前主数据且不递增 version，真正变更时 version +1。状态值只允许
+        ACTIVE/INACTIVE（400）；耗材不存在 404；并发状态被其他请求修改 409。
+      parameters:
+        - $ref: '#/components/parameters/MaterialId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaterialStatusRequest'
+            example:
+              status: INACTIVE
+      responses:
+        '200':
+          description: 更新后的耗材（状态未变化时原样返回）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Material'
+              example:
+                materialId: '4a000000-0000-4000-8000-000000000001'
+                code: MAT-CVC-001
+                name: 中心静脉导管（演示）
+                specification: 7F 三腔
+                unit: 套
+                category: CATHETER
+                udiDi: '06937000000001'
+                highValue: true
+                expiryManaged: true
+                status: INACTIVE
+                remark: SYNTHETIC 演示耗材
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T10:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/materials/stock-movements:
+    get:
+      operationId: listStockMovements
+      tags:
+        - 出入库
+      summary: 查询出入库流水
+      description: |
+        按耗材、科室与时间区间查询 append-only 出入库流水（倒序），只返回调用者数据范围内
+        的科室；SELF/ROOM 范围 fail-closed 403。
+      parameters:
+        - name: materialId
+          in: query
+          required: false
+          description: 耗材标识过滤。
+          schema:
+            type: string
+        - name: departmentId
+          in: query
+          required: false
+          description: 科室标识过滤（必须在调用者数据范围内）。
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: 发生时间下限（含），ISO-8601。
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: 发生时间上限（含），ISO-8601。
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数（1–200）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: 出入库流水列表。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockMovementList'
+              example:
+                items:
+                  - movementId: '4c000000-0000-4000-8000-000000000001'
+                    movementType: IN
+                    materialId: '4a000000-0000-4000-8000-000000000001'
+                    materialCode: MAT-CVC-001
+                    materialName: 中心静脉导管（演示）
+                    batchNo: BATCH-DEMO-001
+                    expiryDate: '2027-12-31'
+                    udi: '06937000000001^SN-DEMO-001'
+                    quantity: 1
+                    unit: 套
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    counterparty: 中心库房（合成）
+                    balanceAfter: 1
+                    operatorId: '10000000-0000-4000-8000-000000000004'
+                    operatorName: 演示护士（合成）
+                    occurredAt: '2026-11-14T08:00:00+08:00'
+                    createdAt: '2026-11-14T08:00:00+08:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createStockMovement
+      tags:
+        - 出入库
+      summary: 登记出入库流水
+      description: |
+        登记 IN/OUT/RETURN/ADJUST 流水并原子更新批次库存（IN 加、OUT/RETURN 减、ADJUST 加带符号
+        调整量）。校验：批次库存不足 409（details 给出 available/requested）；同批次效期不一致
+        409；效期已过/必填效期缺失 422；ADJUST 缺原因 400；科室须在数据范围（403）。
+        高值耗材禁止裸数量 IN/OUT/ADJUST（422），入库用 UDI 登记、使用用 UDI 使用接口。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStockMovementRequest'
+            example:
+              movementType: IN
+              materialId: '4a000000-0000-4000-8000-000000000002'
+              batchNo: BATCH-DEMO-002
+              expiryDate: '2027-06-30'
+              quantity: 20
+              departmentId: 'f1000000-0000-4000-8000-000000000002'
+              counterparty: 中心库房（合成）
+              reason: 月度补货（演示）
+      responses:
+        '201':
+          description: 流水登记成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockMovement'
+              example:
+                movementId: '4c000000-0000-4000-8000-000000000002'
+                movementType: IN
+                materialId: '4a000000-0000-4000-8000-000000000002'
+                materialCode: MAT-GLOVE-001
+                materialName: 无菌手套（演示）
+                batchNo: BATCH-DEMO-002
+                expiryDate: '2027-06-30'
+                quantity: 20
+                unit: 副
+                departmentId: 'f1000000-0000-4000-8000-000000000002'
+                counterparty: 中心库房（合成）
+                reason: 月度补货（演示）
+                balanceAfter: 20
+                operatorId: '10000000-0000-4000-8000-000000000004'
+                operatorName: 演示护士（合成）
+                occurredAt: '2026-11-14T08:00:00+08:00'
+                createdAt: '2026-11-14T08:00:00+08:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/materials/udi-instances:
+    post:
+      operationId: registerUdiInstance
+      tags:
+        - UDI 追溯
+      summary: 登记 UDI 实例（高值耗材逐件入库）
+      description: |
+        登记一个 UDI 实例并完成该件入库：创建 `udi_instance`（IN_STOCK）+ 批次库存 +1 +
+        IN 流水，三者同事务。UDI-DI + UDI-PI 组合唯一（重复 409）；效期管理耗材必填效期且
+        不得早于今天（422）；批次已存在但效期不一致 409；科室须在数据范围（403）。
+        高值耗材**必须**通过本接口入库（禁止裸数量 IN）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterUdiInstanceRequest'
+            example:
+              materialId: '4a000000-0000-4000-8000-000000000001'
+              udiDi: '06937000000001'
+              udiPi: SN-DEMO-001
+              serialNumber: SN-DEMO-001
+              batchNo: BATCH-DEMO-001
+              expiryDate: '2027-12-31'
+              departmentId: 'f1000000-0000-4000-8000-000000000002'
+              counterparty: 中心库房（合成）
+      responses:
+        '201':
+          description: UDI 实例登记成功（含入库流水）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UdiInstance'
+              example:
+                udi: '06937000000001^SN-DEMO-001'
+                udiDi: '06937000000001'
+                udiPi: SN-DEMO-001
+                serialNumber: SN-DEMO-001
+                materialId: '4a000000-0000-4000-8000-000000000001'
+                materialCode: MAT-CVC-001
+                materialName: 中心静脉导管（演示）
+                batchNo: BATCH-DEMO-001
+                expiryDate: '2027-12-31'
+                departmentId: 'f1000000-0000-4000-8000-000000000002'
+                status: IN_STOCK
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000004'
+                version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/materials/udi-instances/{udi}:
+    get:
+      operationId: getUdiTrace
+      tags:
+        - UDI 追溯
+      summary: 查询 UDI 追溯链（material → UDI → record）
+      description: |
+        按 UDI 编码查询一物一码追溯链：UDI 实例、耗材主数据摘要、该实例关联的出入库流水与
+        使用绑定的记录/台次（只回传 recordId/scheduleId，不含患者信息）。
+        不存在或超出科室数据范围统一 404（不泄露其他科室数据的存在性）。
+        路径参数 `udi` 需 URL 编码（`^` → `%5E`）。
+      parameters:
+        - $ref: '#/components/parameters/Udi'
+      responses:
+        '200':
+          description: 追溯链。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UdiTrace'
+              example:
+                instance:
+                  udi: '06937000000001^SN-DEMO-001'
+                  udiDi: '06937000000001'
+                  udiPi: SN-DEMO-001
+                  serialNumber: SN-DEMO-001
+                  materialId: '4a000000-0000-4000-8000-000000000001'
+                  materialCode: MAT-CVC-001
+                  materialName: 中心静脉导管（演示）
+                  batchNo: BATCH-DEMO-001
+                  expiryDate: '2027-12-31'
+                  departmentId: 'f1000000-0000-4000-8000-000000000002'
+                  status: USED
+                  recordId: '7a000000-0000-4000-8000-000000000001'
+                  scheduleId: '6a000000-0000-4000-8000-000000000001'
+                  usedAt: '2026-11-14T09:00:00+08:00'
+                  usedBy: '10000000-0000-4000-8000-000000000004'
+                  createdAt: '2026-11-14T08:00:00+08:00'
+                  createdBy: '10000000-0000-4000-8000-000000000004'
+                  version: 2
+                material:
+                  materialId: '4a000000-0000-4000-8000-000000000001'
+                  code: MAT-CVC-001
+                  name: 中心静脉导管（演示）
+                  specification: 7F 三腔
+                  unit: 套
+                  highValue: true
+                  expiryManaged: true
+                  status: ACTIVE
+                movements:
+                  - movementId: '4c000000-0000-4000-8000-000000000001'
+                    movementType: IN
+                    materialId: '4a000000-0000-4000-8000-000000000001'
+                    materialCode: MAT-CVC-001
+                    materialName: 中心静脉导管（演示）
+                    batchNo: BATCH-DEMO-001
+                    expiryDate: '2027-12-31'
+                    udi: '06937000000001^SN-DEMO-001'
+                    quantity: 1
+                    unit: 套
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    counterparty: 中心库房（合成）
+                    balanceAfter: 1
+                    operatorId: '10000000-0000-4000-8000-000000000004'
+                    operatorName: 演示护士（合成）
+                    occurredAt: '2026-11-14T08:00:00+08:00'
+                    createdAt: '2026-11-14T08:00:00+08:00'
+                record:
+                  recordId: '7a000000-0000-4000-8000-000000000001'
+                  scheduleId: '6a000000-0000-4000-8000-000000000001'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/materials/udi-instances/{udi}/use:
+    post:
+      operationId: useUdiInstance
+      tags:
+        - UDI 追溯
+      summary: 使用 UDI 实例（绑定记录/台次，一物一码）
+      description: |
+        使用一件 UDI 实例：状态 IN_STOCK → USED，写出库流水，绑定 recordId 与台次。
+        仅 IN_STOCK 可被使用，重复使用（USED/RETURNED）409；实例不存在或超出科室数据范围
+        404；绑定记录不存在或对调用者不可见 422（不泄露存在性）；`scheduleId` 与记录所属台次
+        不一致 422；高值耗材未经 UDI 使用不得出库。
+      parameters:
+        - $ref: '#/components/parameters/Udi'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UseUdiInstanceRequest'
+            example:
+              recordId: '7a000000-0000-4000-8000-000000000001'
+              scheduleId: '6a000000-0000-4000-8000-000000000001'
+      responses:
+        '200':
+          description: 使用成功（状态变为 USED）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UdiInstance'
+              example:
+                udi: '06937000000001^SN-DEMO-001'
+                udiDi: '06937000000001'
+                udiPi: SN-DEMO-001
+                serialNumber: SN-DEMO-001
+                materialId: '4a000000-0000-4000-8000-000000000001'
+                materialCode: MAT-CVC-001
+                materialName: 中心静脉导管（演示）
+                batchNo: BATCH-DEMO-001
+                expiryDate: '2027-12-31'
+                departmentId: 'f1000000-0000-4000-8000-000000000002'
+                status: USED
+                recordId: '7a000000-0000-4000-8000-000000000001'
+                scheduleId: '6a000000-0000-4000-8000-000000000001'
+                usedAt: '2026-11-14T09:00:00+08:00'
+                usedBy: '10000000-0000-4000-8000-000000000004'
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000004'
+                version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/materials/spd-adapter/status:
+    get:
+      operationId: getSpdAdapterStatus
+      tags:
+        - SPD 适配器
+      summary: 查询 SPD 适配器状态（EXT-03）
+      description: |
+        返回 SPD 供应链适配器（EXT-03，SIMULATED）最近一次同步结果与降级标记；
+        不返回外部系统地址、凭据与供应商明细。SELF/ROOM 范围 fail-closed 403。
+      responses:
+        '200':
+          description: 适配器状态。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpdAdapterStatus'
+              example:
+                adapterCode: EXT-03
+                name: SPD 供应链适配器（模拟）
+                mode: SIMULATED
+                available: true
+                degraded: false
+                lastSyncedAt: '2026-11-14T08:00:00+08:00'
+                pendingSyncCount: 0
+                message: 未接入真实 SPD 系统（EXT-03），当前为模拟同步
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/materials/spd-adapter/sync:
+    post:
+      operationId: syncSpdAdapter
+      tags:
+        - SPD 适配器
+      summary: 触发 SPD 模拟同步（EXT-03）
+      description: |
+        触发一次无外部 I/O 的 SPD 模拟同步并留痕：成功返回 success=true、degraded=false；
+        模拟不可用时返回 success=false、degraded=true（HTTP 200，本地库存继续可用），
+        并把失败写入 `spd_sync_log` 与审计 SPD_SYNC。不阻塞临床记录与本地出入库。
+      responses:
+        '200':
+          description: 模拟同步结果（success=false 表示降级）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpdSyncResult'
+              example:
+                adapterCode: EXT-03
+                success: true
+                degraded: false
+                syncedAt: '2026-11-14T08:00:00+08:00'
+                pulledCount: 0
+                pushedCount: 0
+                message: 未接入真实 SPD 系统（EXT-03），当前为模拟同步
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
+  parameters:
+    MaterialId:
+      name: materialId
+      in: path
+      required: true
+      description: 耗材标识（UUID 字符串）。
+      schema:
+        type: string
+    Udi:
+      name: udi
+      in: path
+      required: true
+      description: UDI 内部规范编码 `UDI-DI^UDI-PI`（URL 编码，`^` → `%5E`）。
+      schema:
+        type: string
+        maxLength: 160
+  responses:
+    BadRequest:
+      description: 请求参数校验失败（字段缺失/越界/ADJUST 缺原因/科室标识格式非法）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0301
+            details:
+              - field: reason
+                reason: 盘点调整必须填写原因
+    Unauthorized:
+      description: 未认证或令牌已失效（fail-closed）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0302
+            details: []
+    Forbidden:
+      description: 已认证但缺权限（m4:material:read|write、m4:udi:manage）或科室数据范围不足。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0303
+            details:
+              - field: permission
+                reason: 需要 m4:material:write 权限与对应科室数据范围
+    NotFound:
+      description: 耗材/UDI 实例不存在或不可见（不泄露其他科室数据的存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-0304
+            details: []
+    Conflict:
+      description: 编码/名称/UDI-DI 重复、批次效期冲突、数量不足、重复使用或乐观锁过期。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: STATE_CONFLICT
+            message: 状态或版本冲突，操作未生效
+            traceId: SYNTH-TRACE-0305
+            details:
+              - field: quantity
+                reason: '批次库存不足：可用 1，请求 2'
+    UnprocessableEntity:
+      description: 业务规则拒绝：效期已过、高值耗材禁止裸数量出入库、记录不存在/不可见。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 耗材业务规则拒绝
+            traceId: SYNTH-TRACE-0306
+            details:
+              - field: expiryDate
+                reason: 耗材已过效期，不得入库
+  schemas:
+    ErrorDetail:
+      type: object
+      description: 错误明细项，用于字段级校验失败或数据范围说明。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 相关字段名或资源标识。
+        reason:
+          type: string
+          description: 可读的失败原因，不包含堆栈、SQL 实参与患者标识。
+    Error:
+      type: object
+      description: 统一错误响应；不暴露堆栈、SQL 实参、令牌与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    Material:
+      type: object
+      description: 耗材主数据（SYNTHETIC 示例）。
+      required:
+        - materialId
+        - code
+        - name
+        - specification
+        - unit
+        - category
+        - highValue
+        - expiryManaged
+        - status
+        - createdAt
+        - createdBy
+        - updatedAt
+        - updatedBy
+        - version
+      properties:
+        materialId:
+          type: string
+          description: 耗材标识。
+        code:
+          type: string
+          maxLength: 64
+          description: 院内耗材编码（唯一，创建后不可改）。
+        name:
+          type: string
+          maxLength: 200
+          description: 耗材名称（唯一）。
+        specification:
+          type: string
+          maxLength: 100
+          description: 规格（如 7F 三腔）。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位（套/个/副/包等）。
+        category:
+          type: string
+          maxLength: 32
+          description: 耗材分类编码（院内字典；具体取值【待确认】）。
+        udiDi:
+          type: string
+          maxLength: 64
+          description: UDI-DI（器械标识）；非空时院内唯一，用于扫码反查耗材。
+        highValue:
+          type: boolean
+          description: 是否高值耗材；true 时出入库必须一物一码（UDI 逐件登记/使用）。
+        expiryManaged:
+          type: boolean
+          description: 是否效期管理；true 时出入库必须带批次与效期，过期拒绝。
+        status:
+          type: string
+          description: 状态：ACTIVE=启用（可入库），INACTIVE=停用（只读历史）。
+          enum:
+            - ACTIVE
+            - INACTIVE
+        remark:
+          type: string
+          maxLength: 500
+          description: 备注（可选，不含患者信息）。
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间。
+        createdBy:
+          type: string
+          description: 创建人用户标识。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间。
+        updatedBy:
+          type: string
+          description: 最后修改人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号（从 1 起）。
+          minimum: 1
+    MaterialList:
+      type: object
+      description: 耗材分页结果。
+      required:
+        - items
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        items:
+          type: array
+          description: 耗材列表。
+          items:
+            $ref: '#/components/schemas/Material'
+        page:
+          type: integer
+          description: 当前页码，从 1 开始。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页条数。
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          description: 符合条件的总数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数；total 为 0 时为 0。
+          minimum: 0
+    CreateMaterialRequest:
+      type: object
+      description: 创建耗材请求；code/name/udiDi 归一化唯一。
+      required:
+        - code
+        - name
+        - specification
+        - unit
+        - category
+        - highValue
+        - expiryManaged
+      properties:
+        code:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          description: 院内耗材编码（唯一）。
+        name:
+          type: string
+          maxLength: 200
+          description: 耗材名称（唯一）。
+        specification:
+          type: string
+          maxLength: 100
+          description: 规格。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        category:
+          type: string
+          maxLength: 32
+          description: 耗材分类编码。
+        udiDi:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          description: UDI-DI（可选；非空时唯一）。
+        highValue:
+          type: boolean
+          description: 是否高值耗材（逐件 UDI 管理）。
+        expiryManaged:
+          type: boolean
+          description: 是否效期管理（出入库校验批次与效期）。
+        remark:
+          type: string
+          maxLength: 500
+          description: 备注（可选）。
+    UpdateMaterialRequest:
+      type: object
+      description: 更新耗材请求（编码不可改；必须回传 version）。
+      required:
+        - name
+        - specification
+        - unit
+        - category
+        - highValue
+        - expiryManaged
+        - version
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          description: 耗材名称（唯一）。
+        specification:
+          type: string
+          maxLength: 100
+          description: 规格。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        category:
+          type: string
+          maxLength: 32
+          description: 耗材分类编码。
+        udiDi:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          description: |
+            UDI-DI（可选；非空时唯一；省略表示该耗材不做 UDI 反查）。
+            存在 UDI 实例或数量 > 0 的批次库存时，修改或清空 UDI-DI 返回 409
+            （避免已登记/在库的耗材失去扫码反查能力）。
+        highValue:
+          type: boolean
+          description: 是否高值耗材（变更记审计）。
+        expiryManaged:
+          type: boolean
+          description: 是否效期管理。
+        remark:
+          type: string
+          maxLength: 500
+          description: 备注（可选）。
+        version:
+          type: integer
+          description: 乐观锁版本号（必须等于当前版本）。
+          minimum: 1
+    MaterialStatusRequest:
+      type: object
+      description: 耗材启停请求（只允许 ACTIVE/INACTIVE，其他值 400）。
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: 目标状态；ACTIVE=启用（可入库），INACTIVE=停用（只读历史、禁止新出入库）。
+          enum:
+            - ACTIVE
+            - INACTIVE
+    StockMovement:
+      type: object
+      description: 出入库流水（append-only，金额/患者信息不在此域）。
+      required:
+        - movementId
+        - movementType
+        - materialId
+        - materialCode
+        - materialName
+        - batchNo
+        - quantity
+        - unit
+        - departmentId
+        - counterparty
+        - balanceAfter
+        - operatorId
+        - operatorName
+        - occurredAt
+        - createdAt
+      properties:
+        movementId:
+          type: string
+          description: 流水标识。
+        movementType:
+          type: string
+          description: 类型：IN=入库，OUT=出库，RETURN=退回，ADJUST=盘点调整（带符号）。
+          enum:
+            - IN
+            - OUT
+            - RETURN
+            - ADJUST
+        materialId:
+          type: string
+          description: 耗材标识。
+        materialCode:
+          type: string
+          maxLength: 64
+          description: 耗材编码快照。
+        materialName:
+          type: string
+          maxLength: 200
+          description: 耗材名称快照。
+        batchNo:
+          type: string
+          maxLength: 64
+          description: 批次号。
+        expiryDate:
+          type: string
+          format: date
+          description: 效期（效期管理耗材必填）；可为空。
+        udi:
+          type: string
+          maxLength: 160
+          description: 关联 UDI 编码（高值/UDI 管理耗材的逐件流水）。
+        quantity:
+          type: number
+          description: 数量；IN/OUT/RETURN 为正数，ADJUST 为带符号调整量（不得为 0）。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位快照。
+        departmentId:
+          type: string
+          description: 科室标识（库存归属与数据范围过滤依据）。
+        counterparty:
+          type: string
+          maxLength: 100
+          description: 来源/去向（供应商、库房、科室等；不含患者信息）。
+        reason:
+          type: string
+          maxLength: 200
+          description: 原因/备注（ADJUST 必填）。
+        balanceAfter:
+          type: number
+          description: 本次流水后该批次在本科室的库存余额（≥ 0）。
+          minimum: 0
+        recordId:
+          type: string
+          description: 使用绑定记录标识（仅 UDI 使用产生的 OUT 流水）。
+        scheduleId:
+          type: string
+          description: 使用绑定台次标识（仅 UDI 使用产生的 OUT 流水）。
+        operatorId:
+          type: string
+          description: 操作人用户标识（服务端按调用者固化，不允许客户端声明）。
+        operatorName:
+          type: string
+          maxLength: 64
+          description: 操作人姓名摘要。
+        occurredAt:
+          type: string
+          format: date-time
+          description: 发生时间（服务端时间）。
+        createdAt:
+          type: string
+          format: date-time
+          description: 落库时间。
+    StockMovementList:
+      type: object
+      description: 出入库流水列表（按发生时间倒序）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockMovement'
+    CreateStockMovementRequest:
+      type: object
+      description: |
+        出入库请求；高值耗材禁止裸数量 IN/OUT/ADJUST（422）。
+        OUT/RETURN/负向 ADJUST 扣减前按 材料 + 批次 + 科室 定位库存行，请求效期与库存行
+        不一致返回 409；过期批次的 OUT 返回 422；RETURN 携带 udi 时以 UDI 实例的批次/效期
+        为准，请求与实例不一致返回 422（避免扣错批次）。
+      required:
+        - movementType
+        - materialId
+        - batchNo
+        - quantity
+        - departmentId
+        - counterparty
+      properties:
+        movementType:
+          type: string
+          description: 类型：IN（入库）/OUT（出库）/RETURN（退回供应商或中心库）/ADJUST（盘点调整）。
+          enum:
+            - IN
+            - OUT
+            - RETURN
+            - ADJUST
+        materialId:
+          type: string
+          description: 耗材标识（必须存在且启用）。
+        batchNo:
+          type: string
+          maxLength: 64
+          description: 批次号；RETURN 带 udi 时必须与 UDI 实例批次一致（不一致 422），实际扣减以实例批次为准。
+        expiryDate:
+          type: string
+          format: date
+          description: |
+            效期（效期管理耗材必填；与既有批次不一致 409）。RETURN 带 udi 时若提供则必须与
+            UDI 实例效期一致（不一致 422），实际扣减与流水以实例效期为准。
+        quantity:
+          type: number
+          multipleOf: 0.01
+          description: |
+            数量；IN/OUT/RETURN 必须 > 0，ADJUST 为带符号调整量（不得为 0）。
+            最多 2 位小数，超过返回 400。
+        departmentId:
+          type: string
+          description: 科室标识（必须在调用者数据范围内）。
+        counterparty:
+          type: string
+          maxLength: 100
+          description: 来源/去向（不含患者信息）。
+        reason:
+          type: string
+          maxLength: 200
+          description: 原因/备注（ADJUST 必填）。
+        udi:
+          type: string
+          maxLength: 160
+          description: 关联 UDI（仅 RETURN；把该实例标记为 RETURNED，并按实例批次/效期扣减）。
+    DepartmentOption:
+      type: object
+      description: 科室选项（启用、org_type=DEPT）；用于出入库与 UDI 登记显式选择科室。
+      required:
+        - departmentId
+        - code
+        - name
+      properties:
+        departmentId:
+          type: string
+          description: 科室组织标识。
+        code:
+          type: string
+          maxLength: 64
+          description: 科室编码（院内唯一）。
+        name:
+          type: string
+          maxLength: 100
+          description: 科室名称。
+    DepartmentList:
+      type: object
+      description: 调用者可访问的科室列表。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DepartmentOption'
+    MaterialStockLevel:
+      type: object
+      description: 批次库存（材料 + 批次 + 科室唯一）。
+      required:
+        - stockId
+        - materialId
+        - materialCode
+        - materialName
+        - batchNo
+        - departmentId
+        - quantity
+        - unit
+        - updatedAt
+      properties:
+        stockId:
+          type: string
+          description: 库存记录标识。
+        materialId:
+          type: string
+          description: 耗材标识。
+        materialCode:
+          type: string
+          maxLength: 64
+          description: 耗材编码快照。
+        materialName:
+          type: string
+          maxLength: 200
+          description: 耗材名称快照。
+        batchNo:
+          type: string
+          maxLength: 64
+          description: 批次号。
+        departmentId:
+          type: string
+          description: 科室标识。
+        quantity:
+          type: number
+          description: 当前数量（≥ 0）。
+          minimum: 0
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位快照。
+        expiryDate:
+          type: string
+          format: date
+          description: 效期；效期管理耗材必填。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间。
+    MaterialStockLevelList:
+      type: object
+      description: 批次库存列表。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MaterialStockLevel'
+    UdiInstance:
+      type: object
+      description: UDI 实例（一物一码）；状态 IN_STOCK/USED/RETURNED。
+      required:
+        - udi
+        - udiDi
+        - udiPi
+        - materialId
+        - materialCode
+        - materialName
+        - batchNo
+        - departmentId
+        - status
+        - createdAt
+        - createdBy
+        - version
+      properties:
+        udi:
+          type: string
+          maxLength: 160
+          description: UDI 内部规范编码 `UDI-DI^UDI-PI`。
+        udiDi:
+          type: string
+          maxLength: 64
+          description: UDI-DI（器械标识）。
+        udiPi:
+          type: string
+          maxLength: 96
+          description: UDI-PI（生产标识：序列号/批号/效期等组合）。
+        serialNumber:
+          type: string
+          maxLength: 96
+          description: 序列号（PI 中的序列号部分；【待确认】解析规则）。
+        materialId:
+          type: string
+          description: 耗材标识。
+        materialCode:
+          type: string
+          maxLength: 64
+          description: 耗材编码快照。
+        materialName:
+          type: string
+          maxLength: 200
+          description: 耗材名称快照。
+        batchNo:
+          type: string
+          maxLength: 64
+          description: 批次号。
+        expiryDate:
+          type: string
+          format: date
+          description: 效期。
+        departmentId:
+          type: string
+          description: 归属科室（数据范围过滤依据）。
+        status:
+          type: string
+          description: 状态：IN_STOCK=在库，USED=已使用，RETURNED=已退回。
+          enum:
+            - IN_STOCK
+            - USED
+            - RETURNED
+        recordId:
+          type: string
+          description: 使用绑定的麻醉记录标识（逻辑关联，跨模块不建外键）。
+        scheduleId:
+          type: string
+          description: 使用绑定的台次标识。
+        usedAt:
+          type: string
+          format: date-time
+          description: 使用时间。
+        usedBy:
+          type: string
+          description: 使用人用户标识。
+        createdAt:
+          type: string
+          format: date-time
+          description: 登记时间。
+        createdBy:
+          type: string
+          description: 登记人用户标识。
+        version:
+          type: integer
+          description: 乐观锁版本号。
+          minimum: 1
+    RegisterUdiInstanceRequest:
+      type: object
+      description: UDI 实例登记（逐件入库）请求。
+      required:
+        - materialId
+        - udiDi
+        - udiPi
+        - batchNo
+        - departmentId
+        - counterparty
+      properties:
+        materialId:
+          type: string
+          description: 耗材标识（必须存在且启用）。
+        udiDi:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]{1,64}$'
+          description: UDI-DI（与耗材登记的 udiDi 一致，否则 422）。
+        udiPi:
+          type: string
+          maxLength: 96
+          pattern: '^[A-Za-z0-9._-]{1,96}$'
+          description: |
+            UDI-PI（生产标识；本期不做 GS1/HIBCC 解析【待确认】）。
+            UDI-DI + '^' + UDI-PI 总长不得超过 160（越界 400）。
+        serialNumber:
+          type: string
+          maxLength: 96
+          description: 序列号（可选，冗余展示）。
+        batchNo:
+          type: string
+          maxLength: 64
+          description: 批次号。
+        expiryDate:
+          type: string
+          format: date
+          description: 效期（效期管理耗材必填，且不得早于今天）。
+        departmentId:
+          type: string
+          description: 入库科室（必须在调用者数据范围内）。
+        counterparty:
+          type: string
+          maxLength: 100
+          description: 来源（供应商/中心库房等；不含患者信息）。
+    UseUdiInstanceRequest:
+      type: object
+      description: UDI 使用请求（绑定记录/台次）。
+      required:
+        - recordId
+      properties:
+        recordId:
+          type: string
+          description: 麻醉记录标识（必须存在且对调用者可见）。
+        scheduleId:
+          type: string
+          description: 台次标识（可选；提供时必须与记录所属台次一致）。
+    UdiTrace:
+      type: object
+      description: material → UDI → record 追溯链；不含患者信息。
+      required:
+        - instance
+        - material
+        - movements
+      properties:
+        instance:
+          $ref: '#/components/schemas/UdiInstance'
+        material:
+          $ref: '#/components/schemas/MaterialTraceSummary'
+        movements:
+          type: array
+          description: 该 UDI 实例关联的出入库流水（按发生时间倒序）。
+          items:
+            $ref: '#/components/schemas/StockMovement'
+        record:
+          $ref: '#/components/schemas/RecordLink'
+    MaterialTraceSummary:
+      type: object
+      description: 追溯链中的耗材摘要。
+      required:
+        - materialId
+        - code
+        - name
+        - specification
+        - unit
+        - highValue
+        - expiryManaged
+        - status
+      properties:
+        materialId:
+          type: string
+          description: 耗材标识。
+        code:
+          type: string
+          maxLength: 64
+          description: 耗材编码。
+        name:
+          type: string
+          maxLength: 200
+          description: 耗材名称。
+        specification:
+          type: string
+          maxLength: 100
+          description: 规格。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        highValue:
+          type: boolean
+          description: 是否高值耗材。
+        expiryManaged:
+          type: boolean
+          description: 是否效期管理。
+        status:
+          type: string
+          description: 耗材状态。
+          enum:
+            - ACTIVE
+            - INACTIVE
+    RecordLink:
+      type: object
+      description: 使用绑定的记录/台次（仅标识，不含患者信息）。
+      required:
+        - recordId
+        - scheduleId
+      properties:
+        recordId:
+          type: string
+          description: 麻醉记录标识。
+        scheduleId:
+          type: string
+          description: 台次标识。
+    SpdAdapterStatus:
+      type: object
+      description: SPD 适配器（EXT-03）状态；SIMULATED 表示未接入真实 SPD 系统。
+      required:
+        - adapterCode
+        - name
+        - mode
+        - available
+        - degraded
+        - pendingSyncCount
+        - message
+      properties:
+        adapterCode:
+          type: string
+          description: 适配器编号（EXT-03）。
+        name:
+          type: string
+          description: 适配器名称。
+        mode:
+          type: string
+          description: 运行模式：SIMULATED=模拟（未接入真实系统），LIVE=真实对接（本期未启用）。
+          enum:
+            - SIMULATED
+            - LIVE
+        available:
+          type: boolean
+          description: 最近一次同步是否成功（false 表示适配器不可用）。
+        degraded:
+          type: boolean
+          description: 是否降级（true 表示本地耗材库存继续可用，仅外部同步失败）。
+        lastSyncedAt:
+          type: string
+          format: date-time
+          description: 最近一次同步时间；从未同步时为 null。
+        pendingSyncCount:
+          type: integer
+          description: 待同步条数（模拟）。
+          minimum: 0
+        message:
+          type: string
+          description: 状态说明（固定文案，不含外部系统凭据）。
+    SpdSyncResult:
+      type: object
+      description: SPD 模拟同步结果；success=false 时 degraded=true，本地库存继续可用。
+      required:
+        - adapterCode
+        - success
+        - degraded
+        - syncedAt
+        - pulledCount
+        - pushedCount
+        - message
+      properties:
+        adapterCode:
+          type: string
+          description: 适配器编号（EXT-03）。
+        success:
+          type: boolean
+          description: 本次模拟同步是否成功。
+        degraded:
+          type: boolean
+          description: 是否降级（success 的反面；降级不阻塞本地出入库）。
+        syncedAt:
+          type: string
+          format: date-time
+          description: 本次同步时间。
+        pulledCount:
+          type: integer
+          description: 拉取的供应商/目录条数（模拟值）。
+          minimum: 0
+        pushedCount:
+          type: integer
+          description: 推送的消耗/库存条数（模拟值）。
+          minimum: 0
+        message:
+          type: string
+          description: 结果说明（固定文案，不含外部凭据与患者信息）。

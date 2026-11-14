@@ -423,3 +423,149 @@
 13. **Q-13（评审 Q-1）资质吊销/过期是否阻断授权**：当前 `staff_qualification.status/valid_to`
     只用于档案展示与到期提醒，**不参与**授权判定（V22 已纠正 V21 注释）；是否新增
     `QUALIFICATION_INVALID` 原因码与“执业资格必须有效”规则待医务处/人事确认。
+
+---
+
+# 耗材主数据、出入库、UDI 追溯与 SPD 适配器（M4-M14-01 / E-M14）
+
+## 23. 数据归属与边界
+
+- 新增 schema `m4_material`（V23）：`material`（主数据）、`material_stock`（批次库存）、
+  `stock_movement`（append-only 流水）、`udi_instance`（一物一码）、`spd_sync_log`（EXT-03 留痕）。
+- 契约 `packages/contracts/openapi/material.yaml` 0.1.0（12 路径 / 15 operation / 22 schema）；
+  Java/TS 由契约生成（api-contracts 第 8 个 execution、`gen-contracts.sh`/`contract-check.sh`
+  DOMAINS 第 8 域）。
+- 与其他模块：**不建跨模块外键**；UDI 使用通过 m4-api 端口 `RecordVisibilityPort`
+  （装配层 `M2RecordVisibilityAdapter` 用 `m2-api` `AnesthesiaRecordService.get` 实现）
+  校验记录存在/可见，只保存 `record_id/schedule_id` 逻辑关联；不访问 m2 表，避免 m4→m2
+  反向依赖形成模块循环（ArchUnit 边界用例覆盖）。
+- 耗材域不做计费（计费/账务归 M5/财务域，Q-5）；SPD 属 EXT-03 模拟，不直连生产库。
+
+## 24. 权限与数据范围
+
+| 权限点 | 能力 | 最小授予（V23） |
+|---|---|---|
+| `m4:material:read` | 目录、批次库存、流水、UDI 追溯、SPD 状态 | SYS_ADMIN、SYS_OR_MANAGER、SYS_NURSE_ANESTHETIST |
+| `m4:material:write` | 目录维护、普通出入库、触发 SPD 同步 | SYS_ADMIN、SYS_OR_MANAGER |
+| `m4:udi:manage` | UDI 登记（逐件入库）、UDI 使用绑定 | SYS_ADMIN、SYS_OR_MANAGER、SYS_NURSE_ANESTHETIST |
+
+- 数据范围：目录全院可读；**批次库存/流水/UDI 实例按科室** ALL/SITE/DEPT 隔离，
+  SELF/ROOM/无范围 fail-closed 403；科室必须是启用 `org_type=DEPT` 组织（422）且在范围内（403）。
+- 单对象越界与不存在统一 404（不泄露其他科室数据存在性）。
+
+## 25. 主数据口径
+
+- 编码 `^[A-Za-z0-9._-]{1,64}$` 且创建后不可改；编码/名称 trim + 忽略大小写院内唯一；
+  UDI-DI 非空时也唯一（同一 DI 只能对应一个院内耗材，扫码反查主数据的语义前提）——冲突 409。
+- `highValue=false→true` 时若仍有数量 > 0 的批次库存 → 409（先清零或改走逐件登记，
+  避免出现无法追溯的高值库存）。
+- `expiryManaged=true` 时出入库必须带批次与效期；标志由主数据维护，不按分类推断。
+- 更新为乐观锁（必须回传 `version`，过期 409），数据库守卫 version 只增、编码/创建留痕不可改。
+- 启停：`PATCH /v1/materials/{materialId}/status`（ACTIVE/INACTIVE，`m4:material:write`）；
+  状态未变化幂等返回（version 不变），真正变更 version +1；停用后拒绝新的出入库与 UDI 登记，
+  历史库存/流水/追溯只读保留（审计 `MATERIAL_STATUS`）。
+- 存在 UDI 实例或数量 > 0 的批次库存时，修改或清空 `udi_di` → 409（避免已登记/在库耗材
+  失去扫码反查能力；先将库存清零并经退库/报废流程处理后再改）。
+
+## 26. 出入库与批次库存口径
+
+- 类型：`IN`（加）、`OUT`（减）、`RETURN`（退回，减，可带 UDI 把实例标记 RETURNED）、
+  `ADJUST`（带符号调整量，必须填写原因，不得为 0）。
+- 库存键：**材料 + 批次 + 科室**；`quantity >= 0`（CHECK 兜底）。
+- **RETURN 语义 = 退回供应商/中心库**：库存减少、UDI 实例标记 RETURNED（单向终态），不是
+  “院内退库复库/再用”；院内退库（退回二级库后复库或再用）的登记口径待院方确认（§32 Q-7）。
+- 并发：入库 `ON CONFLICT DO UPDATE` 原子累加，出库/负向调整 `WHERE quantity >= ?` 原子扣减；
+  不足返回 409，`details[]` 给 `available/requested`。
+- 扣减前置校验：OUT/RETURN/负向 ADJUST 先按 材料 + 批次 + 科室 定位库存行，**请求效期与
+  库存行效期不一致 → 409**（不按请求效期“洗白”过期批次）；**过期批次 OUT → 422**；
+  RETURN 携带 `udi` 时以 UDI 实例的批次/效期为唯一扣减依据，请求批次/效期与实例不一致 → 422
+  （避免扣错库存行）。
+- 效期：效期管理耗材缺效期/已过效期 422（入库、出库、退回与使用均拒绝）。
+- 数量：最多 2 位小数（`multipleOf: 0.01`），越界 400。
+- 高值耗材：禁止裸数量 IN/OUT/ADJUST（422）；入库走 UDI 登记、使用走 UDI 使用、退回带 UDI。
+- 流水 append-only：UPDATE/DELETE/TRUNCATE 一律 55000；更正走反向 ADJUST + 原因。
+
+## 27. UDI 一物一码与追溯口径
+
+- 内部规范编码 `udi = udiDi + "^" + udiPi`；数据库 `(lower(trim(udi_di)), lower(trim(udi_pi)))`
+  唯一 + `udi_code` 唯一；路径参数需 URL 编码（`^` → `%5E`）。
+- 组合长度 `udiDi + '^' + udiPi ≤ 160`（越界 400）；`udiDi` ≤64、`udiPi` ≤96。
+- 登记 = 逐件入库：`udi_instance`（IN_STOCK）+ 批次库存 +1 + IN 流水，三者同事务；
+  UDI-DI 必须与耗材主数据一致（422）；重复登记 409。
+- 使用：仅 IN_STOCK → USED；绑定 `recordId`（必填）与 `scheduleId`（可选，必须与记录所属台次
+  一致）；记录不存在/不可见 422；重复使用 409；过期实例 422；使用同时写 OUT 流水并扣库存；
+  实例效期与批次库存行效期不一致 → 409（数据不自洽时拒绝扣减）。
+- 退回：RETURN 携带 `udi` 时实例置 RETURNED（终态），并按实例批次/效期扣减；院内复库/再用
+  不在本期状态机内（§32 Q-7）。
+- 状态机：IN_STOCK → USED / RETURNED，终态不可再变（触发器 55000）；身份列不可改。
+- 追溯链 `GET /v1/materials/udi-instances/{udi}`：instance + material 摘要 + movements
+  （按发生时间倒序）+ record（recordId/scheduleId）；只回传标识，不含患者信息。
+
+## 28. SPD 适配器（EXT-03，SIMULATED）
+
+- `GET /v1/materials/spd-adapter/status`：只读最近一次同步结果（不产生日志）；无日志时默认
+  `available=true`；失败后 `degraded=true` 且 `pendingSyncCount` 为最近一次成功之后的失败条数。
+- `POST /v1/materials/spd-adapter/sync`：无外部 I/O 的模拟同步；成功/失败均返回 200，
+  失败 `success=false, degraded=true`（本地库存继续可用）；写 `spd_sync_log` 与审计 `SPD_SYNC`。
+- 数据范围：状态查询与库存一致，SELF/ROOM/无科室维度 fail-closed 403（契约承诺，非 200）。
+- 演练/测试降级：`anesop.m4.spd.simulated-available=false`（集成测试独立上下文验证）。
+- 不返回外部凭据、供应商明细与患者信息。
+
+## 29. 审计
+
+| action | 触发 | detail 白名单 |
+|---|---|---|
+| `MATERIAL_CREATE` | 新建耗材 | materialId/code/highValue/expiryManaged |
+| `MATERIAL_UPDATE` | 更新耗材 | materialId/code/highValue/highValueChanged/expiryManaged/version |
+| `MATERIAL_STATUS` | 启用/停用耗材 | materialId/code/fromStatus/status/version |
+| `STOCK_MOVE` | 出入库（含 UDI 登记/使用产生的流水） | movementId/movementType/materialId/batchNo/quantity/departmentId/highValue/udiLinked |
+| `UDI_REGISTER` | UDI 逐件登记 | udiDi/materialId/batchNo/departmentId/status |
+| `UDI_USE` | UDI 使用绑定 | udiDi/materialId/recordId/scheduleId/status |
+| `SPD_SYNC` | SPD 模拟同步 | adapterCode/mode/success/degraded |
+
+审计**不含 UDI 原文全串、患者信息、供应商凭据**；失败路径（400/409/422）写 `result=0`，
+`resourceId` 用 materialId 或 UDI-DI 摘要，detail 附 materialId/batchNo/movementType/udiDi，
+可定位到具体耗材、批次与器械但不会落 UDI-PI/序列号；403 由 `ApiExceptionHandler` 写
+`ACCESS_DENIED`。
+
+## 30. 前端
+
+- `MaterialCatalogView.vue`（`/m4/materials`）：耗材目录列表/检索/新建/编辑（高值/效期标志）、
+  启停（`PATCH .../status`，停用后历史只读）。
+- `MaterialStockView.vue`（`/m4/materials/stock`）：科室选择、批次库存、出入库登记、流水、
+  SPD 状态卡（触发模拟同步）。
+- `MaterialTraceView.vue`（`/m4/materials/trace`）：扫码式 UDI 输入占位、追溯链展示、
+  UDI 登记（逐件入库）、UDI 使用（绑定记录/台次）。
+- 菜单按 `m4:material:read` 显示；写操作按 `m4:material:write` / `m4:udi:manage` 隐藏。
+
+## 31. 测试与验收
+
+- m4-impl 单测：耗材目录 13、出入库 18、UDI 追溯 14、SPD 5、数据范围守卫 6（合计 56）；
+  覆盖率（JaCoCo，`clean verify` 报告实测）：m4-impl 合计行 92.66%、分支 72.53%；
+  新增四个实现类行覆盖 94.17%–97.40%、分支 66.67%–87.50%。
+- 集成（`M4MaterialApiIntegrationTest` 9 例 + `M4MaterialSpdDegradedApiIntegrationTest` 1 例，
+  真实嵌入式 PG16）：主数据唯一/搜索/乐观锁/权限 403、启停端点与幂等；数量不足 409 + details、
+  同批次效期不一致 409、过期批次 OUT 422、数量 scale 400、ADJUST 原因 400、高值裸数量 422、
+  append-only 55000；UDI 重复登记/重复使用 409、UDI-DI 不一致 422、组合长度 160/161 边界、
+  记录不可见 422、使用绑定与追溯链、RETURN 批次错位 422、存在 UDI 实例时改/清 UDI-DI 409；
+  DEPT/ROOM 数据范围与 404、SPD 状态 ROOM 403；失败审计可定位（udiDi 摘要/批次，不含 UDI 全串）；
+  SPD 成功/降级 + 审计 + 日志；V23 表/权限/最小授权/索引/触发器（material version、UDI 身份列/
+  终态/非法迁移）/CHECK。
+- 前端：Vitest 13 例（目录 5 / 出入库 4 / UDI 追溯 4）；E2E `apps/web/e2e/m4-material.spec.ts`
+  1 条（UDI 登记入库 → 绑定记录使用 → 追溯链 → SPD 状态卡）。
+- 契约：`bash scripts/gen-contracts.sh`、`--java`、`bash scripts/contract-check.sh`
+  （spectral/breaking/HEAD baseline/drift，8 域）全 PASS。
+
+## 32. 待确认（耗材域 Q）
+
+1. **Q-1 UDI 解析规则**：GS1/HIBCC 分隔符、校验位、PI 内嵌批号/效期/序列号解析、扫码枪
+   前后缀；本期只做字符串唯一，不解析（ADR-0020）。
+2. **Q-2 批次策略**：同批号跨供应商合并、跨科室调拨/合并记账、近效期阈值与预警渠道。
+3. **Q-3 高值口径**：金额阈值与高值目录范围（本表不内置金额字段）。
+4. **Q-4 SPD 报文/频率**：EXT-03 真实接口协议、同步频率、失败重试与对账。
+5. **Q-5 计费衔接**：UDI 使用是否触发计费/退费红冲（M5/财务域）。
+6. **Q-6 角色分工**：高值到货验收由护士还是库管执行（当前 udi:manage 同时授予 OR 管理员
+   与麻醉护士，职责分离口径待院方确认）。
+7. **Q-7 院内退库/复库**：本期 RETURN 只表示“退回供应商/中心库”（UDI 终态 RETURNED，单向）；
+   退回二级库后复库再用、退库后重新入库是否复用原 UDI/批次/效期、是否需退库单与审批，
+   待院方确认（ADR-0020 Q-6）；确认前不得用 RETURN + 重新登记绕过一物一码终态（Q-7）。

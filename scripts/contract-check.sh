@@ -23,7 +23,7 @@ cd "$ROOT"
 source "$ROOT/scripts/env.sh" >/dev/null
 
 CONTRACTS_DIR="$ROOT/packages/contracts"
-DOMAINS=(auth patient scheduling anesthesia device drug staff)
+DOMAINS=(auth patient scheduling anesthesia device drug staff material)
 MODE="all"
 
 for arg in "$@"; do
@@ -90,7 +90,7 @@ if [ "$MODE" != "lint" ]; then
     fi
   done
   if [ "$breaking_result" != "FAIL" ]; then
-    breaking_result="PASS（7 域均无破坏性变更）"
+    breaking_result="PASS（8 域均无破坏性变更）"
   fi
 fi
 
@@ -148,7 +148,7 @@ if [ "$MODE" = "all" ]; then
     if pnpm -C "$CONTRACTS_DIR" gen:ts >/dev/null; then
       after_hash="$(hash_generated)"
       if [ "$before_hash" = "$after_hash" ]; then
-        echo "  PASS：generated/typescript 与 7 份契约一致（含 untracked 文件）"
+        echo "  PASS：generated/typescript 与 8 份契约一致（含 untracked 文件）"
         drift_result="PASS"
       else
         echo "  FAIL：generated/typescript 与契约不一致（重生成产生了文件变化）"

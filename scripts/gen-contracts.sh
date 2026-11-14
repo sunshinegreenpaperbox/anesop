@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # 契约 → 类型生成（S0-05 TS / S0-07 Java）
 #
-# 输入：packages/contracts/openapi/{auth,patient,scheduling,anesthesia,device,drug,staff}.yaml
+# 输入：packages/contracts/openapi/{auth,patient,scheduling,anesthesia,device,drug,staff,material}.yaml
 # 输出：
 #   - TS（默认）：packages/contracts/generated/typescript/<域>.d.ts
 #   - Java（--java）：apps/api/api-contracts/target/generated-sources/openapi/<域>
@@ -30,7 +30,7 @@ source "$ROOT/scripts/env.sh" >/dev/null
 CONTRACTS_DIR="$ROOT/packages/contracts"
 OUT_DIR="$CONTRACTS_DIR/generated/typescript"
 JAVA_DIR="$ROOT/apps/api/api-contracts/target/generated-sources/openapi"
-DOMAINS=(auth patient scheduling anesthesia device drug staff)
+DOMAINS=(auth patient scheduling anesthesia device drug staff material)
 MODE="ts"
 
 for arg in "$@"; do

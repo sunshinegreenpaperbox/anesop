@@ -596,6 +596,39 @@ V22 属 expand 段（**不改写 V21**）：为 `m4_staff.staff_authorization` �
   （五列）；**授权历史不得删除**（append-only），回滚前必须全量归档。
 - **运行时权限**：V22 仅新增列/角色/权限，不改变 append-only 触发器与 m4_staff 表结构约束。
 
+### 4.18 V23（M4 耗材主数据、出入库、UDI 追溯与 SPD 适配器）回滚说明
+
+V23 属 expand 段：新增 schema `m4_material` 与 5 张表——`material`（编码/名称
+lower(btrim) 唯一、UDI-DI 非空唯一、高值/效期管理标志、状态 ACTIVE/INACTIVE、乐观锁
+version）、`material_stock`（**材料 + 批次 + 科室唯一**、数量 >= 0 CHECK）、
+`stock_movement`（IN/OUT/RETURN/ADJUST，数量规则 CHECK、ADJUST 必填原因、余额 >= 0、
+**append-only**）、`udi_instance`（**UDI-DI + UDI-PI 归一化唯一 + udi_code 唯一**，
+状态 IN_STOCK/USED/RETURNED，record_id/schedule_id 逻辑关联，状态机与身份列触发器守卫）、
+`spd_sync_log`（EXT-03 模拟同步/降级留痕）。触发器：`stock_movement` UPDATE/DELETE/
+TRUNCATE 一律 55000；`material` 守卫编码/创建留痕不可改、version 只增；`udi_instance`
+守卫身份列不可改、只允许 IN_STOCK→USED/RETURNED、终态不可变、version 只增。权限点
+`m4:material:read|write`、`m4:udi:manage`（最小集授予 SYS_ADMIN / SYS_OR_MANAGER /
+SYS_NURSE_ANESTHETIST）。启停复用 `material.status`（`PATCH /v1/materials/{id}/status`），
+不新增表/列；**扣减前批次效期一致性 409、过期批次 OUT 422、存在 UDI 实例/库存时 UDI-DI
+变更 409** 由服务层守卫（数据库只保证同批次唯一与 CHECK >= 0，不做跨行比较）。**生产路径无演示耗材**（`m4_material.*` 迁移后为空，由耗材管理员
+维护真实目录）；自动化测试/E2E 使用 SYNTHETIC 数据在线创建。不改写 V1–V22 既有列与数据。
+
+- **应用回滚**：下线 `/v1/materials*` 端点与前端“耗材目录/耗材出入库/UDI 追溯”菜单；
+  M2/M3 记录单不受影响（UDI 绑定仅为逻辑关联）；库存、流水与追溯数据保留（不随回滚删除）。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份 + 库存流水/追溯归档，顺序不可颠倒）：
+  先 `DROP TRIGGER`（`trg_stock_movement_no_update/no_delete/no_truncate`、
+  `trg_udi_instance_guard`、`trg_material_guard`）→ `DROP FUNCTION
+  m4_material.fn_reject_mutation/fn_reject_truncate/fn_udi_guard/fn_material_guard()` →
+  按 `spd_sync_log` → `udi_instance` → `stock_movement` → `material_stock` → `material`
+  顺序 `DROP TABLE`（先 `pg_dump -t` 导出并校验行数）→ `DROP SCHEMA m4_material` →
+  删除 `m4:material:read|write`、`m4:udi:manage` 三个权限点对应的角色授权与权限记录。
+- **重放**：修复后重新执行 V23 会重建空 schema/表；**流水与已使用 UDI 不得直接回灌**
+  （append-only 与一物一码语义），如需恢复须按原 UDI 编码/原时间重新登记并注明补录原因
+  （须耗材管理员与临床确认）。
+- **临床/质量风险**：高值追溯属质量追溯留痕，回滚前必须归档到离线追溯库（UDI/批次/记录/
+  台次/时间）；回滚窗口内高值一物一码校验缺失，须改用纸质高值登记并保证双人核对。
+- **运行时权限**：append-only 与状态机守卫依赖触发器，应用运行账号不得拥有 DDL 权限（见 §5.3）。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）

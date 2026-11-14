@@ -57,3 +57,26 @@ pnpm e2e                      # Playwright（m4-drug：目录 → 专册登记 �
 
 - Owner：`@anesop/m4-drug` + `@anesop/web-core`（CODEOWNERS 占位团队；远端组织未建，审批暂不生效）
 - 备份：`@anesop/maintainers`
+
+---
+
+## 耗材/UDI/SPD 分包（M4-M14-01）
+
+```text
+m4/
+├── api/material.ts                  # 契约 material 0.1.0 生成类型 + HTTP 客户端
+├── views/MaterialCatalogView.vue    # 耗材目录：列表/检索/新建/编辑/启停（高值/效期标志）
+├── views/MaterialStockView.vue      # 批次库存 + 出入库登记 + 流水 + SPD 状态卡
+├── views/MaterialTraceView.vue      # 扫码式 UDI 输入占位 + 追溯链 + UDI 登记/使用
+└── __tests__/Material*.spec.ts      # Vitest：目录 5 / 出入库 4 / UDI 追溯 4
+```
+
+- 类型只从 `@anesop/contracts/material` 导入（`bash scripts/gen-contracts.sh` 生成）；
+- 路由：`/m4/materials`、`/m4/materials/stock`、`/m4/materials/trace`，菜单权限
+  `m4:material:read`；写操作按 `m4:material:write` / `m4:udi:manage` 隐藏；
+- 数据范围：库存/流水/UDI/SPD 状态按科室（SELF/ROOM 403），页面显式选择科室
+  （`GET /v1/materials/departments`）；
+- 高值耗材逐件登记/使用；页面不提供高值裸数量出入库入口；
+- SPD 适配器（EXT-03）为模拟：失败显示“已降级（本地库存可用）”，不阻塞页面；
+- UDI 解析规则/扫码枪口径【待确认】（ADR-0020），本期手动输入/粘贴 `UDI-DI^UDI-PI`。
+- E2E：`apps/web/e2e/m4-material.spec.ts`（UDI 登记入库 → 绑定记录使用 → 追溯链 → SPD 卡）。

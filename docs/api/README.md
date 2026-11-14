@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -17,7 +17,8 @@ packages/contracts/
 │   ├── device.yaml        # 设备登记、网关批量上报（幂等）、体征窗口查询、采集健康摘要
 │   ├── drug.yaml          # 药品目录、麻精专册/交接/基数/日结、药房适配器状态
 │   ├── staff.yaml         # 人员档案、分级授权（R1–R5）、排班、培训与到期提醒
-│   └── baseline/          # 当前已发布兼容基线（7 份快照）
+│   ├── material.yaml      # 耗材主数据、批次库存/出入库、UDI 一物一码追溯、SPD 适配器（EXT-03）
+│   └── baseline/          # 当前已发布兼容基线（8 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -33,7 +34,8 @@ packages/contracts/
 | `device.yaml` | 4 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
 | `drug.yaml` | 10 | 15 | 药品目录（列表/检索/详情/创建/更新）、五专科室选择、麻精专册登记、专柜交接、基数维护、日结/班结（平账）、药房适配器状态（EXT-02 SIMULATED） | §2.5、§3.4、§3.9.2 |
 | `staff.yaml` | 10 | 15 | 人员档案（列表/详情/创建/更新）、科室选项、分级授权（当前 + append-only 历史、授予/撤销、授权校验）、排班（查询/新建/更新/取消、冲突检测）、培训（查询/登记/到期提醒） | §2.4.4、§3.4.1、§3.9.2 |
-| **合计** | **94** | **127** | 7 个限界上下文骨架 | — |
+| `material.yaml` | 12 | 15 | 耗材目录（列表/检索/详情/创建/更新/启停）、科室选项、批次库存、出入库（IN/OUT/RETURN/ADJUST）、UDI 实例登记/使用/追溯链、SPD 适配器状态与模拟同步（EXT-03） | §2.5、§3.4、§3.9.2 |
+| **合计** | **105** | **141** | 8 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -569,6 +571,41 @@ packages/contracts/
   枚举摘要，**不含姓名、证书号原文与联系方式**。
 - **示例**：全部 SYNTHETIC（演示医师/工号/证书号/排班），不含真实人员与患者标识。
 
+### 3.15 耗材主数据、出入库、UDI 追溯与 SPD（M4-M14-01，material 0.1.0 新增域）
+
+> 0.1.0 是**新增域**（12 条路径 / 15 个 operation / 22 个 schema），不改动既有七份契约；
+> `material.yaml` 与 `baseline/material.yaml` 同步落地，`oasdiff`（baseline → 当前、HEAD
+> baseline → 当前）均无破坏性变更（HEAD 无该域快照时自动 SKIP）。UDI 解析规则、批次策略、
+> 高值金额口径与 SPD 报文【待确认】，契约不内置臆造规范（见 ADR-0020）。
+
+- **耗材目录**（`m4:material:read` 读 / `m4:material:write` 写）：`GET/POST /v1/materials`、
+  `GET/PUT /v1/materials/{materialId}`、`GET /v1/materials/search?q=`、
+  `PATCH /v1/materials/{materialId}/status`（ACTIVE/INACTIVE，幂等；停用后拒绝新出入库/
+  UDI 登记）。编码/名称按 trim + 忽略大小写唯一，UDI-DI 非空时唯一（重复 409）；编码创建后
+  不可改；更新必须回传 `version`（过期 409）；highValue 由 false 改 true 且仍有批次库存 409；
+  存在 UDI 实例或库存 > 0 时修改/清空 UDI-DI 409；不存在 404。
+- **批次库存与出入库**（`m4:material:read|write`，按科室数据范围）：`GET
+  /v1/materials/departments`（科室选项）、`GET /v1/materials/stock`、`GET/POST
+  /v1/materials/stock-movements`。类型 `IN/OUT/RETURN/ADJUST`（ADJUST 带符号且必填原因；
+  RETURN = 退回供应商/中心库，单向终态）；库存键为 材料 + 批次 + 科室，数量不足 409
+  （`details[0].field=quantity`，含可用量）、同批次效期不一致 409、过期批次 OUT 422、
+  效期缺失/已过 422、数量 >2 位小数 400、高值裸数量 422；流水 append-only（55000）。
+  RETURN 携带 `udi` 时以 UDI 实例批次/效期为扣减依据，请求不一致 422。
+- **UDI 一物一码**（登记/使用 `m4:udi:manage`，追溯 `m4:material:read`）：
+  `POST /v1/materials/udi-instances`（登记 = 逐件入库：实例 + 库存 +1 + IN 流水同事务）、
+  `GET /v1/materials/udi-instances/{udi}`（material → UDI → record 追溯链）、
+  `POST /v1/materials/udi-instances/{udi}/use`（绑定 recordId/scheduleId，IN_STOCK→USED，
+  库存 −1 + OUT 流水）。重复登记/重复使用 409；UDI-DI 与耗材不一致、记录不存在/不可见、
+  台次不一致 422；UDI-DI + `^` + UDI-PI >160 400；越界 404。路径 `udi` 为
+  `UDI-DI^UDI-PI`，需 URL 编码（`^` → `%5E`）。
+- **SPD 适配器**（EXT-03，SIMULATED）：`GET /v1/materials/spd-adapter/status`
+  （SELF/ROOM 403）、`POST /v1/materials/spd-adapter/sync`。同步为无外部 I/O 模拟；失败
+  返回 200 + `success=false, degraded=true`（本地库存继续可用），写 `spd_sync_log` 与审计
+  `SPD_SYNC`。
+- **数据范围**：耗材目录不按数据范围过滤；批次库存/流水/UDI 实例按科室（ALL/SITE/DEPT），
+  SELF/ROOM fail-closed 403。最小实现与待确认项见 `docs/modules/m4/README.md` §23–§32 与 ADR-0020。
+- **示例**：全部 SYNTHETIC（演示耗材/UDI/批次/操作人），不含真实患者标识。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -697,4 +734,8 @@ pnpm -C packages/contracts check:breaking   # 仅 breaking
 - **分级授权口径【待确认】**：R1–R5 的业务含义、级别 → 术式范围/年龄段/ASA 的默认映射、
   职称/职级字典、排班班次定义（是否三班制/节假日班/换班审批）、术间是否允许同时多人，
   均待院方（医务处/麻醉科/手术室/人事）确认，见 ADR-0019 与 `docs/modules/m4/README.md`。
+- **耗材/UDI/SPD 口径【待确认】**：UDI 解析规则（GS1/HIBCC 分隔符、校验位、PI 内嵌批号/
+  效期/序列号）、批次策略（跨供应商/跨科室调拨）、高值金额阈值与目录范围、EXT-03 SPD
+  报文/同步频率、UDI 使用与计费衔接，均待院方确认，见 ADR-0020 与
+  `docs/modules/m4/README.md` §32；本期契约只做字符串唯一与模拟适配器。
 - 生命体征高频序列与波形查询接口不在本基线，按 §3.4.4 的分区/归档方案在 M2 细化。
