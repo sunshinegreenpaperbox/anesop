@@ -1,10 +1,13 @@
-# m4 — 药品目录与麻精五专（E-M15）· 人员档案与分级授权（E-M13）
+# m4 — 药品目录与麻精五专（E-M15）· 人员档案与分级授权（E-M13）· 工作量与多维报表（E-M16）
 
 > 状态：M4-M15-01 完成（2026-11-14，契约 `drug.yaml 0.1.0`、V20、m4-api/impl、前端两页）；
 > M4-M13-01 完成（2026-11-14，契约 `staff.yaml 0.1.1`、V21 + V22、m4_staff/授权校验/
-> 排班冲突/培训、前端四页）。本文件是 M4 域的模块口径说明；实现细节以契约与迁移为准，冲突时按
+> 排班冲突/培训、前端四页）；M4-M14-01 完成（`material.yaml 0.1.0`、V23、耗材/UDI/SPD）；
+> M4-M16-01 完成（2026-11-14，契约 `report.yaml 0.1.0`、V24 data-only、工作量/多维报表/CSV
+> 导出、前端报表页）。本文件是 M4 域的模块口径说明；实现细节以契约与迁移为准，冲突时按
 > “契约 → 迁移 → 本文件”的顺序裁决。§1–§13 为药品/五专（E-M15），§14–§22 为人员域
-> （E-M13，模块目录仍为 `modules/m4`，schema `m4_staff`）。
+> （E-M13，模块目录仍为 `modules/m4`，schema `m4_staff`），§23–§32 为耗材/UDI/SPD（E-M14），
+> §33–§41 为工作量与报表（E-M16，口径 report-1.0.0，无独立 schema）。
 
 ## 1. 一句话职责
 
@@ -569,3 +572,133 @@
 7. **Q-7 院内退库/复库**：本期 RETURN 只表示“退回供应商/中心库”（UDI 终态 RETURNED，单向）；
    退回二级库后复库再用、退库后重新入库是否复用原 UDI/批次/效期、是否需退库单与审批，
    待院方确认（ADR-0020 Q-6）；确认前不得用 RETURN + 重新登记绕过一物一码终态（Q-7）。
+
+## 33. 报表域数据归属与边界（E-M16）
+
+- **无独立 schema/表**：V24 是 **data-only** 迁移（只加权限点，无 DDL）；工作量与多维报表
+  都是对既有数据的**只读聚合**，不落库缓存、不建物化视图（ADR-0021）。
+- **统计单元**：M1 排程台次（`m1_sched.schedule` + `surgery_application`）、M2 麻醉记录单
+  （`m2_anes.anesthesia_record` 的 `started_at/ended_at/created_by`）、M4 人员档案
+  （`m4_staff.staff_profile` 的 `user_id/staff_no/name`，用于 STAFF 维度）。
+- **跨模块只读**：m4-api 端口 `ReportCaseSource`，由装配层 `ReportCaseSourceAdapter`
+  用**单条只读 SELECT** 投影（不依赖 m1/m2 的 Mapper/实体，不写任何表，不做时区换算）；
+  m4-impl 只依赖端口，不依赖 m1/m2，避免模块环（ArchUnit 覆盖）。这是 M4-M14-01
+  `RecordVisibilityPort` 之后的第二个装配层端口。
+- 契约：`packages/contracts/openapi/report.yaml` 0.1.0（3 路径 / 3 operation / 8 schema，
+  第 9 域）；Java/TS 由契约生成（api-contracts 第 9 个 execution、gen-contracts /
+  contract-check DOMAINS 第 9 域）。
+
+## 34. 权限与数据范围
+
+| 权限点 | 能力 | 最小授予（V24） |
+|---|---|---|
+| `m4:report:read` | 工作量统计、多维报表 | SYS_ADMIN、SYS_OR_MANAGER、SYS_QC_MANAGER |
+| `m4:report:export` | CSV 导出（另写审计 `REPORT_EXPORT`） | SYS_ADMIN、SYS_OR_MANAGER、SYS_QC_MANAGER |
+
+- 数据范围（fail-closed）：`ALL` 全院；`SITE`/`DEPT` 按台次申请科室（或院区）；
+  `ROOM` 按术间；`SELF` 只含**本人创建麻醉记录单**的台次。
+- 无可用范围、SELF 缺用户标识、`deptId` 超出组织范围 → 403（集合查询越权语义）；
+  空数据不是 403，返回 0 与空数组。
+- `deptId` 只是收窄条件：ROOM/SELF 范围可自由按科室筛选（仍受自身范围限制），绝不因
+  `deptId` 扩大可见范围；科室下拉从 DEPT 维度桶派生（不需 `m1:schedule:read`）。
+- 临床个人工作量视图未开放（绩效口径未确认，D-21/Q-1）。
+
+## 35. 工作量口径（report-1.0.0）
+
+- **时间**：`Asia/Shanghai` 自然日；`from`/`to` 必填闭区间，跨度（含首尾）**≤ 366 天**
+  （超过 400）；`from`/`to` 非法日期 400；`to < from` 400。
+- **台次**：M1 台次 `deleted=false` 且 `status ≠ CANCELLED`，按计划开始时间 `start_at`
+  的本地日期归集；跨日台次只计首日、不拆分。已取消台次不计台次/时长。
+- **麻醉时长**：麻醉记录单 `started_at`..`ended_at` 之差**向下取整到分钟**之和；
+  无记录单/未结束/时间缺失计 0，并单列 `unrecordedCaseCount`（有台次无时长）。
+- **加权台次**：`weightedCaseCount = Σ 台次权重`；默认 **1.0**，可按术式编码配置
+  `anesop.m4.report.surgery-weights.<code>`（未配置取默认；权重必须 > 0，启动校验）。
+  **不内置绩效公式/难度系数/金额**（D-21，权重口径【待确认】Q-1）。
+- **术式分布**：桶内按术式编码聚合台次与时长，按台次倒序、编码升序，最多 50 项；
+  编码缺失归 `UNSPECIFIED`（桶 key 仍为术式维度兜底桶）。
+
+## 36. 多维报表口径
+
+- 维度白名单：`DEPT`/`STAFF`/`SURGERY`/`ROOM`，白名单全集 4 个、去重后 1–4 个；指标白名单：
+  `caseCount`/`anesthesiaMinutes`/`weightedCaseCount`，白名单全集 3 个、去重后 1–3 个；非法/空 400。
+- 分组与排序：按请求维度组合分组（未匹配进入 `UNASSIGNED`/`UNSPECIFIED`），按维度声明顺序
+  + 维度值升序稳定排序，兜底桶固定最后；各维度台次之和与总计守恒。
+- 分页：`page` 从 1 开始、`size` 1–200（默认 20）；`total`/`totalPages` 与 `totals` 覆盖
+  **全部分组**（不是当前页）；空数据 `total=0`、`totalPages=0`、`rows=[]`。
+- 字段归属：DEPT→`deptId/deptName`；STAFF→`staffId/staffNo/staffName`（院内在册人员，
+  非患者标识）；SURGERY→`surgeryCode/surgeryName`；ROOM→`roomId/roomNo`；未请求维度为 null。
+
+## 37. 导出（CSV）
+
+- 列头：`report,level,dimension,key,label,caseCount,anesthesiaMinutes,weightedCaseCount,
+  unrecordedCaseCount,surgeryCode,surgeryName,from,to,timezone`；`level` ∈
+  `TOTAL`（仅 workload）/`BUCKET`/`SURGERY`/`ROW`。
+- `report=workload` 需 `dimension`；`report=multi` 需 `dimensions` 与 `metrics`，导出**全部分组**，
+  行数上限 50000（超过 400）。`dimension=SURGERY` 时桶即术式，不再重复输出 `SURGERY` 行。
+- UTF-8 **BOM** + 首行列头 + `text/csv` 流式；参数校验与数据范围解析在写字节前完成，
+  非法参数仍返回 JSON 400/403（不会在已提交响应中抛错）。
+- **防公式注入**：以 `=`/`+`/`-`/`@`/制表符/回车开头的单元格以**前导单引号中和**
+  （如 `'=SUM(1,2)`），必要时按 **RFC 4180** 加双引号并转义内部引号。
+- **脱敏**：只含科室/术间/术式/院内在册人员工号与姓名与聚合值；**不含**患者姓名、住院号、
+  院内患者号、身份证号、手机号、术前诊断、HIS 申请号。
+- 审计：导出 `REPORT_EXPORT`（detail：report/format/日期/维度/指标/行数），查询 `REPORT_QUERY`；
+  detail 不含 PHI。
+
+## 38. 审计
+
+| 动作 | 触发 | detail（白名单） |
+|---|---|---|
+| `REPORT_QUERY` | 工作量/多维查询 | report、from、to、timezone、deptId?、dimension(s)、metrics、group/bucketCount、caseCount |
+| `REPORT_EXPORT` | CSV 导出（成功） | report、format、from、to、timezone、deptId?、dimension(s)、metrics、dataRows/groupCount |
+
+审计只记聚合与筛选条件，不记患者标识、不记 SQL、不记人员姓名。
+
+## 39. 前端
+
+- `/m4/reports`（权限 `m4:report:read`）：日期范围（默认近 30 天）、工作量维度选择、多维维度/
+  指标多选、科室筛选（DEPT 桶派生）、查询、工作量汇总卡 + 维度表（含术式分布）、多维表
+  （含动态指标列、合计与分页）；导出按钮仅 `m4:report:export` 可见。
+- 前端预校验跨度 ≤ 366 天与维度/指标非空；服务端仍为权威校验（400 文案直接展示）。
+- 空数据展示空态；403/错误展示统一 `ApiError`（code + traceId）；无权限展示权限态不发请求。
+- Vitest 7 例（加载/权限态/只读/错误/空态/两种导出）；E2E 1 条（筛选切换 → 查询 → 导出工作量 CSV）
+  + 1 条无权限 403 守卫。
+
+## 40. 测试与验收
+
+- 单测（m4-impl `ReportServiceImplTest`，25 例）：手算台次/时长/加权/无时长、维度桶与术式
+  分布排序、兜底桶最后、多维分页与全量合计、白名单/366 天/日期/分页参数 400、
+  DataScope（denied/DEPT 空/DEPT 过滤/SELF/越界 403）、CSV BOM/列头/行数/防注入/无 PHI、
+  空数据 0、权重启动校验、`minutes`/`hasDuration`/`isFormulaRisk` 边界；装配层
+  `ReportCaseSourceAdapterTest` 2 例（空范围 fail-closed、null 过滤器不查库）。
+- 集成（`M4ReportApiIntegrationTest`，真跑嵌入式 PG16 + Flyway V1–V24，6 例）：固定 SYNTHETIC
+  台次/记录单手算对照（3 台次/215 分钟/3.5 加权/1 无时长；契约示例为另一组合成数据
+  3 台次/180 分钟）、DEPT/SELF 数据范围与越界 403、
+  STAFF 工号+姓名与兜底桶、多维分页与合计、CSV BOM/列头/6 数据行/`'=SUM(1,2)` 防注入/
+  无 PHI/审计 detail、空数据 0、366 天边界、V24 权限点与 6 条授权。
+- 性能（本机基线 2026-11-15）：5000 台次 / 366 天区间应用内聚合 **约 60ms（实测 59–63ms）**
+  （单测 benchmark，断言 < 5000ms）；接口端到端为单条索引扫描 SQL + 同一聚合路径，
+  距“月度报表 < 10s”留有余量。
+- 覆盖率（本机 JaCoCo，2026-11-15）：报表包行 **95.4%**、分支 **80.4%**（目标 ≥80%/≥70%），
+  m4-impl 模块整体行 93.0%、分支 73.7%；契约 3 个端点 100% 有用例。
+
+## 41. 待确认（报表域 Q）
+
+1. **报表域 Q-1 绩效权重与难度系数**：术式权重来源（绩效方案/手术分级）、ASA/年龄/急诊加成、
+   二次分配规则；本期默认 1.0 + 可配置映射，不内置公式（ADR-0021 Q-1）。
+2. **报表域 Q-2 时长口径**：是否扣除麻醉准备/复苏时间、跨零点展示、是否以设备/事件时间为准
+   （当前为记录单 `started_at/ended_at`）。
+3. **报表域 Q-3 数据来源**：`STAFF` 用记录单创建人还是麻醉排班/实际执行人；`DEPT` 用申请科室
+   还是手术科室/患者科室；`SURGERY` 用 HIS 编码还是院内手术分级编码。
+4. **报表域 Q-4 报表锁定/修订**：月度报表锁定、修订审批与新版本（方案书 §2.4.7）；本期不落库，
+   口径变更后历史报表不自动重算。
+5. **报表域 Q-5 导出格式与个人视图**：是否需要 Excel/PDF、定时生成与推送；是否开放医师本人
+   工作量视图（涉及绩效口径与角色授权）。
+6. **报表域 Q-6 例数 vs 台次**（评审 Q-1）：方案书 §2.7.2 同时出现“例数/台次”，本期统一按
+   **台次**（M1 排程台次，非取消）统计，不按患者/住院次去重；是否另出“例数”指标、分母口径
+   （在院/手术例数）与患者去重规则待院方确认。
+7. **报表域 Q-7 SELF 范围角色授予**（评审 Q-2）：V24 未给 SYS_ANESTHESIOLOGIST 授予
+   `m4:report:read`（工作量属管理口径，D-21）；SELF 范围目前只对合成测试角色开通。本期是否
+   给麻醉医师 `m4:report:read` + SELF 数据范围（本人工作量视图）待院方确认。
+8. **报表域 Q-8 workload 导出上限**（评审 Q-3）：当前仅多维导出有 50000 行硬上限；工作量导出
+   为“TOTAL + 维度桶 + 术式分布”，行数受维度基数与每桶 50 项术式分布约束，未设统一行数上限。
+   是否统一设置上限（如 50000 行）或按桶数/台次预检，待压测与院方确认。

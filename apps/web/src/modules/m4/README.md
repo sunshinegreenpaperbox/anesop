@@ -1,9 +1,10 @@
-# m4 — 药品目录与麻精五专（前端分包）
+# m4 — 药品目录/麻精五专/人员/耗材/工作量报表（前端分包）
 
-**一句话职责**：药品目录维护、麻精五专（专册登记/专柜交接/基数/日结班结）与药房适配器状态
-的浏览器页面、模块内组件与组合式函数。
+**一句话职责**：药品目录维护、麻精五专（专册登记/专柜交接/基数/日结班结）、人员档案与分级
+授权/排班/培训、耗材目录/出入库/UDI 追溯，以及工作量与多维报表的浏览器页面、模块内组件与
+组合式函数。
 
-本目录只放 M4 药品域的页面、模块内组件与组合式函数，不对外导出内部实现。
+本目录只放 M4 域的页面、模块内组件与组合式函数，不对外导出内部实现。
 
 ## 目录
 
@@ -12,7 +13,11 @@ m4/
 ├── api/m4.ts                 # 契约 drug 0.1.0 生成类型 + HTTP 客户端（禁止手写重复模型）
 ├── views/DrugCatalogView.vue # 药品目录：列表/检索/新建/编辑（只读账号隐藏维护入口）
 ├── views/NarcoticView.vue    # 麻精五专：科室必选 + 专册/交接/基数/日结 + 适配器状态卡
-└── __tests__/                # Vitest 用例（目录 4 例 + 五专 7 例）
+├── api/material.ts           # 耗材/UDI/SPD 客户端（material 0.1.0）
+├── api/staff.ts              # 人员/授权/排班/培训客户端（staff 0.1.1）
+├── api/report.ts             # 工作量/多维报表与 CSV 导出客户端（report 0.1.0）
+├── views/ReportView.vue      # 工作量与多维报表：筛选/两张结果表/合计/分页/导出/空错误权限态
+└── __tests__/                # Vitest 用例（含 ReportView 7 例）
 ```
 
 ## 约定
@@ -22,7 +27,9 @@ m4/
 - 跨模块复用只经 `packages/ui`（展示组件）与 `src/api/`（HTTP/会话）；禁止引用其他
   `src/modules/mX` 的内部文件；
 - 路由/菜单走 `src/router/routes.ts` + `src/navigation.ts`（`/m4/drugs` 需
-  `m4:drug:read`，`/m4/narcotic` 需 `m4:narcotic:manage`）。
+  `m4:drug:read`，`/m4/narcotic` 需 `m4:narcotic:manage`，`/m4/reports` 需 `m4:report:read`，
+  导出按钮另需 `m4:report:export`）；
+- 日期格式化在模块内实现，不引用其他模块内部工具（前端跨模块引用禁令）。
 
 ## 业务口径（详见 `docs/modules/m4/README.md` 与 ADR-0018）
 
@@ -80,3 +87,16 @@ m4/
 - SPD 适配器（EXT-03）为模拟：失败显示“已降级（本地库存可用）”，不阻塞页面；
 - UDI 解析规则/扫码枪口径【待确认】（ADR-0020），本期手动输入/粘贴 `UDI-DI^UDI-PI`。
 - E2E：`apps/web/e2e/m4-material.spec.ts`（UDI 登记入库 → 绑定记录使用 → 追溯链 → SPD 卡）。
+
+## 报表页口径（详见 `docs/modules/m4/README.md` §33–§41 与 ADR-0021）
+
+- 只读聚合：口径 report-1.0.0、时区 `Asia/Shanghai`、跨度（含首尾）≤ 366 天（前端先拦一次，
+  服务端 400 文案直接展示）；
+- 台次 = 统计边界内非取消台次（按计划开始本地日期归集，跨日只计首日）；麻醉时长 = 记录单
+  `started_at`..`ended_at` 向下取整分钟之和；无记录单计 0 并单列“无时长台次”；加权台次默认 1.0
+  且可按术式配置（绩效口径【待确认】，系统只出数）；
+- 维度 `DEPT/STAFF/SURGERY/ROOM`、指标 `caseCount/anesthesiaMinutes/weightedCaseCount` 均为
+  白名单；多维表按维度声明顺序 + 维度值稳定排序，合计覆盖全部分组（不受分页影响）；
+- 科室下拉从 DEPT 维度桶派生，不调用 `m1` 排程接口；`SELF` 范围只看本人创建记录单的台次；
+- 导出 CSV 由服务端负责 UTF-8 BOM、防公式注入与脱敏（不含任何患者标识）；页面只触发下载并
+  展示成功/错误提示。

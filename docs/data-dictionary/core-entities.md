@@ -608,6 +608,29 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 `staff_authorization` 的 UPDATE/DELETE/TRUNCATE 一律 55000；`staff_profile`/`staff_schedule`
 守卫创建留痕不可改、version 只增，排班取消后不可复活。
 
+### 3.14 报表读模型（只读投影，无表，M4-M16-01）
+
+工作量/多维报表**不新增表**（V24 为 data-only 权限迁移，ADR-0021）：报表是对既有台次、
+麻醉记录单与人员档案的只读聚合，字段来源如下（契约 `report.yaml` 0.1.0）。
+
+| 报表字段 | 来源 | 说明 |
+|---|---|---|
+| `from` / `to` / `timezone` | 请求参数 / 固定 `Asia/Shanghai` | 本地日期闭区间，跨度 ≤ 366 天 |
+| 台次（`caseCount`） | `m1_sched.schedule` | `deleted=false`、`status ≠ CANCELLED`；按 `start_at` 本地日期归集，跨日只计首日 |
+| `anesthesiaMinutes` | `m2_anes.anesthesia_record.started_at/ended_at` | `Σ floor((ended_at − started_at) / 60s)`；无记录单/未结束计 0 |
+| `unrecordedCaseCount` | 同上 | 有台次但无可用时长（缺记录单/未结束），数据质量字段 |
+| `weightedCaseCount` | 台次 + 权重配置 | `Σ 权重`，默认 1.0，可按术式编码配置；绩效口径【待确认】 |
+| `DEPT` 维度 | `m1_sched.surgery_application.dept_id/dept_name` | 申请科室；缺失归 `UNASSIGNED` |
+| `STAFF` 维度 | `m2_anes.anesthesia_record.created_by` → `m4_staff.staff_profile.user_id` | 麻醉医师（记录单创建人近似）；无记录/无档案归 `UNASSIGNED` |
+| `SURGERY` 维度 | `m1_sched.surgery_application.surgery_code/surgery_name` | 术式；缺失归 `UNSPECIFIED` |
+| `ROOM` 维度 | `m1_sched.operating_room.room_no` | 术间；缺失归 `UNASSIGNED` |
+| 术式分布 | 上述台次 + 术式字段 | 桶内按术式编码聚合，台次倒序/编码升序，最多 50 项 |
+| `totals`（多维） | 全部分组 | 不受分页影响；空数据 `groupCount=0` |
+
+说明：报表投影只含聚合维度与时间，不含患者姓名、住院号、证件号、手机号、术前诊断或 HIS
+申请号（导出脱敏见契约 §导出）；人员工号与姓名属院内在册人员数据（非患者标识）。跨 schema
+读取只在装配层 `ReportCaseSourceAdapter` 的单条只读 SELECT 中发生，不复制 m1/m2 Mapper/实体。
+
 ## 4. 与契约的对应
 
 | 契约 Schema | 数据库实体 | 说明 |
@@ -657,6 +680,8 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 | `AuthorizationCheckRequest`、`AuthorizationCheckResult`、`AuthorizationCheckReason` | 读时判定（无新表） | 授权校验（排程/术中集成点），原因码见契约枚举（V21） |
 | `StaffSchedule`、`StaffScheduleList`、`CreateStaffScheduleRequest`、`UpdateStaffScheduleRequest`、`CancelStaffScheduleRequest` | `m4_staff.staff_schedule` | 排班冲突唯一约束、取消留痕（V21） |
 | `StaffTraining`、`StaffTrainingList`、`ExpiringTrainingList`、`CreateStaffTrainingRequest` | `m4_staff.staff_training` | 培训记录、到期提醒（V21） |
+| `WorkloadReport`、`WorkloadBucket`、`SurgeryDistribution` | 读时投影（无新表） | 工作量：台次/麻醉时长/加权台次/无时长台次/术式分布（口径 report-1.0.0，V24 data-only） |
+| `MultiReport`、`MultiRow`、`ReportTotals` | 读时投影（无新表） | 多维报表：组合维度 × 指标、稳定排序 + 分页 + 全量合计 |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
 
 ## 5. 【待确认】汇总
@@ -697,3 +722,8 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 17. **Q-7 院内退库/复库**：本期 RETURN 只表示退回供应商/中心库（UDI 终态 RETURNED，单向）；
     退回二级库后复库再用、退库后重新入库是否复用原 UDI/批次/效期、是否需退库单与审批，
     待院方确认（ADR-0020 Q-6）。
+18. **Q-8 报表权重与难度系数**：术式权重来源（绩效方案/手术分级）、ASA/年龄/急诊加成与
+    二次分配规则；本期默认 1.0 + 可配置映射，不内置绩效公式（ADR-0021 Q-1）。
+19. **Q-9 报表数据来源与时长口径**：`STAFF` 用记录单创建人还是排班/实际执行人、`DEPT` 用
+    申请科室还是手术/患者科室、`SURGERY` 用 HIS 还是院内分级编码；麻醉时长是否扣除准备/
+    复苏时间、跨零点如何展示（ADR-0021 Q-2/Q-3）。

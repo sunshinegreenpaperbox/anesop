@@ -324,6 +324,38 @@
               </configOptions>
             </configuration>
           </execution>
+          <execution>
+            <id>generate-report-models</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <configuration>
+              <inputSpec>${project.basedir}/../../../packages/contracts/openapi/report.yaml</inputSpec>
+              <generatorName>spring</generatorName>
+              <output>${project.build.directory}/generated-sources/openapi/report</output>
+              <modelPackage>com.anesop.contracts.report.model</modelPackage>
+              <generateModels>true</generateModels>
+              <generateApis>false</generateApis>
+              <generateSupportingFiles>false</generateSupportingFiles>
+              <generateModelTests>false</generateModelTests>
+              <generateModelDocumentation>false</generateModelDocumentation>
+              <!--
+                契约的结构/风格门禁由 spectral（scripts/contract-check.sh）负责；
+                openapi-generator 内置的 Swagger 解析器对 3.1 的 license.identifier 等
+                元数据要求更严，会与已评审契约冲突，故关闭其重复校验。
+              -->
+              <skipValidateSpec>true</skipValidateSpec>
+              <configOptions>
+                <useJakartaEe>true</useJakartaEe>
+                <useBeanValidation>true</useBeanValidation>
+                <openApiNullable>false</openApiNullable>
+                <dateLibrary>java8</dateLibrary>
+                <!-- 模型只依赖 Jackson + Jakarta Validation；不引入 swagger 注解库 -->
+                <annotationLibrary>none</annotationLibrary>
+                <documentationProvider>none</documentationProvider>
+              </configOptions>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
 

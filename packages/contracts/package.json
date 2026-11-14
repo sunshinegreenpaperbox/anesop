@@ -30,10 +30,13 @@
     },
     "./material": {
       "types": "./generated/typescript/material.d.ts"
+    },
+    "./report": {
+      "types": "./generated/typescript/report.d.ts"
     }
   },
   "scripts": {
-    "lint": "spectral lint --fail-severity=warn --ruleset .spectral.yaml openapi/auth.yaml openapi/patient.yaml openapi/scheduling.yaml openapi/anesthesia.yaml openapi/device.yaml openapi/drug.yaml openapi/staff.yaml openapi/material.yaml",
+    "lint": "spectral lint --fail-severity=warn --ruleset .spectral.yaml openapi/auth.yaml openapi/patient.yaml openapi/scheduling.yaml openapi/anesthesia.yaml openapi/device.yaml openapi/drug.yaml openapi/staff.yaml openapi/material.yaml openapi/report.yaml",
     "gen:ts": "bash ../../scripts/gen-contracts.sh",
     "check:breaking": "bash ../../scripts/contract-check.sh --breaking-only"
   },

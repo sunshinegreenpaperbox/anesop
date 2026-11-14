@@ -18,7 +18,8 @@ packages/contracts/
 │   ├── drug.yaml          # 药品目录、麻精专册/交接/基数/日结、药房适配器状态
 │   ├── staff.yaml         # 人员档案、分级授权（R1–R5）、排班、培训与到期提醒
 │   ├── material.yaml      # 耗材主数据、批次库存/出入库、UDI 一物一码追溯、SPD 适配器（EXT-03）
-│   └── baseline/          # 当前已发布兼容基线（8 份快照）
+│   ├── report.yaml        # 工作量统计、多维报表与脱敏 CSV 导出（口径 report-1.0.0）
+│   └── baseline/          # 当前已发布兼容基线（9 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -35,7 +36,8 @@ packages/contracts/
 | `drug.yaml` | 10 | 15 | 药品目录（列表/检索/详情/创建/更新）、五专科室选择、麻精专册登记、专柜交接、基数维护、日结/班结（平账）、药房适配器状态（EXT-02 SIMULATED） | §2.5、§3.4、§3.9.2 |
 | `staff.yaml` | 10 | 15 | 人员档案（列表/详情/创建/更新）、科室选项、分级授权（当前 + append-only 历史、授予/撤销、授权校验）、排班（查询/新建/更新/取消、冲突检测）、培训（查询/登记/到期提醒） | §2.4.4、§3.4.1、§3.9.2 |
 | `material.yaml` | 12 | 15 | 耗材目录（列表/检索/详情/创建/更新/启停）、科室选项、批次库存、出入库（IN/OUT/RETURN/ADJUST）、UDI 实例登记/使用/追溯链、SPD 适配器状态与模拟同步（EXT-03） | §2.5、§3.4、§3.9.2 |
-| **合计** | **105** | **141** | 8 个限界上下文骨架 | — |
+| `report.yaml` | 3 | 3 | 工作量统计（台次/麻醉时长/加权台次/术式分布）、多维报表（组合维度 + 指标 + 分页 + 全量合计）、报表 CSV 导出（BOM/脱敏/防公式注入） | §2.4.7、§2.7.2、§3.8.1 |
+| **合计** | **108** | **144** | 9 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -606,6 +608,40 @@ packages/contracts/
   SELF/ROOM fail-closed 403。最小实现与待确认项见 `docs/modules/m4/README.md` §23–§32 与 ADR-0020。
 - **示例**：全部 SYNTHETIC（演示耗材/UDI/批次/操作人），不含真实患者标识。
 
+### 3.16 工作量统计、多维报表与导出（M4-M16-01，report 0.1.0 新增域）
+
+> 0.1.0 是**新增域**（3 条路径 / 3 个 operation / 8 个 schema，第 9 域），不改动既有八份
+> 契约；`report.yaml` 与 `baseline/report.yaml` 同步落地，oasdiff（baseline → 当前、HEAD
+> baseline → 当前）均无破坏性变更（HEAD 无该域快照时自动 SKIP）。口径版本 **report-1.0.0**，
+> 时区 **Asia/Shanghai**；绩效权重/难度系数、时长口径与数据来源【待确认】（ADR-0021 / D-21）。
+
+- **工作量**（`m4:report:read`）：`GET /v1/reports/workload?from&to&dimension=DEPT|STAFF|SURGERY|ROOM&deptId?`。
+  台次 = 统计边界内非取消台次（按 `start_at` 本地日期归集，跨日只计首日）；麻醉时长 =
+  `Σ floor((ended_at − started_at) / 60s)`（无记录单/未结束计 0，单列 `unrecordedCaseCount`）；
+  加权台次 = Σ 台次权重（默认 1.0，可按术式编码配置）；`buckets[]` 给出维度桶与术式分布
+  （台次倒序、编码升序，兜底桶固定最后，最多 50 项）。`from`/`to` 必填、跨度（含首尾）≤ **366 天**（超过 400）；
+  维度非法 400；空数据返回 0 与空数组。
+- **多维报表**（`m4:report:read`）：`GET /v1/reports/multi?from&to&dimensions=DEPT,STAFF&metrics=caseCount,anesthesiaMinutes&page&size`。
+  维度白名单全集 4 个、去重后 1–4 个；指标白名单全集 3 个、去重后 1–3 个（白名单
+  `caseCount`/`anesthesiaMinutes`/`weightedCaseCount`），非法/空 400；分组按维度声明顺序 +
+  维度值升序稳定排序，兜底桶固定最后，`page` 1 起、`size` 1–200；
+  `rows[]` 只含请求维度字段（未请求维度为 null），`totals`/`total` **覆盖全部分组**，
+  空数据 `total=0/totalPages=0`。
+- **导出**（`m4:report:export`）：`GET /v1/reports/export?report=workload|multi&format=csv&…`。
+  CSV 为 UTF-8 **BOM** + 首行列头 + `text/csv` 流式；`level` ∈ `TOTAL/BUCKET/SURGERY/ROW`，
+  `dimension=SURGERY` 时桶即术式、不再重复输出 `SURGERY` 行；导出**全部分组**（上限 50000 行，
+  超过 400）。防公式注入：以 `=`/`+`/`-`/`@`/制表符/回车开头的单元格以**前导单引号中和**，
+  必要时按 **RFC 4180** 加双引号并转义内部引号。脱敏：只含科室/术间/术式/院内在册人员工号姓名与聚合值，不含患者姓名、
+  住院号、院内患者号、身份证号、手机号、术前诊断、HIS 申请号。导出写审计 `REPORT_EXPORT`
+  （查询写 `REPORT_QUERY`）；参数校验与数据范围解析在写字节前完成，非法参数仍返回 JSON 400/403。
+- **数据范围**：ALL 全院；SITE/DEPT 按台次申请科室（或院区）；ROOM 按术间；SELF 只含本人创建
+  麻醉记录单的台次；无可用范围、SELF 缺用户标识、`deptId` 越界一律 403（集合查询越权 → 403）。
+- **权限**：V24 **data-only** 迁移新增 `m4:report:read|export`（无 DDL），最小授予 SYS_ADMIN /
+  SYS_OR_MANAGER / SYS_QC_MANAGER；read 的权限 path 为 `/api/v1/reports/*`（覆盖 workload 与
+  multi，不新增权限码）。统计单元为只读投影（不新建报表表），口径与待确认项见
+  `docs/modules/m4/README.md` §33–§41 与 ADR-0021。
+- **示例**：全部 SYNTHETIC（演示科室/术间/术式/人员工号与聚合值），不含真实患者标识。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -738,4 +774,8 @@ pnpm -C packages/contracts check:breaking   # 仅 breaking
   效期/序列号）、批次策略（跨供应商/跨科室调拨）、高值金额阈值与目录范围、EXT-03 SPD
   报文/同步频率、UDI 使用与计费衔接，均待院方确认，见 ADR-0020 与
   `docs/modules/m4/README.md` §32；本期契约只做字符串唯一与模拟适配器。
+- **工作量/报表口径【待确认】**：术式权重与难度系数（绩效方案/手术分级）、麻醉时长是否扣除
+  准备/复苏时间、`STAFF`/`DEPT`/`SURGERY` 的数据来源、报表锁定与定时生成、是否需要 Excel/PDF
+  与医师个人视图，均待院方确认，见 ADR-0021 与 `docs/modules/m4/README.md` §41；
+  本期系统只出数、权重默认 1.0 且可配置，不内置绩效公式（D-21）。
 - 生命体征高频序列与波形查询接口不在本基线，按 §3.4.4 的分区/归档方案在 M2 细化。

@@ -629,6 +629,35 @@ SYS_NURSE_ANESTHETIST）。启停复用 `material.status`（`PATCH /v1/materials
   台次/时间）；回滚窗口内高值一物一码校验缺失，须改用纸质高值登记并保证双人核对。
 - **运行时权限**：append-only 与状态机守卫依赖触发器，应用运行账号不得拥有 DDL 权限（见 §5.3）。
 
+### 4.19 V24（M4 工作量统计/多维报表/导出权限点，data-only）回滚说明
+
+V24 是 **data-only** 迁移（**无任何 DDL**）：不建 schema/表/索引/触发器，只新增两个权限点与
+最小授权——`m4:report:read`（工作量与多维报表只读）、`m4:report:export`（CSV 导出），
+授予 SYS_ADMIN / SYS_OR_MANAGER / SYS_QC_MANAGER（各 2 项，共 6 条授权），并带
+`DO $$` 自检（权限点/授权缺失即 fail-fast）。`m4:report:read` 的 path 为
+`/api/v1/reports/*`（覆盖 workload 与 multi，不新增权限码），export 为精确的
+`/api/v1/reports/export`。报表是对既有 `m1_sched.schedule` /
+`surgery_application`、`m2_anes.anesthesia_record`、`m4_staff.staff_profile` 的**只读聚合**
+（口径 report-1.0.0，见 ADR-0021），不新增报表结果表/物化视图/缓存表；查询与导出写入
+既有 `m0_platform.sys_audit_log`（`REPORT_QUERY`/`REPORT_EXPORT`），复用 V1 审计表与
+append-only 触发器。不改写 V1–V23 既有列、权限与角色。迁移后 `m4` 报表域无演示数据
+（统计源为 M1/M2 临床数据），自动化测试使用 SYNTHETIC 台次/记录单在线构造并清理。
+
+- **应用回滚**：下线 `/v1/reports*` 端点与前端“工作量报表”菜单（`/m4/reports`）；报表为
+  只读，不产生业务数据，回滚不丢数据、不影响 M1/M2/M3 排程与记录单。
+- **库层回滚**（纯 data-only，DELETE 即可；需 DBA 审批 + 备份，顺序不可颠倒）：
+  先 `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN
+  ('b0000000-0000-4000-8000-000000000077','b0000000-0000-4000-8000-000000000078')`
+  → 再 `DELETE FROM m0_platform.sys_permission WHERE code IN
+  ('m4:report:read','m4:report:export')`（先删授权再删权限点，满足外键顺序）。
+- **令牌影响**：权限点在登录时写入 JWT claim，回滚后已签发令牌在过期前仍带旧权限点；
+  回滚后需强制重新登录（或等待令牌过期）使报表端点真正不可达。
+- **重放/前滚**：V24 的两条 INSERT 均带 `ON CONFLICT DO NOTHING`，权限点/授权已存在时
+  重放不会因主键冲突中断，可用于迁移演练；Flyway 仍只执行一次，人工重放前仍建议核对
+  `sys_permission.code` 与 6 条授权是否齐全（自检块会 fail-fast 兜底）。
+- **后续**：报表数据锁定/定时生成（方案书 §2.4.7）如确认，按 expand 新增 V25+ 读模型与
+  锁定表，不在 V24 预置。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）
