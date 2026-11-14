@@ -326,19 +326,20 @@ public class ApiExceptionHandler {
     }
 
     /**
-     * 药品目录/麻精五专业务规则拒绝（M4-M15-01）：422 {@code BUSINESS_RULE_VIOLATION}，
-     * 如药品未收录于字典、药品已停用、科室不在数据范围（业务语义拒绝，非权限 403）。
+     * M4 业务规则拒绝（M4-M15-01 药品/五专、M4-M14-01 耗材/UDI）：422
+     * {@code BUSINESS_RULE_VIOLATION}，如药品未收录于字典、耗材已过效期、高值耗材裸数量
+     * 出入库、UDI 绑定记录不存在/不可见。业务语义拒绝，非权限 403。
      */
     @ExceptionHandler(M4UnprocessableException.class)
     public ResponseEntity<Error> handleM4Unprocessable(M4UnprocessableException exception,
             HttpServletRequest request) {
         return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
-                "药品或五专业务规则拒绝", request,
+                "业务规则拒绝，操作未生效", request,
                 List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
     }
 
     /**
-     * 药品目录/麻精五专冲突（M4-M15-01）：409 {@code STATE_CONFLICT}。日结不平时
+     * M4 状态冲突（药品/五专/M4-M14-01 耗材/UDI）：409 {@code STATE_CONFLICT}。日结不平时
      * {@code details[]} 给出期望值与实盘值（field=数量字段），供前端展示平账差异；
      * 文案不含数据库约束名与 SQL 实参。
      */

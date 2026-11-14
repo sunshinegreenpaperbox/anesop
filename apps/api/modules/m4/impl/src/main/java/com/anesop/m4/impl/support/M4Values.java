@@ -65,4 +65,24 @@ public final class M4Values {
             return null;
         }
     }
+
+    /**
+     * UDI-DI 摘要：只取内部规范编码 {@code udiDi^udiPi} 中 {@code ^} 之前的 DI 部分，
+     * 不含 PI/序列号原文；null/空白返回 null。用于失败审计的 resourceId/detail，
+     * 既能定位是哪个器械，又不落 UDI 全串。
+     */
+    public static String udiDiSummary(String udi) {
+        if (udi == null) {
+            return null;
+        }
+        String trimmed = udi.trim();
+        int separator = trimmed.indexOf('^');
+        if (separator >= 0) {
+            trimmed = trimmed.substring(0, separator);
+        }
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        return trimmed.length() > 64 ? trimmed.substring(0, 64) : trimmed;
+    }
 }

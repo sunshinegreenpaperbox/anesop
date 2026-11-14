@@ -63,6 +63,24 @@ public final class M4Permissions {
     /** Spring Security 授权表达式中的授权审批权限：{@code PERM_m4:staff:authorize}。 */
     public static final String AUTHORITY_STAFF_AUTHORIZE = "PERM_" + STAFF_AUTHORIZE;
 
+    /** 耗材目录与批次库存只读（V23；目录全院可读，库存/流水按科室数据范围过滤）。 */
+    public static final String MATERIAL_READ = "m4:material:read";
+
+    /** 耗材目录维护与普通出入库（V23；高值耗材裸数量出入库被服务层拒绝）。 */
+    public static final String MATERIAL_WRITE = "m4:material:write";
+
+    /** UDI 一物一码登记、使用与追溯（V23；重复登记/重复使用 409）。 */
+    public static final String UDI_MANAGE = "m4:udi:manage";
+
+    /** Spring Security 授权表达式中的耗材只读权限：{@code PERM_m4:material:read}。 */
+    public static final String AUTHORITY_MATERIAL_READ = "PERM_" + MATERIAL_READ;
+
+    /** Spring Security 授权表达式中的耗材维护权限：{@code PERM_m4:material:write}。 */
+    public static final String AUTHORITY_MATERIAL_WRITE = "PERM_" + MATERIAL_WRITE;
+
+    /** Spring Security 授权表达式中的 UDI 管理权限：{@code PERM_m4:udi:manage}。 */
+    public static final String AUTHORITY_UDI_MANAGE = "PERM_" + UDI_MANAGE;
+
     private M4Permissions() {
     }
 }
