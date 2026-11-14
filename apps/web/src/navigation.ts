@@ -147,6 +147,12 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m4:qc:read'],
   },
   {
+    path: '/m5/dashboard',
+    title: '实时看板',
+    icon: 'sessions',
+    permissions: ['m5:dashboard:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',
