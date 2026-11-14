@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR）
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.9.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -439,6 +439,42 @@ packages/contracts/
   与转出时间；转出记录 append-only，一次一条，重复转出 409。
   `GET .../discharge`（`getPacuDischarge`）未转出 404。
 - **示例**：全部 SYNTHETIC（演示患者/演示 SBAR/演示分项），不含真实患者数据。
+
+### 3.12 术后随访与镇痛（M3-M11-01，anesthesia 0.10.0 additive）
+
+> 0.10.0 只新增路径与 schema（5 个 operation、11 个 schema：`PostopFollowup`/
+> `PostopFollowupList`/`CreatePostopFollowupRequest`/`FollowupType`/`FollowupComplication`/
+> `PainManagement`/`PainManagementList`/`RecordPainManagementRequest`/`PainAdjustment`/
+> `PainManagementModality`/`PainManagementEffect`），未删除或改类型既有定义；
+> `anesthesia.yaml` 与 `baseline/anesthesia.yaml` 同步更新，`oasdiff`（baseline → 当前、
+> HEAD baseline → 当前）均无破坏性变更。**注意**：契约中旧占位 `/v1/anesthesia/follow-ups`
+> （带连字符、`FollowUp`/`FollowUpPage`）保留未实现并已标 `deprecated: true`，本期实现的是
+> `/v1/anesthesia/followups`（`PostopFollowup`）；两者不得混用，旧占位下线已登记为独立任务
+> （见 `docs/modules/m2/README.md` §16.9 Q-6）。随访窗口、PONV 分级、并发症字典、PCA 默认值
+> 与剂量单位均为**演示口径【待确认】**，系统不替代临床判断（H-06）。
+
+- **录入随访** `POST /v1/anesthesia/followups`（`createPostopFollowup`，`m2:followup:write`）：
+  body `{anesthesiaRecordId, followupType:H24|H48, assessedAt, nrsScore:0–10,
+  ponvScore:0–3, complications[], complicationNotes?, patientFeedback?, followedUpBy}`。
+  记录单必须**已结束**（`endedAt` 非空，否则 409 `STATE_CONFLICT`）；记录单不存在或不可见
+  统一 422（不泄露存在性）；`assessedAt` 早于记录结束/晚于当前时间+容差/早于同记录同类型
+  上一条 400；评分越界、并发症不在白名单、文本 >500、随访人缺失/超长 400。随访
+  append-only（数据库 55000），同记录同类型可多次随访；说明与反馈由服务端脱敏后落库：
+  手机号容忍 `+86`/空格/短横线/括号（11 位），身份证号容忍空格/短横线（18 位含末位 X、
+  15 位旧版），日期/剂量等普通数字不受影响。
+- **查询** `GET /v1/anesthesia/followups?recordId=`（`listPostopFollowups`）与
+  `GET /v1/anesthesia/followups/{followupId}`（`getPostopFollowup`，均
+  `m2:followup:read`）：返回类型、时间、NRS/PONV、并发症、脱敏说明/反馈、随访人；
+  列表 `assessedAt` 倒序，`recordId` 缺失/非 UUID 400，记录单不可见 403，单对象越界 404。
+- **镇痛记录** `POST /v1/anesthesia/followups/{followupId}/pain-management`
+  （`recordPainManagement`，`m2:followup:write`）：body `{modality, drug, bolusDose>0,
+  backgroundDose≥0, lockoutMinutes>0, effect, adjustments[]}`；方式
+  `PCIA/PCEA/ORAL/IV/NERVE_BLOCK/OTHER`、效果 `EFFECTIVE/PARTIAL/INEFFECTIVE/
+  NOT_ASSESSED`（演示口径）；参数越界/药物缺失或超长/调整记录 >20 条或说明非法 400；
+  随访不存在/越界 404。append-only，参数调整只能新增记录，不得改写历史。药物名称与
+  调整说明属自由文本，落库与审计前经 `PhiMasker` 脱敏（评审 S-1）。
+  `GET .../pain-management`（`listPainManagement`）按录入时间升序返回。
+- **示例**：全部 SYNTHETIC（演示随访护士/演示并发症/演示镇痛方案），不含真实患者标识。
 
 ## 4. 错误模型
 

@@ -437,21 +437,54 @@ UPDATE/DELETE/TRUNCATE 由触发器拒绝（SQLSTATE 55000）。
 409 并逐项列出条件码；SBAR 原文与评估备注不写日志/审计。未处理严重告警是否阻断转出【待确认】
 （未实现）。
 
-### 3.7 随访记录 `follow_up`
+### 3.7 术后随访 `m2_anes.followup_record`（V19 已实现，M3-M11-01，append-only）
+
+随访只能录入到已结束（`ended_at` 非空）且 `patient_id` 与父记录一致的麻醉记录单（BEFORE
+INSERT 守卫 55000）；同一记录单同一随访类型可多次随访，但 `assessed_at` 不得早于上一条
+（时间序列只增），H24/H48 序列相互独立。父表被 `pain_management` 外键引用，
+`TRUNCATE ... CASCADE` 仍由 append-only 触发器拒绝（55000）。
 
 | 字段 | 类型 | 必填 | 说明 | 来源/备注 |
 |---|---|---|---|---|
-| `follow_up_id` | bigint | 是 | 主键 | 契约 `FollowUp` |
-| `record_id` | bigint | 是 | 记录单 | §2.4.3 |
-| `follow_up_hours` | smallint | 是 | 24/48 小时 | §2.4.3 |
-| `pain_score` | smallint | 是 | 疼痛评分 NRS 0–10 | §2.4.3；量表口径【待确认】 |
-| `ponv` | boolean | 是 | 术后恶心呕吐 | §2.4.3、glossary |
-| `cognition` | text | 是 | 认知状态 | §2.4.3 |
-| `satisfaction` | smallint | 是 | 满意度 1–5 | §2.4.3；量表口径【待确认】 |
-| `completed_at` | timestamptz | 是 | 随访完成时间 | §2.4.3 |
-| 审计字段 | — | 是 | 审计字段 | §3.4.3 |
+| `id` | uuid | 是 | 主键（gen_random_uuid） | 契约 `PostopFollowup.followupId` |
+| `anesthesia_record_id` | uuid | 是 | 所属麻醉记录单（FK；必须已结束） | CHECK 由触发器守卫（55000） |
+| `patient_id` | uuid | 是 | 患者标识（由记录单解析，不存姓名/证件号/住院号明文） | §3.9.3 |
+| `followup_type` | varchar(8) | 是 | `H24`/`H48`（随访窗口容差【待确认】） | CHECK `ck_followup_record_type` |
+| `assessed_at` | timestamptz | 是 | 随访时间（≥ 记录 ended_at；同类型不早于上一条） | 服务层 400 + 触发器守卫 |
+| `nrs_score` | smallint | 是 | NRS 疼痛评分 0–10（量表口径【待确认】） | CHECK `ck_followup_record_nrs` |
+| `ponv_score` | smallint | 是 | PONV 评分 0–3（演示分级【待确认】） | CHECK `ck_followup_record_ponv` |
+| `complications` | jsonb | 是 | 并发症码数组（≤20，白名单见契约 `FollowupComplication`） | CHECK 数组类型/长度 |
+| `complication_notes` | varchar(500) | 否 | 并发症说明（服务端脱敏后落库） | 契约 `complicationNotes` |
+| `patient_feedback` | varchar(500) | 否 | 患者反馈（服务端脱敏后落库） | 契约 `patientFeedback` |
+| `followed_up_by` | varchar(64) | 是 | 随访人姓名摘要（操作人另记 created_by） | 契约 `followedUpBy` |
+| `created_at` / `created_by` | timestamptz / uuid | 是 | 录入时间与录入人 | §3.4.3 |
+| `version` | bigint | 是 | 版本号（append-only 恒为 1，通用审计字段） | CHECK `version >= 1` |
 
-说明：随访任务由 M2 生成并超时提醒；PCA 与神经阻滞随访字段在 M2 细化【待确认】。
+说明：append-only（UPDATE/DELETE/TRUNCATE 由触发器拒绝，55000）；审计
+`FOLLOWUP_CREATE` 只记结构化字段，不含说明/反馈原文与 PHI；手机号（容忍 `+86`/空格/
+短横线/括号）、18 位（含末位 X）/15 位身份证号（容忍空格/短横线）形似串由 `PhiMasker`
+遮蔽后落库。并发症字典、PONV 分级、随访窗口与超时提醒均【待确认】
+（`docs/modules/m2/README.md` §16.9）。
+
+### 3.7.1 术后镇痛 `m2_anes.pain_management`（V19 已实现，append-only）
+
+| 字段 | 类型 | 必填 | 说明 | 来源/备注 |
+|---|---|---|---|---|
+| `id` | uuid | 是 | 主键（gen_random_uuid） | 契约 `PainManagement.painManagementId` |
+| `followup_id` | uuid | 是 | 所属随访单（FK） | 契约 `followupId` |
+| `modality` | varchar(16) | 是 | `PCIA/PCEA/ORAL/IV/NERVE_BLOCK/OTHER`（演示口径【待确认】） | CHECK |
+| `drug` | varchar(128) | 是 | 药物/方案名称（服务端脱敏后落库，不含患者标识） | CHECK 非空/长度；`PhiMasker` |
+| `bolus_dose` | numeric(10,2) | 是 | 单次追加剂量（> 0；单位【待确认】） | CHECK `ck_pain_management_bolus` |
+| `background_dose` | numeric(10,2) | 是 | 背景输注剂量（≥ 0；单位【待确认】） | CHECK |
+| `lockout_minutes` | integer | 是 | 锁定时间（分钟，> 0；默认值【待确认】） | CHECK `ck_pain_management_lockout` |
+| `effect` | varchar(16) | 是 | `EFFECTIVE/PARTIAL/INEFFECTIVE/NOT_ASSESSED`（演示口径【待确认】） | CHECK |
+| `adjustments` | jsonb | 是 | 调整记录数组 `[{adjustedAt, description}]`（≤20；说明脱敏） | CHECK 数组类型/长度 |
+| `created_at` / `created_by` | timestamptz / uuid | 是 | 录入时间与录入人 | §3.4.3 |
+| `version` | bigint | 是 | 版本号（append-only 恒为 1） | CHECK `version >= 1` |
+
+说明：append-only（55000）；同一随访可多次追加（参数调整即新增），历史不可改写；审计
+`PAIN_MANAGE` 只记方式/参数/效果/调整条数，不含调整说明原文与 PHI；PCA 默认值与剂量单位
+未内置【待确认】（`docs/modules/m2/README.md` §16.9 Q-2）。
 
 ### 3.8 三方核查 `m2_anes.three_way_check`（V11 已实现，M2-M5-01）
 
@@ -553,7 +586,9 @@ CA 不可用（EXT-05）：`caStatus=SIMULATED` 仅为占位留痕，不构成�
 | `PacuRecord` | `m2_anes.pacu_record` | 复苏记录：入室信息、状态机、阈值展示（V18） |
 | `PacuAssessment`、`PacuAssessmentList`、`RecordPacuAssessmentRequest` | `m2_anes.pacu_assessment` | Aldrete 五项/总分 append-only 时间序列（V18） |
 | `PacuDischarge`、`PacuDischargeRequest`、`PacuDischargeCriteria`、`PacuHandover` | `m2_anes.pacu_discharge` | 转出留痕、SBAR 交接与达标快照（V18） |
-| `FollowUp` | `follow_up` | 24/48 小时随访 |
+| `PostopFollowup`、`PostopFollowupList`、`CreatePostopFollowupRequest`、`FollowupType`、`FollowupComplication` | `m2_anes.followup_record` | 24/48 小时随访、NRS/PONV、并发症、脱敏说明/反馈（V19，append-only） |
+| `PainManagement`、`PainManagementList`、`RecordPainManagementRequest`、`PainAdjustment`、`PainManagementModality`、`PainManagementEffect` | `m2_anes.pain_management` | 镇痛方式/参数/效果/调整记录（V19，append-only） |
+| `FollowUp`、`FollowUpPage`、`CreateFollowUpRequest`（旧占位） | 未落表 | 早期 `/follow-ups` 契约占位，未实现；0.10.0 实现的是 `/followups`（见 §16.9 Q-6） |
 | `CurrentUser`、`DataScope` | `sys_user`、`sys_role_data_scope` 等 | 权限投影，不是单表 |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
 

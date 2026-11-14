@@ -12,7 +12,8 @@
 > + V15（M2 术中预警规则/告警留痕/抢救记录，M3-M2-02）
 > + V16（M2 预警实时触发水位/记录术间快照/规则待确认/抢救人员留痕，M3-M2-02 评审修复）
 > + V17（M2 锁单/修订/CA 占位签名，M3-M2-03）
-> + V18（M2 复苏记录/Aldrete 评估/转出交接，M3-M10-01）；
+> + V18（M2 复苏记录/Aldrete 评估/转出交接，M3-M10-01）
+> + V19（M2 术后随访/镇痛与并发症，M3-M11-01）；
 > 演示种子为独立 location。权威依据：方案书 §3.4（数据设计）、§3.9（安全）、
 > `AGENTS.md`「契约优先与数据变更」，决策 D-04（数据库与信创）。
 > 迁移脚本目录：`db/migration/`；生产挂载点：`/opt/anesop/db/migration`。
@@ -40,6 +41,7 @@ db/
 │   ├── V16__m2_alert_realtime_watermark_rescue_leader.sql # 记录术间快照/评估水位/规则待确认/抢救人员（M3-M2-02 评审修复）
 │   ├── V17__m2_record_lock_revision.sql    # m2_anes 修订版本/锁单留痕 + m2:record:lock/revise（M3-M2-03）
 │   ├── V18__m2_pacu_recovery.sql           # m2_anes 复苏记录/Aldrete 评估/转出 + m2:pacu:*（M3-M10-01）
+│   ├── V19__m2_followup_pain.sql           # m2_anes 术后随访/镇痛 + m2:followup:*（M3-M11-01）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
     └── V100__demo_admin_synthetic.sql   # demo_admin/demo_dept/demo_self + SITE/DEPT 组织（SYNTHETIC，禁止进入生产）
@@ -61,7 +63,7 @@ db/
 |---|---|---|
 | `m0_platform` | M0 公共支撑 | 用户、角色、权限、审计、字典（本基线） |
 | `m1_sched` | M1 手术排程 | 手术申请、排程/台次、术间 |
-| `m2_anes` | M2 麻醉记录 | 术前访视（V10）、知情同意/三方核查（V11）、记录单/事件/用药/出入量（V13）、设备登记与体征（V4/V14）、预警/抢救（V15/V16）、锁单/修订（V17）、复苏记录/Aldrete/转出（V18） |
+| `m2_anes` | M2 麻醉记录 | 术前访视（V10）、知情同意/三方核查（V11）、记录单/事件/用药/出入量（V13）、设备登记与体征（V4/V14）、预警/抢救（V15/V16）、锁单/修订（V17）、复苏记录/Aldrete/转出（V18）、术后随访/镇痛（V19） |
 | `m3_staff` | M3 人员资质 | 人员档案、授权 |
 | `m4_supply` | M4 耗材追溯 | 批次、消耗 |
 | `m5_drug` | M5 药品管理 | 麻精台账、处方 |
@@ -476,6 +478,37 @@ V1–V17 既有列与数据。
 - **临床风险**：回滚窗口内“转出质检”能力缺失，须通知 PACU 恢复纸质/其他系统记录；
   已转出与评估留痕属临床证据，回滚前必须归档到离线审计库并由医务处/麻醉科签字。
 - **运行时权限**：append-only 与状态守卫依赖触发器，应用运行账号不得拥有 DDL 权限
+  （见 §5.3）。
+
+### 4.14 V19（M2 术后随访、镇痛与并发症）回滚说明
+
+V19 属 expand 段：新增 `m2_anes.followup_record`（24/48 小时随访：类型 H24/H48、随访时间、
+NRS 0–10、PONV 0–3、并发症 jsonb 数组、脱敏说明/反馈、随访人、version；append-only）与
+`m2_anes.pain_management`（所属随访 FK、方式、药物、bolus/background/lockout、效果、
+调整记录 jsonb；append-only）；触发器：两表 UPDATE/DELETE/TRUNCATE 一律 55000，
+`followup_record` BEFORE INSERT 守卫要求父麻醉记录单存在、`patient_id` 与父记录一致、已结束
+且 `assessed_at ≥ ended_at`（55000，评审 S-4）；
+权限点 `m2:followup:read`、`m2:followup:write`（授 SYS_ADMIN/SYS_ANESTHESIOLOGIST/
+SYS_NURSE_ANESTHETIST）。不改写 V1–V18 既有列与数据。
+
+- **应用回滚**：下线 `/v1/anesthesia/followups*` 全部端点与前端随访页面入口（记录页
+  “术后随访”按钮）；麻醉记录单/PACU 仍可读写，两张新增表保留在库中不影响旧代码；
+  随访/镇痛审计（`FOLLOWUP_CREATE`/`PAIN_MANAGE`）不得随回滚删除。
+- **库层回滚**（前向修复，需 DBA 审批 + 备份 + 临床归档，顺序不可颠倒）：
+  `DROP TRIGGER trg_followup_record_guard_insert/no_update/no_delete/no_truncate ON
+  m2_anes.followup_record` → `DROP FUNCTION fn_followup_record_guard_insert()` /
+  `fn_followup_record_append_only()` / `fn_followup_record_no_truncate()` →
+  `DROP TRIGGER trg_pain_management_no_update/no_delete/no_truncate ON m2_anes.pain_management`
+  → `DROP FUNCTION fn_pain_management_append_only()` / `fn_pain_management_no_truncate()` →
+  `DROP TABLE m2_anes.pain_management`（先 `pg_dump -t` 导出并校验行数）→
+  `DROP TABLE m2_anes.followup_record` → 删除权限点与角色授权（先
+  `DELETE FROM sys_role_permission`，再 `DELETE FROM sys_permission`）。
+- **重放**：修复后重新执行 V19 会重建空表与触发器；已归档的随访/镇痛**不得直接回灌**
+  （append-only 语义），如需恢复须按原标识/原时间重新录入并在说明注明补录原因（须临床确认）。
+- **临床风险**：回滚窗口内 24/48h 随访与镇痛随访能力缺失，须通知麻醉科/护理部改用
+  纸质/其他系统记录；随访与镇痛留痕属临床证据，回滚前必须归档到离线审计库并由
+  医务处/麻醉科签字。
+- **运行时权限**：append-only 与随访前置守卫依赖触发器，应用运行账号不得拥有 DDL 权限
   （见 §5.3）。
 
 ## 5. 运行方式

@@ -622,12 +622,14 @@ export interface paths {
     }
     /**
      * 查询术后随访列表
+     * @deprecated
      * @description 按记录单分页查询 24/48 小时随访；不传 recordId 时按当前用户数据范围返回。
      */
     get: operations['listFollowUps']
     put?: never
     /**
      * 创建术后随访
+     * @deprecated
      * @description 记录 24/48 小时随访的镇痛、PONV、认知与满意度；超时任务由 M2 随访待办提醒。
      */
     post: operations['createFollowUp']
@@ -646,6 +648,7 @@ export interface paths {
     }
     /**
      * 查询术后随访
+     * @deprecated
      * @description 按随访标识返回 24/48 小时随访记录。
      */
     get: operations['getFollowUp']
@@ -964,6 +967,104 @@ export interface paths {
      *     转出时间取服务端当前时间；SBAR 四段必填（缺失/超长 400）。
      */
     post: operations['dischargePacuRecord']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/followups': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 按麻醉记录单查询术后随访
+     * @description 按麻醉记录单查询术后随访（H24/H48），按 `assessedAt` 倒序（同刻按录入时间与标识稳定
+     *     排序）。数据范围复用记录单/台次可见性：记录单不可见时按集合语义返回 403（不返回空
+     *     列表，不泄露存在性）。`recordId` 缺失或非 UUID 字符串返回 400（字段级校验）。
+     */
+    get: operations['listPostopFollowups']
+    put?: never
+    /**
+     * 录入术后随访（append-only）
+     * @description 为**已结束**（`endedAt` 非空）的麻醉记录单录入术后随访：随访类型 H24/H48、随访时间、
+     *     NRS 疼痛评分 0–10、PONV 评分 0–3、并发症多选（白名单，见 `FollowupComplication`）
+     *     与自由文本说明、患者反馈、随访人。规则：
+     *
+     *     1. 记录单不存在或不可见（请求体参数）统一返回 422（按不可见处理，不泄露存在性）；
+     *        记录单未结束返回 409（随访只能在麻醉结束后进行）；
+     *     2. `assessedAt` 不得早于记录单结束时间（400）、不得晚于服务端当前时间 + 容差（400）、
+     *        同一记录单同一随访类型不得早于上一条（400，同刻允许；时间序列只增）；
+     *     3. 评分越界（NRS 0–10、PONV 0–3）、并发症取值不在白名单、文本超长（≤500）返回 400；
+     *     4. 并发症说明与患者反馈在服务端脱敏后落库，审计与日志不含原文与 PHI：手机号容忍
+     *        `+86`/空格/短横线/括号（11 位）、身份证号容忍空格/短横线（18 位含末位 X、15 位旧版），
+     *        按整段遮蔽；日期/剂量等普通数字不受影响。系统提示不得录入姓名/住院号等直接标识，
+     *        姓名/住院号无固定格式无法可靠自动识别（§16.9 Q-10）；
+     *     5. 记录 append-only：更正只能新增随访（数据库触发器拒绝 UPDATE/DELETE/TRUNCATE，
+     *        55000）；同记录同类型允许多次随访。
+     *     并发症字典、PONV 分级、随访窗口容差均为**演示口径【待确认】**。
+     */
+    post: operations['createPostopFollowup']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/followups/{followupId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询术后随访详情
+     * @description 返回随访评分、并发症、脱敏后的说明与反馈、随访人；不存在或超出数据范围 404。
+     */
+    get: operations['getPostopFollowup']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/anesthesia/followups/{followupId}/pain-management': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询随访的镇痛记录
+     * @description 按随访单查询镇痛记录（按录入时间升序，append-only 时间序列）。随访单不存在或超出
+     *     数据范围 404。同一随访可多次追加镇痛记录（参数调整即新增一条），历史不可改写。
+     */
+    get: operations['listPainManagement']
+    put?: never
+    /**
+     * 记录镇痛方案与效果（append-only）
+     * @description 为随访单追加一条镇痛记录：镇痛方式（PCIA/PCEA/ORAL/IV/NERVE_BLOCK/OTHER）、药物、
+     *     参数（bolus 剂量 > 0、background 剂量 ≥ 0、lockout 分钟 > 0）、效果、调整记录。
+     *     规则：
+     *
+     *     1. 随访单不存在或超出数据范围 404；
+     *     2. `modality`/`effect` 取值非法、药物缺失或超长（≤128）、`bolusDose <= 0`、
+     *        `backgroundDose < 0`、`lockoutMinutes <= 0`、调整记录超过 20 条或说明为空/超长
+     *        （≤200）返回 400；调整记录时间不得晚于服务端当前时间 + 容差（400）；
+     *     3. 记录 append-only：参数调整只能新增镇痛记录（数据库触发器拒绝 UPDATE/DELETE/
+     *        TRUNCATE，55000），历史不可改写；药物名称与调整说明属自由文本，落库与审计前
+     *        统一脱敏（手机号/身份证号形似串，容忍 `+86`/空格/短横线/括号）；
+     *     4. **PCA 参数默认值与剂量单位未内置**（【待确认】），系统只做物理校验，不推荐处方，
+     *        不替代医师判断（H-06）。
+     */
+    post: operations['recordPainManagement']
     delete?: never
     options?: never
     head?: never
@@ -3002,6 +3103,183 @@ export interface components {
       createdAt: string
       /** @description 转出操作人用户标识。 */
       createdBy: string
+    }
+    /**
+     * @description 随访类型：H24=术后 24 小时随访，H48=术后 48 小时随访。窗口容差（允许提前/延后
+     *     多少小时）与超时提醒未实现，口径【待确认】。
+     * @enum {string}
+     */
+    FollowupType: 'H24' | 'H48'
+    /**
+     * @description 术后并发症/不良事件（多选，**演示字典【待确认】**）。院方字典确认后以 additive
+     *     方式扩展枚举；自由文本细节放 `complicationNotes`（脱敏后落库）。
+     * @enum {string}
+     */
+    FollowupComplication:
+      | 'PONV'
+      | 'PAIN_INADEQUATE'
+      | 'RESPIRATORY_DEPRESSION'
+      | 'AIRWAY_INJURY'
+      | 'HYPOTENSION'
+      | 'HYPERTENSION'
+      | 'ARRHYTHMIA'
+      | 'SHIVERING'
+      | 'DELAYED_AWAKENING'
+      | 'NERVE_INJURY'
+      | 'SURGICAL_BLEEDING'
+      | 'INFECTION'
+      | 'OTHER'
+    /**
+     * @description 录入术后随访请求（append-only）。记录单必须已结束（endedAt 非空）；随访时间不得早于
+     *     记录结束时间、不得晚于服务端当前时间 + 容差、同记录同类型不得早于上一条。
+     *     并发症说明与患者反馈在服务端脱敏后落库，**不得录入姓名/住院号/身份证号等直接标识**。
+     */
+    CreatePostopFollowupRequest: {
+      /** @description 麻醉记录单标识（不存在/不可见 422；未结束 409；必须已结束且可见）。 */
+      anesthesiaRecordId: string
+      followupType: components['schemas']['FollowupType']
+      /**
+       * Format: date-time
+       * @description 随访评估时间（≥ 记录 endedAt；不得晚于服务端当前时间 + 容差）。
+       */
+      assessedAt: string
+      /** @description NRS 疼痛评分 0–10（0 无痛、10 剧痛；量表口径【待确认】）。 */
+      nrsScore: number
+      /** @description PONV 评分 0–3（演示分级【待确认】：0 无、1 轻度恶心、2 呕吐、3 严重呕吐）。 */
+      ponvScore: number
+      /** @description 并发症多选（演示字典【待确认】）；无并发症传空数组。 */
+      complications: components['schemas']['FollowupComplication'][]
+      /** @description 并发症自由文本说明（≤500 字符；服务端按手机号/身份证号形似串脱敏后落库， 容忍 +86/空格/短横线/括号，不写日志/审计原文）。 */
+      complicationNotes?: string
+      /** @description 患者反馈（≤500 字符；服务端按手机号/身份证号形似串脱敏后落库， 容忍 +86/空格/短横线/括号，不写日志/审计原文）。 */
+      patientFeedback?: string
+      /** @description 随访人姓名摘要（≤64 字符；操作人用户标识另记 createdBy）。 */
+      followedUpBy: string
+    }
+    /** @description 术后随访单（append-only；同记录同类型允许多次随访）。 */
+    PostopFollowup: {
+      /** @description 随访记录标识。 */
+      followupId: string
+      /** @description 所属麻醉记录单标识。 */
+      recordId: string
+      /** @description 患者标识（由记录单解析，不返回姓名/证件号/住院号明文）。 */
+      patientId: string
+      followupType: components['schemas']['FollowupType']
+      /**
+       * Format: date-time
+       * @description 随访评估时间。
+       */
+      assessedAt: string
+      /** @description NRS 疼痛评分 0–10。 */
+      nrsScore: number
+      /** @description PONV 评分 0–3（演示分级【待确认】）。 */
+      ponvScore: number
+      /** @description 并发症多选（演示字典【待确认】）。 */
+      complications: components['schemas']['FollowupComplication'][]
+      /** @description 脱敏后的并发症说明；未填写为 null。 */
+      complicationNotes?: string | null
+      /** @description 脱敏后的患者反馈；未填写为 null。 */
+      patientFeedback?: string | null
+      /** @description 随访人姓名摘要。 */
+      followedUpBy: string
+      /**
+       * Format: date-time
+       * @description 录入时间（服务端时间）。
+       */
+      createdAt: string
+      /** @description 录入人用户标识。 */
+      createdBy: string
+      /** @description 版本号（append-only 恒为 1，保留通用审计字段）。 */
+      version: number
+    }
+    /** @description 随访列表（按 assessedAt 倒序）。 */
+    PostopFollowupList: {
+      items: components['schemas']['PostopFollowup'][]
+    }
+    /**
+     * @description 镇痛方式（**演示口径【待确认】**）：PCIA=患者自控静脉镇痛，PCEA=患者自控硬膜外
+     *     镇痛，ORAL=口服，IV=静脉，NERVE_BLOCK=神经阻滞，OTHER=其他。
+     * @enum {string}
+     */
+    PainManagementModality: 'PCIA' | 'PCEA' | 'ORAL' | 'IV' | 'NERVE_BLOCK' | 'OTHER'
+    /**
+     * @description 镇痛效果（**演示口径【待确认】**）：EFFECTIVE=有效，PARTIAL=部分有效，
+     *     INEFFECTIVE=无效，NOT_ASSESSED=未评估。
+     * @enum {string}
+     */
+    PainManagementEffect: 'EFFECTIVE' | 'PARTIAL' | 'INEFFECTIVE' | 'NOT_ASSESSED'
+    /** @description 镇痛调整记录（随镇痛记录追加；调整只能新增镇痛记录，不得改写历史）。 */
+    PainAdjustment: {
+      /**
+       * Format: date-time
+       * @description 调整时间（不得晚于服务端当前时间 + 容差）。
+       */
+      adjustedAt: string
+      /** @description 调整说明（≤200 字符；脱敏后落库，不写日志/审计原文）。 */
+      description: string
+    }
+    /**
+     * @description 追加镇痛记录请求（append-only）。只做物理校验（bolus > 0、background ≥ 0、
+     *     lockout > 0）；**PCA 参数默认值与剂量单位未内置【待确认】**，系统不推荐处方，
+     *     不替代医师判断（H-06）。
+     */
+    RecordPainManagementRequest: {
+      modality: components['schemas']['PainManagementModality']
+      /** @description 药物名称/方案（≤128 字符；服务端脱敏后落库，不得含患者标识）。 */
+      drug: string
+      /**
+       * Format: double
+       * @description 单次追加剂量（> 0；单位随药物口径【待确认】）。
+       */
+      bolusDose: number
+      /**
+       * Format: double
+       * @description 背景输注剂量（≥ 0；单位随药物口径【待确认】）。
+       */
+      backgroundDose: number
+      /** @description 锁定时间（分钟，> 0；默认值未内置【待确认】）。 */
+      lockoutMinutes: number
+      effect: components['schemas']['PainManagementEffect']
+      /** @description 调整记录（可为空数组；≤20 条）。 */
+      adjustments?: components['schemas']['PainAdjustment'][]
+    }
+    /** @description 术后镇痛记录（append-only；同一随访可多次追加）。 */
+    PainManagement: {
+      /** @description 镇痛记录标识。 */
+      painManagementId: string
+      /** @description 所属随访记录标识。 */
+      followupId: string
+      /** @description 所属麻醉记录单标识。 */
+      recordId: string
+      modality: components['schemas']['PainManagementModality']
+      /** @description 药物名称/方案（服务端脱敏后的值）。 */
+      drug: string
+      /**
+       * Format: double
+       * @description 单次追加剂量。
+       */
+      bolusDose: number
+      /**
+       * Format: double
+       * @description 背景输注剂量。
+       */
+      backgroundDose: number
+      /** @description 锁定时间（分钟）。 */
+      lockoutMinutes: number
+      effect: components['schemas']['PainManagementEffect']
+      /** @description 调整记录。 */
+      adjustments: components['schemas']['PainAdjustment'][]
+      /**
+       * Format: date-time
+       * @description 录入时间（服务端时间）。
+       */
+      createdAt: string
+      /** @description 录入人用户标识。 */
+      createdBy: string
+    }
+    /** @description 镇痛记录列表（按录入时间升序）。 */
+    PainManagementList: {
+      items: components['schemas']['PainManagement'][]
     }
   }
   responses: {
@@ -6866,6 +7144,292 @@ export interface operations {
            *     }
            */
           'application/json': components['schemas']['PacuDischarge']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  listPostopFollowups: {
+    parameters: {
+      query: {
+        /** @description 麻醉记录单标识（UUID 字符串）。 */
+        recordId: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 该记录单的随访列表（0..n 条；同类型多次随访按时间倒序）。' */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "followupId": "1c000000-0000-4000-8000-000000000001",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "patientId": "50000000-0000-4000-8000-000000000001",
+           *           "followupType": "H24",
+           *           "assessedAt": "2026-12-02T09:00:00+08:00",
+           *           "nrsScore": 3,
+           *           "ponvScore": 1,
+           *           "complications": [
+           *             "PONV",
+           *             "PAIN_INADEQUATE"
+           *           ],
+           *           "complicationNotes": "演示：轻度恶心，镇痛后可缓解（合成数据）",
+           *           "patientFeedback": "演示：疼痛可耐受，希望追加镇痛（合成数据）",
+           *           "followedUpBy": "演示随访护士（合成）",
+           *           "createdAt": "2026-12-02T09:05:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000003",
+           *           "version": 1
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['PostopFollowupList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  createPostopFollowup: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "anesthesiaRecordId": "12000000-0000-4000-8000-000000000001",
+         *       "followupType": "H24",
+         *       "assessedAt": "2026-12-02T09:00:00+08:00",
+         *       "nrsScore": 3,
+         *       "ponvScore": 1,
+         *       "complications": [
+         *         "PONV",
+         *         "PAIN_INADEQUATE"
+         *       ],
+         *       "complicationNotes": "演示：轻度恶心，镇痛后可缓解（合成数据）",
+         *       "patientFeedback": "演示：疼痛可耐受，希望追加镇痛（合成数据）",
+         *       "followedUpBy": "演示随访护士（合成）"
+         *     }
+         */
+        'application/json': components['schemas']['CreatePostopFollowupRequest']
+      }
+    }
+    responses: {
+      /** @description 随访录入成功（append-only）。' */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "followupId": "1c000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "followupType": "H24",
+           *       "assessedAt": "2026-12-02T09:00:00+08:00",
+           *       "nrsScore": 3,
+           *       "ponvScore": 1,
+           *       "complications": [
+           *         "PONV",
+           *         "PAIN_INADEQUATE"
+           *       ],
+           *       "complicationNotes": "演示：轻度恶心，镇痛后可缓解（合成数据）",
+           *       "patientFeedback": "演示：疼痛可耐受，希望追加镇痛（合成数据）",
+           *       "followedUpBy": "演示随访护士（合成）",
+           *       "createdAt": "2026-12-02T09:05:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000003",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['PostopFollowup']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+      422: components['responses']['UnprocessableEntity']
+    }
+  }
+  getPostopFollowup: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 随访记录标识（UUID 字符串）。 */
+        followupId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 随访详情。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "followupId": "1c000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "patientId": "50000000-0000-4000-8000-000000000001",
+           *       "followupType": "H24",
+           *       "assessedAt": "2026-12-02T09:00:00+08:00",
+           *       "nrsScore": 3,
+           *       "ponvScore": 1,
+           *       "complications": [
+           *         "PONV",
+           *         "PAIN_INADEQUATE"
+           *       ],
+           *       "complicationNotes": "演示：轻度恶心，镇痛后可缓解（合成数据）",
+           *       "patientFeedback": "演示：疼痛可耐受，希望追加镇痛（合成数据）",
+           *       "followedUpBy": "演示随访护士（合成）",
+           *       "createdAt": "2026-12-02T09:05:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000003",
+           *       "version": 1
+           *     }
+           */
+          'application/json': components['schemas']['PostopFollowup']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  listPainManagement: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 随访记录标识（UUID 字符串）。 */
+        followupId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 镇痛记录列表。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "painManagementId": "1d000000-0000-4000-8000-000000000001",
+           *           "followupId": "1c000000-0000-4000-8000-000000000001",
+           *           "recordId": "12000000-0000-4000-8000-000000000001",
+           *           "modality": "PCIA",
+           *           "drug": "演示舒芬太尼方案（合成数据）",
+           *           "bolusDose": 2,
+           *           "backgroundDose": 1,
+           *           "lockoutMinutes": 15,
+           *           "effect": "PARTIAL",
+           *           "adjustments": [
+           *             {
+           *               "adjustedAt": "2026-12-02T10:30:00+08:00",
+           *               "description": "演示：追加 bolus 1 次，疼痛缓解（合成数据）"
+           *             }
+           *           ],
+           *           "createdAt": "2026-12-02T09:10:00+08:00",
+           *           "createdBy": "10000000-0000-4000-8000-000000000003"
+           *         }
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['PainManagementList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  recordPainManagement: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 随访记录标识（UUID 字符串）。 */
+        followupId: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "modality": "PCIA",
+         *       "drug": "演示舒芬太尼方案（合成数据）",
+         *       "bolusDose": 2,
+         *       "backgroundDose": 1,
+         *       "lockoutMinutes": 15,
+         *       "effect": "PARTIAL",
+         *       "adjustments": [
+         *         {
+         *           "adjustedAt": "2026-12-02T10:30:00+08:00",
+         *           "description": "演示：追加 bolus 1 次，疼痛缓解（合成数据）"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['RecordPainManagementRequest']
+      }
+    }
+    responses: {
+      /** @description 镇痛记录追加成功（append-only）。' */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "painManagementId": "1d000000-0000-4000-8000-000000000001",
+           *       "followupId": "1c000000-0000-4000-8000-000000000001",
+           *       "recordId": "12000000-0000-4000-8000-000000000001",
+           *       "modality": "PCIA",
+           *       "drug": "演示舒芬太尼方案（合成数据）",
+           *       "bolusDose": 2,
+           *       "backgroundDose": 1,
+           *       "lockoutMinutes": 15,
+           *       "effect": "PARTIAL",
+           *       "adjustments": [
+           *         {
+           *           "adjustedAt": "2026-12-02T10:30:00+08:00",
+           *           "description": "演示：追加 bolus 1 次，疼痛缓解（合成数据）"
+           *         }
+           *       ],
+           *       "createdAt": "2026-12-02T09:10:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000003"
+           *     }
+           */
+          'application/json': components['schemas']['PainManagement']
         }
       }
       400: components['responses']['BadRequest']

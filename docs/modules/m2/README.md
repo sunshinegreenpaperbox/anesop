@@ -2,16 +2,17 @@
 
 > 状态：M2-M4-01「术前访视与评估」+ M2-M5-01「知情同意与三方核查」+ M3-M2-01
 > 「麻醉记录单与时间轴」+ M3-M2-02「术中预警规则与抢救记录」+ M3-M2-03
-> 「锁单/修订/CA 签名（模拟）」+ M3-M10-01「复苏记录与转出（Aldrete、SBAR 交接）」
-> 落地版（2026-11-14）。
-> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.9.0；
+> 「锁单/修订/CA 签名（模拟）」+ M3-M10-01「复苏记录与转出（Aldrete、SBAR 交接）」+
+> M3-M11-01「术后随访与镇痛（24/48h、PCA、并发症）」落地版（2026-11-14）。
+> 契约：`packages/contracts/openapi/anesthesia.yaml` 0.10.0；
 > 迁移：`db/migration/V10__m2_preop_assessment.sql`、
 > `db/migration/V11__m2_consent_threeway.sql`、
 > `db/migration/V13__m2_anesthesia_record.sql`、
 > `db/migration/V15__m2_alert_rescue.sql`、
 > `db/migration/V16__m2_alert_realtime_watermark_rescue_leader.sql`、
 > `db/migration/V17__m2_record_lock_revision.sql`、
-> `db/migration/V18__m2_pacu_recovery.sql`；
+> `db/migration/V18__m2_pacu_recovery.sql`、
+> `db/migration/V19__m2_followup_pain.sql`；
 > 方案书：§2.4.3（M2 术前访视/知情同意/三方核查/麻醉计划）、§3.4.2（麻醉记录单与访视实体）、
 > §3.4.3（审计字段/乐观锁/逻辑删除）、§3.9.2（RBAC/数据权限）、§3.9.3（脱敏）、
 > §3.9.4（CA 签名；EXT-05 CA 不可用，本期为占位/自签哈希）。
@@ -56,15 +57,18 @@ apps/api/modules/m2/
 │   │               PreopConflictException（409）、PreopUnprocessableException（422）
 │   ├── consent/    ConsentService（模板/创建/签署/拒绝/撤销）
 │   ├── threeway/   ThreeWayCheckService（录入/查询/isThreeWayCheckCompleted）
+│   ├── followup/   FollowupService（术后随访/镇痛，append-only）
 │   ├── error/      M2ValidationException（400）、M2ConflictException（409）、
-│   │               M2UnprocessableException（422），供同意/核查复用
-│   └── security/   M2Permissions（m2:preop|consent|threeway:read|write）
+│   │               M2UnprocessableException（422），供同意/核查/随访复用
+│   └── security/   M2Permissions（m2:preop|consent|threeway|pacu|followup:read|write）
 └── impl/ com.anesop.m2.impl
     ├── preop/      PreopAssessmentServiceImpl（事务/状态机/可见性/审计）
     │               PreopScoreCalculator（RCRI/Apfel/STOP-BANG/DASI，临床规则高风险）
     ├── consent/    ConsentServiceImpl（CA 占位签名、状态机、模板版本冻结、审计）
     ├── threeway/   ThreeWayCheckServiceImpl（append-only 版本、完成判定、时间校验）
+    ├── followup/   FollowupServiceImpl（术后前置/评分边界/时间单调/镇痛参数/脱敏/审计）
     ├── support/    AnesthesiaApplicationSummaries（复用 m1-api 申请快照，不读 m1 表）
+    │               PhiMasker（随访自由文本脱敏：手机号/身份证号形似串）
     └── persistence/  PreopAssessmentEntity/Mapper、ConsentTemplateEntity/Mapper、
                       ConsentRecordEntity/Mapper、ThreeWayCheckEntity/Mapper
 ```
@@ -82,7 +86,8 @@ apps/web/src/modules/m2/
 ├── views/ThreeWayCheckView.vue   Time-out/Sign-out/标本/植入物/问题项 + 版本历史
 ├── views/ThreeWayCheckEntryView.vue 三方核查菜单入口
 ├── views/PacuView.vue           PACU 入室/Aldrete 评分表与时间序列/转出（SBAR）
-└── __tests__/                    Vitest（术前访视 4 + 同意 5 + 核查 7 + PACU 4）
+├── views/FollowupView.vue       术后随访（24/48h、NRS/PONV/并发症/反馈）与镇痛（PCA）
+└── __tests__/                    Vitest（术前访视 4 + 同意 5 + 核查 7 + PACU 4 + 随访 6）
 ```
 
 ## 3. 接口（anesthesia 0.8.1）
@@ -477,6 +482,10 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
 - `AldreteCalculatorTest`（4 用例）+ `PacuServiceImplTest`（29 用例）+
   `PacuRecoveryApiIntegrationTest`（5 用例，嵌入式 PG16：入室→评估→转出、评估时间单调 400、
   阈值 409、append-only 55000、权限/跨科室、V18 结构/审计）——详见 §15.8。
+- `FollowupServiceImplTest`（20 用例）+ `PhiMaskerTest`（6 用例）+ `FollowupPainApiIntegrationTest`
+  （4 用例，嵌入式 PG16：记录单未结束 409、NRS/PONV 边界与越界 400、同类型时间单调 400、
+  镇痛参数 400、多格式脱敏落库、append-only 55000 与 TRUNCATE CASCADE、patient_id 守卫、
+  权限/跨科室、V19 结构/审计）——详见 §16.8。
 - 前端 Vitest：术前访视 4 用例 + 知情同意 5 用例（加载/创建/签署/撤销/403）+
   三方核查 7 用例（空态/Time-out/Sign-out 完成/必选逐项确认/二次确认取消/Time-out 预填/403）+
   麻醉记录单 6 用例（空态创建/时间轴与汇总/追加事件/麻精双人核对拦截/出入量/只读态）+
@@ -1142,3 +1151,149 @@ anesop:
 | Q-7 | 转出前评估时效窗 | 未实现（取最近一次评估，不限制间隔） | 是否要求转出前 N 分钟内重新评估，N 由麻醉科/医务处确认 |
 | Q-8 | READY→MONITORING 回落 | 允许（最新评估低于阈值时回落） | READY 后是否只能维持/转出、不得回退 MONITORING（麻醉科/医务处） |
 | Q-9 | 入室体征必须项 | 前端要求六项关键体征；契约/服务端允许缺项 | 哪些体征强制必填、缺项是否阻断入室（麻醉科/护理部/信息科） |
+
+## 16. 术后随访与镇痛（M3-M11-01，契约 0.10.0 + V19）
+
+### 16.1 接口与权限
+
+| 端点（operationId） | 权限 | 说明 |
+|---|---|---|
+| `GET /v1/anesthesia/followups?recordId=`（`listPostopFollowups`） | `m2:followup:read` | 按记录单查询随访（assessedAt 倒序）；`recordId` 缺失/非 UUID 400；记录单不可见 403（集合语义） |
+| `POST /v1/anesthesia/followups`（`createPostopFollowup`） | `m2:followup:write` | 录入随访（201，append-only）；记录单不存在/不可见 422（不泄露存在性）、未结束 409、时间/评分/文本校验 400 |
+| `GET /v1/anesthesia/followups/{followupId}`（`getPostopFollowup`） | `m2:followup:read` | 随访详情；不存在/越界 404 |
+| `GET /v1/anesthesia/followups/{followupId}/pain-management`（`listPainManagement`） | `m2:followup:read` | 镇痛记录（录入时间升序）；随访不存在/越界 404 |
+| `POST /v1/anesthesia/followups/{followupId}/pain-management`（`recordPainManagement`） | `m2:followup:write` | 追加镇痛记录（201，append-only）；参数校验 400、随访越界 404 |
+
+数据范围沿用记录单/台次可见性（只调 m1-api，不读 m1 表）：按记录单列表为集合语义
+（越权 403），单对象操作越界 404，录入时记录单不可见 422。V19 权限点
+`m2:followup:read|write` 授予 SYS_ADMIN、SYS_ANESTHESIOLOGIST、SYS_NURSE_ANESTHETIST
+（与记录单/PACU 同口径）；病房护士等其他角色是否可随访待护理部/麻醉科确认（§16.9 Q-5）。
+
+> 契约中另存在早期占位的 `/v1/anesthesia/follow-ups`（带连字符，`FollowUp`/`FollowUpPage`，
+> 含 patientName/patientNo 字段）**未实现**，0.10.0 已在契约中标注 `deprecated: true`，
+> 本期实现的是 `/followups`（无连字符）与 `PostopFollowup`。两者不得混用；旧占位的
+> 下线/收敛登记为独立任务（§16.9 Q-6），需兼容性评估与契约评审。
+
+### 16.2 随访前置与时间口径
+
+- 随访只能录入到**已结束**的麻醉记录单（`ended_at` 非空）；未结束 409 `STATE_CONFLICT`，
+  并以独立事务写 `FOLLOWUP_CREATE result=0`（只含 `rejection=RECORD_NOT_ENDED`）。
+- `assessedAt`：≥ 记录 `endedAt`（否则 400，是否应改 409 待确认，§16.9 Q-8）；≤ 服务端当前时间 + 容差
+  （`anesop.m2.record.time-tolerance-seconds`，默认 600s，否则 400）；同一记录单同一随访类型
+  **不得早于上一条**（400，同刻允许）。latest 按
+  `assessed_at DESC, created_at DESC, id DESC` 判定。
+- 并发：录入事务先 `SELECT ... FOR UPDATE` 锁麻醉记录单行，把同一记录的并发随访串行化，
+  保证“同类型时间单调”检查在同一把锁下成立。
+- 同一记录单同类型允许多次随访（如 24h 首次 + 补录），H24 与 H48 的时间序列相互独立；
+  更正只能新增随访，不得改写历史。
+- **随访窗口（允许提前/延后多少小时）与超时提醒未实现**，只按类型记录，口径【待确认】
+  （§16.9 Q-1）。
+
+### 16.3 评分与并发症口径（临床规则，需人工逐行）
+
+| 字段 | 取值 | 说明 |
+|---|---|---|
+| `nrsScore` | 0–10 | NRS 疼痛评分（0 无痛、10 剧痛）；量表口径【待确认】（Q-4） |
+| `ponvScore` | 0–3 | PONV 评分（演示分级：0 无、1 轻度恶心、2 呕吐、3 严重呕吐）【待确认】（Q-4） |
+| `complications` | 多选（≤20，去重） | 白名单 `FollowupComplication`（演示字典【待确认】，Q-3） |
+| `complicationNotes` | ≤500 | 自由文本，服务端脱敏后落库 |
+| `patientFeedback` | ≤500 | 患者反馈，服务端脱敏后落库 |
+| `followedUpBy` | ≤64 | 随访人姓名摘要（操作人另记 `createdBy`） |
+
+- 服务层校验（越界/缺项 400），数据库 `ck_followup_record_nrs`（0–10）与
+  `ck_followup_record_ponv`（0–3）为第二道防线；**分值/分级不替代临床判断**（H-06）。
+- 并发症字典当前为演示口径（PONV、镇痛不全、呼吸抑制、气道损伤、低血压、高血压、心律失常、
+  寒战、苏醒延迟、神经损伤、手术部位出血、感染、其他）；院方字典确认后以 additive 方式扩展。
+
+### 16.4 镇痛/PCA 参数口径
+
+- 方式：`PCIA/PCEA/ORAL/IV/NERVE_BLOCK/OTHER`（演示口径【待确认】）；效果：
+  `EFFECTIVE/PARTIAL/INEFFECTIVE/NOT_ASSESSED`。
+- 药物名称属自由文本，落库与写审计前经 `PhiMasker` 脱敏（与说明/反馈同口径，评审 S-1）；
+  参数只做物理校验：`bolusDose > 0`、`backgroundDose ≥ 0`、`lockoutMinutes > 0`（分钟）；
+  **PCA 默认值与剂量单位（mg/μg/ml）未内置【待确认】**（Q-2），系统不推荐处方、不替代医师判断。
+- 调整记录 `adjustments[]`（≤20 条，每条说明 ≤200）：随镇痛记录追加；**参数调整只能新增
+  镇痛记录**，不得 UPDATE 历史（append-only，数据库 55000）。
+- 同一随访可多次追加镇痛记录（多模式/调整时间序列），按 `created_at ASC, id ASC` 展示。
+
+### 16.5 脱敏与无 PHI
+
+- 统一入口：`complicationNotes`、`patientFeedback`、`adjustments[].description` 与 `drug`
+  在落库、回显与写审计前都经 `PhiMasker` 脱敏（评审 B-1/S-1）；空白文本归一为 null。
+- 手机号：容忍 `+86`/`0086` 前缀、空格、短横线、括号，按 11 位数字识别并整段遮蔽
+  （`+8613800138000`、`138-0013-8000`、`138 0013 8000`、`(138) 0013-8000`
+  → `138****8000`）。
+- 身份证号：容忍空格/短横线，18 位（末位可为 `X/x`，保留前 6 后 4）与 15 位旧版
+  （保留前 6 后 3）；如 `110101 19900307 4567 → 110101********4567`、
+  `110101 900307 456 → 110101******456`。
+- 识别顺序为 18 位身份证 → 15 位身份证 → 手机号；日期/剂量/订单号等普通数字（<11 位或
+  非 `1[3-9]` 开头）保持不变，已脱敏串（如 `138****8000`）不会二次遮蔽。
+- 局限：姓名、住院号无固定格式，**无法可靠自动识别**；前端必须提示“不得录入姓名/住院号/
+  身份证号/手机号”，是否在 M3-QA 上线前置接入院内 DLP/姓名识别待确认（§16.9 Q-10，
+  关联 Q-5）。日志与审计不得输出原文。
+- 审计（与业务同事务）：
+
+| 动作 | 资源 | detail 白名单 |
+|---|---|---|
+| `FOLLOWUP_CREATE` | `FOLLOWUP_RECORD` / 随访标识 | followupId/recordId/followupType/assessedAt/nrsScore/ponvScore/complicationCodes/hasComplicationNotes/hasPatientFeedback |
+| `PAIN_MANAGE` | `PAIN_MANAGEMENT` / 镇痛标识 | painManagementId/followupId/recordId/modality/drug/bolusDose/backgroundDose/lockoutMinutes/effect/adjustmentCount |
+
+不含患者姓名/证件号/住院号/手机号，**不含并发症说明、患者反馈与调整说明原文**；拒绝路径
+（记录未结束）以独立事务写 `result=0`，只含拒绝码。
+
+### 16.6 不可变与并发（V19 触发器）
+
+- `followup_record` / `pain_management`：UPDATE/DELETE/TRUNCATE 一律 55000（append-only）；
+  父表 `followup_record` 被 `pain_management` 外键引用，`TRUNCATE ... CASCADE` 仍由两张表的
+  BEFORE TRUNCATE 触发器以 55000 拒绝（集成测试覆盖，评审 S-5）。
+- `followup_record` BEFORE INSERT 守卫：父麻醉记录单必须存在、`patient_id` 与父记录一致
+  （防止直插串患者，评审 S-4）、`ended_at` 非空且 `assessed_at ≥ ended_at`，违反 55000
+  （服务层 422/409/400 的第二道防线）。
+- 随访/镇痛均无更新接口；`version` 为通用审计字段，append-only 语义下恒为 1。
+- 并发：随访录入锁记录单行；镇痛追加仅 INSERT，不需要版本条件更新。
+- 运行账号不得拥有 DDL 权限（否则可 DISABLE TRIGGER 绕过，见 `docs/db/README.md` §5.3）。
+
+### 16.7 前端
+
+- 路由 `/m2/followups/:recordId`（记录页「术后随访」按钮按 `m2:followup:read` 显示）。
+- 页面：随访列表 + 详情（NRS/PONV/并发症/说明/反馈）+ 脱敏提示；录入对话框（H24/H48、
+  时间、评分、多选并发症、说明、反馈、随访人）；镇痛记录表 + 追加对话框
+  （方式/药物/bolus/background/lockout/效果/调整说明）。
+- 前端只做必填与物理范围预校验（bolus > 0、lockout > 0 等），最终以服务端 400/409 为准；
+  不自行判断临床阈值/PCA 处方。403/404/网络错误展示契约 `code/message/traceId`。
+
+### 16.8 测试
+
+- `FollowupServiceImplTest`（20）：脱敏落库 + 审计无原文、药物名称脱敏（评审 S-1）、记录未
+  结束 409 + result=0 审计、不可见 422、时间早于结束/未来 400、同类型时间单调 400（同刻
+  允许）、NRS 0/10 与 PONV 0/3 边界、越界 400、并发症去重与上限、随访人/文本长度 400、
+  列表/详情 403/404、镇痛参数（bolus/background/lockout）400、调整记录时间/长度/上限 400、
+  镇痛审计无原文。
+- `PhiMaskerTest`（6，独立纯函数用例，评审 S-5）：`+86`/空格/短横线/括号手机号、18 位含 X
+  与 15 位身份证号、自由文本夹带姓名、日期/剂量/订单号不误伤、已脱敏串不二次遮蔽、
+  `containsMaskableIdentifier` 正负例、null/空白。
+- `FollowupPainApiIntegrationTest`（4，真实嵌入式 PG16）：随访→镇痛→列表/详情、分隔写法
+  文本脱敏（响应与数据库均不含原始串，`PhiMasker.containsMaskableIdentifier(DB 值)=false`）、
+  药物与调整说明脱敏、审计 2 条且 detail 无 PHI、append-only 55000（随访/镇痛
+  UPDATE/DELETE/`TRUNCATE ... CASCADE`）、`patient_id` 与父记录不一致直插 55000、NRS/PONV
+  边界与越界 400、同类型时间单调 400、记录未结束 409 + result=0 审计 + 数据库直插 55000、
+  镇痛参数 400 与多次追加、权限 403、跨科室 404/403/422、V19 结构/约束/触发器/权限/注释与
+  CHECK 第二道防线。
+- 前端 `FollowupView.spec.ts`（6）：加载列表/详情/镇痛与脱敏提示、只读权限隐藏写入入口、
+  录入随访提交体与刷新、必填拦截、409 展示服务端错误、镇痛参数校验与提交刷新。
+  E2E `m2-followup.spec.ts`：空态→录入 H48 随访→追加 PCIA 镇痛→列表展示。
+
+### 16.9 Q 登记（待临床确认，只登记不改实现）
+
+| 编号 | 事项 | 当前实现 | 待确认点 / 决策人 |
+|---|---|---|---|
+| Q-1 | 随访窗口与超时提醒 | 只按 H24/H48 记录；无窗口容差、无待办提醒 | 允许提前/延后范围、超时升级规则（麻醉科/护理部/M7） |
+| Q-2 | PCA 参数默认值与剂量单位 | 仅物理校验；无默认方案/单位换算 | 各模式默认 bolus/background/lockout、单位（麻醉科/设备科/M5） |
+| Q-3 | 并发症字典 | 演示 13 项白名单 | 院方并发症/不良事件字典与是否对接 M7（麻醉科/质控） |
+| Q-4 | NRS/PONV 量表口径 | NRS 0–10、PONV 0–3 演示分级 | 量表版本与分级定义（麻醉科） |
+| Q-5 | 随访角色与脱敏深度 | 授 3 个现有角色；自动遮蔽手机号/身份证号 | 病房护士是否可随访；是否接入 DLP/姓名识别（护理部/信息科） |
+| Q-6 | 旧 `/follow-ups` 契约占位 | 保留未实现（含 patientName/patientNo 字段）；契约已标 `deprecated: true`，登记为**独立下线任务** | 下线/收敛到 0.10.0 端点的时间窗（M3-QA 后；需兼容性评估与契约评审） |
+| Q-7 | 随访与麻醉总结/质控 | 不联动麻醉总结、不良事件上报 | 是否自动生成 M7 不良事件/质控指标（麻醉科/质控/M7） |
+| Q-8 | 早于 `endedAt` 的拒绝口径（评审 Q-1 登记） | 服务层按字段校验返回 400（字段 `assessedAt`），数据库触发器 55000；不返回 409 | 是否应改为 409 `STATE_CONFLICT`（“记录未结束/时间不合法”的状态语义）由麻醉科/医务处确认 |
+| Q-9 | 24/48h 窗口本期不校验（评审 Q-2 登记） | 只记录 H24/H48 并校验同类型时间单调；**不校验**随访时间与手术结束的 24/48h 偏离，无超时提醒（与 Q-1 同一议题） | 是否在 M3-QA 上线前置强制窗口容差/超时升级（麻醉科/护理部/M7） |
+| Q-10 | 姓名/住院号脱敏与 DLP（评审 Q-3 登记） | `PhiMasker` 仅识别手机号/身份证号（容忍 `+86`、空格、短横线、括号）；姓名/住院号无固定格式不自动识别 | 是否在 M3-QA 上线前置接入院内 DLP/姓名识别，及阻断策略（信息科/护理部；关联 Q-5） |

@@ -51,7 +51,8 @@
 | M2 | 用药记录 | `medication_record` | 麻精双人核对字段必填 | 契约暂未单列 | §3.4.2、§2.4.6 |
 | M2 | 生命体征 | `vital_sign` | 按天分区；波形不与数值同表 | 契约暂未单列 | §3.4.2、§3.4.4 |
 | M2 | 复苏记录 | `m2_anes.pacu_record` | PACU 入室信息/状态机；Aldrete 评估 `m2_anes.pacu_assessment`（append-only）；转出交接 `m2_anes.pacu_discharge`（append-only） | `PacuRecord`、`PacuAssessment`、`PacuDischarge` | §2.4.3、V18 |
-| M2 | 随访记录 | `follow_up` | 24/48 小时随访 | `FollowUp` | §2.4.3、§2.7.1 |
+| M2 | 术后随访 | `m2_anes.followup_record` | 24/48 小时随访、NRS/PONV、并发症、脱敏说明/反馈（append-only） | `PostopFollowup` | §2.4.3、V19 |
+| M2 | 术后镇痛 | `m2_anes.pain_management` | 镇痛方式/PCA 参数/效果/调整记录（append-only） | `PainManagement` | §2.4.3、V19 |
 
 > “契约暂未单列”表示该实体已由方案书确认，但 S0-05 的四个域契约只覆盖主链路；后续任务按契约优先顺序补接口，禁止先写后端 DTO。
 
