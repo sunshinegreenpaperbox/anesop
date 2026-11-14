@@ -19,6 +19,7 @@ import com.anesop.m2.api.error.M2ConflictException;
 import com.anesop.m2.api.error.M2LockPreconditionException;
 import com.anesop.m2.api.error.M2UnprocessableException;
 import com.anesop.m2.api.error.M2ValidationException;
+import com.anesop.m2.api.error.PacuDischargePreconditionException;
 import com.anesop.m2.api.preop.PreopConflictException;
 import com.anesop.m2.api.preop.PreopUnprocessableException;
 import com.anesop.m2.api.preop.PreopValidationException;
@@ -279,6 +280,23 @@ public class ApiExceptionHandler {
         }
         return response(HttpStatus.CONFLICT, "STATE_CONFLICT",
                 "锁单前置条件未满足，操作未生效", request, details);
+    }
+
+    /**
+     * PACU 转出条件未满足（M3-M10-01）：409 {@code STATE_CONFLICT}，{@code details[]} 逐项列出
+     * 未满足条件（field=条件码，reason=中文说明），供前端展示转出条件清单；不回显 SBAR 交接原文、
+     * Aldrete 备注原文或患者标识。
+     */
+    @ExceptionHandler(PacuDischargePreconditionException.class)
+    public ResponseEntity<Error> handlePacuDischargePrecondition(
+            PacuDischargePreconditionException exception, HttpServletRequest request) {
+        List<ErrorDetail> details = new ArrayList<>();
+        for (PacuDischargePreconditionException.UnmetCondition unmet
+                : exception.unmetConditions()) {
+            details.add(ErrorResponses.detail(unmet.code(), unmet.message()));
+        }
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT",
+                "复苏转出条件未满足，操作未生效", request, details);
     }
 
     /**

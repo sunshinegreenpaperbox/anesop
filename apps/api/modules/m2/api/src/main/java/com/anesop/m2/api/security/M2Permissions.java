@@ -107,6 +107,18 @@ public final class M2Permissions {
     /** Spring Security 授权表达式中的抢救记录书写权限：{@code PERM_m2:rescue:write}。 */
     public static final String AUTHORITY_RESCUE_WRITE = "PERM_" + RESCUE_WRITE;
 
+    /** PACU 复苏记录只读（复苏记录、Aldrete 评估时间序列、转出记录）。 */
+    public static final String PACU_READ = "m2:pacu:read";
+
+    /** PACU 复苏记录书写（入室、Aldrete 评估、转出）。 */
+    public static final String PACU_WRITE = "m2:pacu:write";
+
+    /** Spring Security 授权表达式中的 PACU 只读权限：{@code PERM_m2:pacu:read}。 */
+    public static final String AUTHORITY_PACU_READ = "PERM_" + PACU_READ;
+
+    /** Spring Security 授权表达式中的 PACU 书写权限：{@code PERM_m2:pacu:write}。 */
+    public static final String AUTHORITY_PACU_WRITE = "PERM_" + PACU_WRITE;
+
     private M2Permissions() {
     }
 }

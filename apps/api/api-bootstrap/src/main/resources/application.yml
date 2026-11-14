@@ -106,6 +106,12 @@ anesop:
     # 未来时间超过 now+容差 400；早于最新事件或早于 now−容差 的补录必须填 entryReason。
     record:
       time-tolerance-seconds: ${ANESOP_M2_RECORD_TIME_TOLERANCE_SECONDS:600}
+    # PACU 复苏与转出（M3-M10-01，契约 anesthesia.yaml 0.9.0；V18 表结构）。
+    # Aldrete 转出阈值（0–10，默认 9）：院方阈值【待确认】，默认值仅为演示口径，
+    # 不作为临床决策依据；阈值调整只改配置，转出时的阈值/总分以快照冻结。
+    # 非法配置（越界）启动即失败（fail-closed），避免静默放宽转出条件。
+    pacu:
+      aldrete-threshold: ${ANESOP_M2_PACU_ALDRETE_THRESHOLD:9}
   security:
     # 默认禁止演示账号；dev/test 的 profile 文件显式置 true（B-2.3）。
     demo-accounts-allowed: false
