@@ -49,6 +49,9 @@ import com.anesop.m2.impl.persistence.mapper.FluidRecordMapper;
 import com.anesop.m2.impl.config.RecordProperties;
 import com.anesop.m2.impl.persistence.mapper.RecordEventMapper;
 import com.anesop.m2.impl.support.ClinicalFailureAuditor;
+import com.anesop.m4.api.drug.DrugDictionaryAmbiguousException;
+import com.anesop.m4.api.drug.DrugDictionaryEntry;
+import com.anesop.m4.api.drug.DrugDictionaryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -58,6 +61,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.junit.jupiter.api.BeforeEach;
@@ -114,6 +118,8 @@ class AnesthesiaRecordServiceImplTest {
     private UserAdminService userAdminService;
     @Mock
     private ClinicalFailureAuditor failureAuditor;
+    @Mock
+    private DrugDictionaryService drugDictionary;
 
     private static final UUID CHECKER =
             UUID.fromString("e0000000-0000-4000-8000-000000000003");
@@ -125,7 +131,7 @@ class AnesthesiaRecordServiceImplTest {
         service = new AnesthesiaRecordServiceImpl(recordMapper, eventMapper, drugMapper, fluidMapper,
                 schedulingService, threeWayCheckService, auditWriter, new ObjectMapper(),
                 Clock.fixed(NOW, ZoneOffset.UTC), authService, userAdminService, failureAuditor,
-                new RecordProperties(600));
+                drugDictionary, new RecordProperties(600));
     }
 
     // --------------------------------------------------------------- create --
@@ -505,6 +511,7 @@ class AnesthesiaRecordServiceImplTest {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
         when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
+        stubDictionary(true);
 
         AdministerDrugRequest missing = drugRequest(true);
         missing.setSecondCheckerId(null);
@@ -531,6 +538,7 @@ class AnesthesiaRecordServiceImplTest {
         when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
         stubEligibleChecker(CHECKER);
+        stubDictionary(true);
         when(drugMapper.insertDrug(any())).thenReturn(1);
 
         DrugAdministration drug = service.recordDrug(RECORD_ID, drugRequest(true), CALLER, CONTEXT);
@@ -540,7 +548,9 @@ class AnesthesiaRecordServiceImplTest {
         assertThat(drug.getSecondCheckerName()).isEqualTo("演示核对护士（合成）");
         Map<String, Object> detail = auditDetail("DRUG_ADMIN");
         assertThat(detail).containsEntry("drugName", "舒芬太尼（演示）")
-                .containsEntry("narcotic", true);
+                .containsEntry("narcotic", true)
+                .containsKeys("administrationId", "dictionaryDrugId");
+        assertThat(detail.get("administrationId")).isNotEqualTo(detail.get("dictionaryDrugId"));
         assertThat(String.valueOf(detail))
                 .doesNotContain("演示核对护士", "演示患者", "SYNTH-P-0001");
     }
@@ -550,6 +560,7 @@ class AnesthesiaRecordServiceImplTest {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
         when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
+        stubDictionary(true);
 
         when(userAdminService.get(CHECKER))
                 .thenThrow(new NoSuchElementException("missing"))
@@ -582,6 +593,7 @@ class AnesthesiaRecordServiceImplTest {
         when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
         when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
         when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
+        stubDictionary(false);
 
         AdministerDrugRequest request = drugRequest(false);
         request.setSecondCheckerName("多余核对人（合成）");
@@ -613,6 +625,61 @@ class AnesthesiaRecordServiceImplTest {
                 .isInstanceOf(M2ValidationException.class);
         assertThatThrownBy(() -> service.recordDrug(RECORD_ID, null, CALLER, CONTEXT))
                 .isInstanceOf(M2ValidationException.class);
+    }
+
+    @Test
+    void recordDrugRejectsDrugNotInDictionary() {
+        when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
+        when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
+
+        assertThatThrownBy(() -> service.recordDrug(RECORD_ID, drugRequest(true), CALLER, CONTEXT))
+                .isInstanceOf(M2ValidationException.class)
+                .satisfies(failure -> assertThat(((M2ValidationException) failure).field())
+                        .isEqualTo("drugName"))
+                .hasMessageContaining("药品字典");
+        verify(drugMapper, never()).insertDrug(any());
+        verify(failureAuditor).recordFailure(eq("DRUG_ADMIN"), eq("ANESTHESIA_RECORD"),
+                anyString(), any(), eq(CALLER), eq(CONTEXT));
+    }
+
+    @Test
+    void recordDrugRejectsNarcoticDeclarationMismatchWithDictionary() {
+        when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
+        when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
+        stubDictionary(true);
+
+        // 舒芬太尼在字典中是麻精类：客户端声明 false 被拒（不能绕过双人核对）。
+        assertThatThrownBy(() -> service.recordDrug(RECORD_ID, drugRequest(false), CALLER, CONTEXT))
+                .isInstanceOf(M2ValidationException.class)
+                .satisfies(failure -> assertThat(((M2ValidationException) failure).field())
+                        .isEqualTo("narcotic"))
+                .hasMessageContaining("以字典为准");
+        verify(drugMapper, never()).insertDrug(any());
+        verify(auditWriter, never()).record(anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyBoolean(), any(), any(), any(), any());
+    }
+
+    @Test
+    void recordDrugRejectsAmbiguousDictionaryResolution() {
+        when(recordMapper.selectById(RECORD_UUID)).thenReturn(draftRecord());
+        when(recordMapper.selectByIdForUpdate(RECORD_UUID)).thenReturn(draftRecord());
+        when(schedulingService.get(SCHEDULE_ID, CALLER)).thenReturn(schedule("PLANNED"));
+        when(drugDictionary.findByName(anyString()))
+                .thenThrow(new DrugDictionaryAmbiguousException(2));
+
+        assertThatThrownBy(() -> service.recordDrug(RECORD_ID, drugRequest(false), CALLER, CONTEXT))
+                .isInstanceOf(M2UnprocessableException.class)
+                .hasMessageContaining("DRUG_AMBIGUOUS")
+                .satisfies(failure -> assertThat(((M2UnprocessableException) failure).field())
+                        .isEqualTo("drugName"));
+        verify(drugMapper, never()).insertDrug(any());
+        verify(failureAuditor).recordFailure(eq("DRUG_ADMIN"), eq("ANESTHESIA_RECORD"),
+                anyString(),
+                org.mockito.ArgumentMatchers.argThat(detail ->
+                        "DRUG_AMBIGUOUS".equals(detail.get("rejection"))),
+                eq(CALLER), eq(CONTEXT));
     }
 
     @Test
@@ -837,6 +904,12 @@ class AnesthesiaRecordServiceImplTest {
         request.setEventType(CreateRecordEventRequest.EventTypeEnum.fromValue(type));
         request.setOccurredAt(occurredAt == null ? null : OffsetDateTime.parse(occurredAt));
         return request;
+    }
+
+    private void stubDictionary(boolean narcotic) {
+        when(drugDictionary.findByName(anyString())).thenReturn(Optional.of(new DrugDictionaryEntry(
+                "2a000000-0000-4000-8000-000000000001", "DRUG-SUF-001", "舒芬太尼（演示）",
+                narcotic, true, true)));
     }
 
     private static AdministerDrugRequest drugRequest(boolean narcotic) {

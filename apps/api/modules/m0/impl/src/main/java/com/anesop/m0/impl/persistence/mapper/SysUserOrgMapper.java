@@ -1,5 +1,6 @@
 package com.anesop.m0.impl.persistence.mapper;
 
+import com.anesop.m0.impl.persistence.entity.SysOrgRow;
 import java.util.List;
 import java.util.UUID;
 import org.apache.ibatis.annotations.Mapper;
@@ -113,4 +114,67 @@ public interface SysUserOrgMapper {
               AND (o.path = root.path OR o.path LIKE root.path || '/%')
             """)
     boolean isOrgInSubtree(@Param("rootOrgId") UUID rootOrgId, @Param("orgId") UUID orgId);
+
+    /**
+     * 全部启用科室（{@code org_type=DEPT}），供 ALL 数据范围与科室选择使用。
+     *
+     * @return 科室行（按排序号、编码升序）；无科室时为空
+     */
+    @Select("""
+            SELECT o.id, o.code, o.name
+            FROM m0_platform.sys_org o
+            WHERE o.org_type = 'DEPT' AND o.status = 1 AND o.deleted = false
+            ORDER BY o.sort, o.code
+            """)
+    List<SysOrgRow> selectAllActiveDepartments();
+
+    /**
+     * 用户绑定的启用科室（主科室在前），供 SELF 范围推导“本人所属科室”。
+     *
+     * @param userId 用户标识
+     * @return 科室行（主科室在前，其后按排序号/编码）；无绑定或组织停用时为空
+     */
+    @Select("""
+            SELECT o.id, o.code, o.name
+            FROM m0_platform.sys_user_org uo
+            JOIN m0_platform.sys_org o ON o.id = uo.org_id
+            WHERE uo.user_id = #{userId}
+              AND o.org_type = 'DEPT' AND o.status = 1 AND o.deleted = false
+            ORDER BY uo.is_primary DESC, o.sort, o.code
+            """)
+    List<SysOrgRow> selectActiveDepartmentsByUserId(@Param("userId") UUID userId);
+
+    /**
+     * 院区子树内的启用科室（含院区自身仅当其为 DEPT，正常不命中），供 SITE 范围展开。
+     *
+     * @param siteId 授予的院区组织标识
+     * @return 科室行（按排序号/编码）；院区停用/删除或子树内无科室时为空
+     */
+    @Select("""
+            SELECT o.id, o.code, o.name
+            FROM m0_platform.sys_org o
+            WHERE o.org_type = 'DEPT' AND o.status = 1 AND o.deleted = false
+              AND EXISTS (
+                  SELECT 1 FROM m0_platform.sys_org root
+                  WHERE root.id = #{siteId}
+                    AND root.status = 1 AND root.deleted = false
+                    AND (o.path = root.path OR o.path LIKE root.path || '/%')
+              )
+            ORDER BY o.sort, o.code
+            """)
+    List<SysOrgRow> selectActiveDepartmentsInSubtree(@Param("siteId") UUID siteId);
+
+    /**
+     * 单个启用科室（{@code org_type=DEPT}）。
+     *
+     * @param orgId 组织标识
+     * @return 科室行；不存在/停用/软删除/非 DEPT 时返回 null
+     */
+    @Select("""
+            SELECT o.id, o.code, o.name
+            FROM m0_platform.sys_org o
+            WHERE o.id = #{orgId}
+              AND o.org_type = 'DEPT' AND o.status = 1 AND o.deleted = false
+            """)
+    SysOrgRow selectActiveDepartment(@Param("orgId") UUID orgId);
 }

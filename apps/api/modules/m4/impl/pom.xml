@@ -13,7 +13,7 @@
 
   <artifactId>m4-impl</artifactId>
   <name>ANESOP :: M4 耗材仓库管理 IMPL</name>
-  <description>M4 耗材仓库管理 实现与数据访问；只允许依赖本模块 api，不得依赖其他模块 impl</description>
+  <description>M4 药品目录与麻精五专 实现与数据访问；只允许依赖本模块 api，不得依赖其他模块 impl</description>
 
   <dependencies>
     <dependency>
@@ -24,6 +24,33 @@
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-context</artifactId>
+    </dependency>
+    <!-- 事务边界（药品/五专写入 + 审计同事务） -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-tx</artifactId>
+    </dependency>
+    <!-- 越权语义（AccessDeniedException），由 Web 层统一映射 403 -->
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-core</artifactId>
+    </dependency>
+    <!-- 持久层：MyBatis-Plus（版本由根 pom dependencyManagement 锁定） -->
+    <dependency>
+      <groupId>com.baomidou</groupId>
+      <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+    </dependency>
+    <!-- 五专明细/适配器状态摘要 jsonb 序列化（allowlist 已登记 jackson-databind） -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <!-- 单测：JUnit 5 + AssertJ + Mockito（版本由 Spring Boot BOM 管理） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 </project>

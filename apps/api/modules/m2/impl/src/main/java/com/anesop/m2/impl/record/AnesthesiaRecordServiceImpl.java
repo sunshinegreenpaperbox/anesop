@@ -29,6 +29,9 @@ import com.anesop.m2.api.error.M2ConflictException;
 import com.anesop.m2.api.error.M2UnprocessableException;
 import com.anesop.m2.api.error.M2ValidationException;
 import com.anesop.m2.api.record.AnesthesiaRecordService;
+import com.anesop.m4.api.drug.DrugDictionaryAmbiguousException;
+import com.anesop.m4.api.drug.DrugDictionaryEntry;
+import com.anesop.m4.api.drug.DrugDictionaryService;
 import com.anesop.m2.api.security.M2Permissions;
 import com.anesop.m2.api.threeway.ThreeWayCheckService;
 import com.anesop.m2.impl.config.RecordProperties;
@@ -77,7 +80,10 @@ import org.springframework.transaction.annotation.Transactional;
  *       不得晚于「服务端时间 + 容差」（400）、不得晚于 ANESTHESIA_END（409）；DRAFT 下
  *       术中事件必须先记录 ANESTHESIA_START；补录（早于最新事件或早于 now−容差）必须填写
  *       entryReason，否则 400；</li>
- *   <li>麻精双人核对：narcotic=true 必须 secondCheckerId + secondCheckerName，缺失 400；
+ *   <li>麻精判定（M4-M15-01 收口 T-4）：narcotic 由服务端按 m4-api 药品字典判定（名称/
+ *       通用名/别名 trim+忽略大小写解析），字典未收录 400、解析命中多个药品 422
+ *       {@code DRUG_AMBIGUOUS}（fail-closed）、客户端声明与字典不一致 400（以字典为准）；</li>
+ *   <li>麻精双人核对：字典 narcotic=true 必须 secondCheckerId + secondCheckerName，缺失 400；
  *       核对人不得为本人，且必须存在、在职（status=1）并持有 {@code m2:record:write}
  *       （经 m0-api 用户查询/权限快照实时校验，400）；失败路径写 result=0 审计；</li>
  *   <li>数据范围沿台次可见性：按台次列表越权 403（集合语义）、单记录越界 404、创建时台次
@@ -124,6 +130,7 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
     private final AuthService authService;
     private final UserAdminService userAdminService;
     private final ClinicalFailureAuditor failureAuditor;
+    private final DrugDictionaryService drugDictionary;
     private final RecordProperties properties;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
@@ -140,6 +147,7 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
             AuthService authService,
             UserAdminService userAdminService,
             ClinicalFailureAuditor failureAuditor,
+            DrugDictionaryService drugDictionary,
             RecordProperties properties) {
         this.recordMapper = recordMapper;
         this.eventMapper = eventMapper;
@@ -153,6 +161,7 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         this.authService = authService;
         this.userAdminService = userAdminService;
         this.failureAuditor = failureAuditor;
+        this.drugDictionary = drugDictionary;
         this.properties = properties;
     }
 
@@ -459,10 +468,24 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         if (request.getNarcotic() == null) {
             throw new M2ValidationException("narcotic", "是否麻精类药品不能为空");
         }
-        // 注意：narcotic 当前由客户端声明（药品字典 I-07 未落地，舒芬太尼等误报 false 可绕过
-        // 双人核对，风险登记见 docs/modules/m2/README.md §10）；M5 药品字典上线后改为服务端
-        // 按药品编码判定，客户端声明仅作兼容输入。
-        boolean narcotic = request.getNarcotic();
+        // M4-M15-01 收口 T-4：麻精属性以 m4-api 药品字典为唯一权威（名称/通用名/别名解析）。
+        // 字典未收录 → 400；名称/通用名/别名命中多个药品 → 422 DRUG_AMBIGUOUS（fail-closed，
+        // 禁止静默取第一条）；客户端声明与字典不一致 → 400（以字典为准，防止误报 false 绕过
+        // 双人核对）；风险与口径见 docs/adr/0018-药品字典与麻精五专口径.md。
+        DrugDictionaryEntry dictionary;
+        try {
+            dictionary = drugDictionary.findByName(drugName)
+                    .orElseThrow(() -> dictionaryRejected(entity, caller, context, "drugName",
+                            "药品未收录于药品字典，无法判定麻精属性", "DRUG_NOT_IN_DICTIONARY",
+                            false));
+        } catch (DrugDictionaryAmbiguousException ambiguous) {
+            throw ambiguousRejected(entity, caller, context, ambiguous.candidateCount());
+        }
+        boolean narcotic = dictionary.narcotic();
+        if (request.getNarcotic() != narcotic) {
+            throw dictionaryRejected(entity, caller, context, "narcotic",
+                    "是否麻精类与药品字典不一致（以字典为准）", "NARCOTIC_MISMATCH", narcotic);
+        }
         UUID secondCheckerId = null;
         String secondCheckerName = null;
         if (narcotic) {
@@ -506,8 +529,11 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("operation", ACTION_DRUG);
         detail.put("recordId", entity.getId().toString());
-        detail.put("drugId", drug.getId().toString());
+        // S-1：给药行标识与字典药品标识分列，避免同键 drugId 后者覆盖前者。
+        detail.put("administrationId", drug.getId().toString());
+        detail.put("dictionaryDrugId", dictionary.drugId());
         detail.put("drugName", drugName);
+        detail.put("highRisk", dictionary.highRisk());
         detail.put("dose", dose.toPlainString());
         detail.put("unit", unit);
         detail.put("route", route);
@@ -671,6 +697,41 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         failureAuditor.recordFailure(ACTION_DRUG, RESOURCE_TYPE, entity.getId().toString(), detail,
                 caller, context);
         return new M2ValidationException(field, message);
+    }
+
+    /**
+     * 药品字典判定失败（T-4）：字典未收录或声明不一致。detail 只含记录单标识、字典判定结果
+     * 与固定拒绝码，不含药品名以外的患者/人员信息。
+     */
+    private M2ValidationException dictionaryRejected(AnesthesiaRecordEntity entity,
+            AuthPrincipal caller, AuthRequestContext context, String field, String message,
+            String reasonCode, boolean narcotic) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("operation", ACTION_DRUG);
+        detail.put("recordId", entity.getId().toString());
+        detail.put("narcotic", narcotic);
+        detail.put("rejection", reasonCode);
+        failureAuditor.recordFailure(ACTION_DRUG, RESOURCE_TYPE, entity.getId().toString(), detail,
+                caller, context);
+        return new M2ValidationException(field, message);
+    }
+
+    /**
+     * 药品字典歧义（T-4）：归一化后命中多个药品。失败审计只记记录单标识、命中数与固定
+     * 拒绝码（不回显候选药品名称），HTTP 映射 422 {@code BUSINESS_RULE_VIOLATION}，
+     * details[0].reason 含固定码 {@code DRUG_AMBIGUOUS}。
+     */
+    private M2UnprocessableException ambiguousRejected(AnesthesiaRecordEntity entity,
+            AuthPrincipal caller, AuthRequestContext context, int candidateCount) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("operation", ACTION_DRUG);
+        detail.put("recordId", entity.getId().toString());
+        detail.put("rejection", "DRUG_AMBIGUOUS");
+        detail.put("candidateCount", candidateCount);
+        failureAuditor.recordFailure(ACTION_DRUG, RESOURCE_TYPE, entity.getId().toString(), detail,
+                caller, context);
+        return new M2UnprocessableException("drugName",
+                "药品名称在字典中命中多个药品，拒绝登记（DRUG_AMBIGUOUS）");
     }
 
     private static Map<String, Object> auditSnapshot(AnesthesiaRecordEntity entity) {

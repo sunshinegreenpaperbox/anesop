@@ -13,7 +13,7 @@
 
   <artifactId>m4</artifactId>
   <packaging>pom</packaging>
-  <name>ANESOP :: M4 耗材仓库管理</name>
+  <name>ANESOP :: M4 药品目录与麻精五专</name>
 
   <modules>
     <module>api</module>

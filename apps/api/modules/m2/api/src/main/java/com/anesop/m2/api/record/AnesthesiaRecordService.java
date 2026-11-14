@@ -28,10 +28,10 @@ import com.anesop.m0.api.security.AuthRequestContext;
  *       追加 409；DRAFT 下术中事件必须先记录 ANESTHESIA_START；补录（早于最新事件或早于
  *       now−容差）必须填写 entryReason（400）；ANESTHESIA_START 置记录为进行中、
  *       ANESTHESIA_END 记录结束时间；</li>
- *   <li>用药：麻精类（narcotic=true）必须双人核对（secondCheckerId/secondCheckerName），
- *       缺失 400；核对人不得与给药人相同，且必须存在、在职并持有 {@code m2:record:write}
- *       （400）；失败路径写 result=0 审计。注意 narcotic 当前由客户端声明，M5 药品字典落地后
- *       改由服务端判定；</li>
+ *   <li>用药：麻精属性由服务端按 m4-api 药品字典判定（M4-M15-01 收口 T-4）；字典未收录 400，
+ *       客户端声明与字典不一致 400（以字典为准）。麻精类必须双人核对
+ *       （secondCheckerId/secondCheckerName），缺失 400；核对人不得与给药人相同，且必须存在、
+ *       在职并持有 {@code m2:record:write}（400）；失败路径写 result=0 审计；</li>
  *   <li>输液/出入量：明细 append-only，出入量汇总由服务端按明细计算（入量-出量为平衡）；</li>
  *   <li>记录单未锁定时可改（PUT 乐观锁 version，过期 409）；锁单/修订由 M3-M2-03 实现，
  *       本期无锁单状态；</li>

@@ -13,5 +13,20 @@
 
   <artifactId>m4-api</artifactId>
   <name>ANESOP :: M4 耗材仓库管理 API</name>
-  <description>M4 耗材仓库管理 对外接口、DTO 与领域事件；其他模块唯一可依赖的层</description>
+  <description>M4 药品目录与麻精五专 对外接口、DTO 与领域事件；其他模块唯一可依赖的层</description>
+
+  <dependencies>
+    <!-- 跨模块同步调用只依赖 m0-api（审计、认证主体、数据范围） -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m0-api</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- 契约生成的 Java DTO（drug 0.1.0），禁止手写重复模型 -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>api-contracts</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies>
 </project>

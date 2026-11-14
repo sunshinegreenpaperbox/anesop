@@ -313,6 +313,100 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.details[0].field").value("secondCheckerId"));
 
+        // M4-M15-01 收口 T-4：麻精属性以药品字典为准。
+        // 舒芬太尼在字典中为麻精类，声明 false 被拒（400，field=narcotic），不能绕过双人核对。
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(
+                                drugBody("舒芬太尼（演示）", false, null, null))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PARAM_INVALID"))
+                .andExpect(jsonPath("$.details[0].field").value("narcotic"));
+        // 字典未收录 → 400（field=drugName），不允许“字典外自由文本药品”绕过麻精判定。
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(
+                                drugBody("未收录药品（演示）", false, null, null))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PARAM_INVALID"))
+                .andExpect(jsonPath("$.details[0].field").value("drugName"));
+
+        // 别名指向麻精药品：客户端声明 false 同样被拒（别名解析不能绕过双人核对）。
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(
+                                drugBody("舒芬（演示）", false, null, null))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.details[0].field").value("narcotic"));
+
+        // 大小写与首尾空白：字典解析 trim + 忽略大小写后仍唯一，命中麻精并可正常登记。
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String asciiName = "T4 Case Drug " + suffix;
+        String asciiAlias = "t4casealias" + suffix;
+        Map<String, Object> asciiDrug = new LinkedHashMap<>();
+        asciiDrug.put("code", "DRUG-CASE-" + suffix);
+        asciiDrug.put("name", asciiName);
+        asciiDrug.put("specification", "1ml");
+        asciiDrug.put("unit", "支");
+        asciiDrug.put("dosageForm", "INJECTION");
+        asciiDrug.put("category", "OPIOID");
+        asciiDrug.put("narcotic", true);
+        asciiDrug.put("highRisk", false);
+        asciiDrug.put("aliases", List.of(asciiAlias));
+        mockMvc.perform(post("/v1/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(asciiDrug)))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(drugBody(
+                                "  " + asciiName.toUpperCase(java.util.Locale.ROOT) + "  ",
+                                true, SECOND_CHECKER_ID, "演示核对护士（合成）"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.narcotic").value(true));
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(drugBody(
+                                asciiAlias.toUpperCase(java.util.Locale.ROOT), false, null, null))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.details[0].field").value("narcotic"));
+
+        // 歧义 fail-closed：名称/通用名交叉命中不同药品 → 422 DRUG_AMBIGUOUS（禁止静默取第一条）。
+        String ambiguousName = "T4 歧义药 " + suffix;
+        Map<String, Object> ambiguousDrug = new LinkedHashMap<>(asciiDrug);
+        ambiguousDrug.put("code", "DRUG-AMB-A-" + suffix);
+        ambiguousDrug.put("name", ambiguousName);
+        ambiguousDrug.put("narcotic", false);
+        ambiguousDrug.put("aliases", List.of());
+        mockMvc.perform(post("/v1/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(ambiguousDrug)))
+                .andExpect(status().isCreated());
+        jdbcTemplate.update("""
+                INSERT INTO m4_drug.drug
+                    (id, code, name, generic_name, specification, unit, dosage_form, category,
+                     narcotic, high_risk, status)
+                VALUES (?::uuid, ?, ?, ?, '1ml', '支', 'INJECTION', 'OPIOID', false, false, 'ACTIVE')
+                """, UUID.randomUUID().toString(), "DRUG-AMB-B-" + suffix,
+                "T4 歧义对照 " + suffix, ambiguousName);
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/drugs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(
+                                drugBody(ambiguousName, false, null, null))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("BUSINESS_RULE_VIOLATION"))
+                .andExpect(jsonPath("$.details[0].field").value("drugName"))
+                .andExpect(jsonPath("$.details[0].reason",
+                        org.hamcrest.Matchers.containsString("DRUG_AMBIGUOUS")));
+
         mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/drugs")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(JSON)
@@ -322,7 +416,7 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
         mockMvc.perform(get("/v1/anesthesia/records/" + recordId + "/drugs")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items", hasSize(2)));
+                .andExpect(jsonPath("$.items", hasSize(3)));
 
         // 输液/出入量：500 + 1000 入量、400 出量 → 汇总 1500/400/1100。
         recordFluid(admin, recordId, "INTAKE", "复方氯化钠（演示）", 500)

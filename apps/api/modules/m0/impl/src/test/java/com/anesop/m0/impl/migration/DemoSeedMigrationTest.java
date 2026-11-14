@@ -43,12 +43,13 @@ class DemoSeedMigrationTest {
         assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(4);
         List<String> versions = jdbc.queryForList(
                 "SELECT version FROM public.flyway_schema_history ORDER BY installed_rank", String.class);
-        assertThat(versions).contains("1", "2", "3", "100");
-        assertThat(versions.get(versions.size() - 1)).as("演示种子 V100 必须最后执行").isEqualTo("100");
+        assertThat(versions).contains("1", "2", "3", "100", "101");
+        assertThat(versions.get(versions.size() - 1))
+                .as("演示种子 V101（M4 演示药品）必须最后执行").isEqualTo("101");
 
-        // 平台预置基线仍在，演示种子只追加账号。
+        // 平台预置基线仍在（V20 追加 SYS_PHARMACIST 药房药师），演示种子只追加账号。
         assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM m0_platform.sys_role", Integer.class)).isEqualTo(6);
+                "SELECT count(*) FROM m0_platform.sys_role", Integer.class)).isEqualTo(7);
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM m0_platform.sys_dict_item", Integer.class)).isEqualTo(22);
         // M2-M0-01 追加 demo_dept / demo_self 两个受限演示账号（SYNTHETIC）。

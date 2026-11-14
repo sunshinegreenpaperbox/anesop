@@ -24,6 +24,9 @@ import com.anesop.m2.api.preop.PreopConflictException;
 import com.anesop.m2.api.preop.PreopUnprocessableException;
 import com.anesop.m2.api.preop.PreopValidationException;
 import com.anesop.m0.api.audit.AuditWriter;
+import com.anesop.m4.api.error.M4ConflictException;
+import com.anesop.m4.api.error.M4UnprocessableException;
+import com.anesop.m4.api.error.M4ValidationException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -309,6 +312,45 @@ public class ApiExceptionHandler {
         return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
                 "知情同意/三方核查业务规则拒绝", request,
                 List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 药品目录/麻精五专字段级校验（M4-M15-01）：400 {@code PARAM_INVALID}，field 由服务端
+     * 固定提供，不回显处方号原文、人员姓名或患者标识。
+     */
+    @ExceptionHandler(M4ValidationException.class)
+    public ResponseEntity<Error> handleM4Validation(M4ValidationException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 药品目录/麻精五专业务规则拒绝（M4-M15-01）：422 {@code BUSINESS_RULE_VIOLATION}，
+     * 如药品未收录于字典、药品已停用、科室不在数据范围（业务语义拒绝，非权限 403）。
+     */
+    @ExceptionHandler(M4UnprocessableException.class)
+    public ResponseEntity<Error> handleM4Unprocessable(M4UnprocessableException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
+                "药品或五专业务规则拒绝", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 药品目录/麻精五专冲突（M4-M15-01）：409 {@code STATE_CONFLICT}。日结不平时
+     * {@code details[]} 给出期望值与实盘值（field=数量字段），供前端展示平账差异；
+     * 文案不含数据库约束名与 SQL 实参。
+     */
+    @ExceptionHandler(M4ConflictException.class)
+    public ResponseEntity<Error> handleM4Conflict(M4ConflictException exception,
+            HttpServletRequest request) {
+        List<ErrorDetail> details = new ArrayList<>();
+        for (M4ConflictException.Detail detail : exception.details()) {
+            details.add(ErrorResponses.detail(detail.field(), detail.reason()));
+        }
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "状态或版本冲突，操作未生效",
+                request, details);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

@@ -21,6 +21,12 @@
       <artifactId>m2-api</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- T-4 收口：麻精判定只调 m4-api 的药品字典服务（不访问 m4 表与 mapper） -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>m4-api</artifactId>
+      <version>${project.version}</version>
+    </dependency>
     <!-- 术前访视复用 M1 申请/患者可见性（同步只调 m1-api，不访问 m1 表与 mapper） -->
     <dependency>
       <groupId>com.anesop</groupId>
