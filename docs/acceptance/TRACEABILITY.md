@@ -31,3 +31,4 @@
 | 排程分析指标 | 2.4.2/2.7.2 | scheduling.yaml 0.6.0 | m1/analytics | 排程分析页 | SchedulingAnalyticsApiIntegrationTest | 已实现（M2-M6-01；口径待确认 ADR-0015） |
 | 术中预警与抢救记录 | 2.4.3 | anesthesia.yaml 0.7.0 | m2/alert+rescue | 记录单告警面板 | AlertRescueApiIntegrationTest | 已实现（M3-M2-02；阈值待临床确认 ADR-0017） |
 | 复苏记录与转出（Aldrete） | 2.4.3 | anesthesia.yaml 0.9.0 | m2/pacu | PACU 页面 | PacuRecoveryApiIntegrationTest | 已实现（M3-M10-01；阈值待确认） |
+| 术后随访与镇痛（PCA） | 2.4.3 | anesthesia.yaml 0.10.0 | m2/followup | 随访页 | FollowupPainApiIntegrationTest | 已实现（M3-M11-01；PHI 脱敏已评审修复） |

@@ -23,7 +23,7 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 | M3-M2-02 | 术中预警规则与抢救记录 | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，契约 0.7.0 + V15/V16；独立评审 B-1～B-4 与 S-1～S-6 已修复：ingest 领域事件实时触发、水位增量、DRAFT 不评估、间歇指标 gap、规则待确认/历史版本、抢救 leader/rescuers、审计 alertId；待复审 + 全量 verify） |
 | M3-M2-03 | 锁单/修订/CA 签名（签名模拟） | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，复审修复：契约 0.8.1（confirmChecklist 必填/原因码收缩/effective 端点/409 示例）、快照含抢救+人员并按时间稳定排序、V17 链守卫与抢救冻结、effective 投影、失败审计/管理员标注、回滚文档；待全量 verify 后再复审） |
 | M3-M10-01 | 复苏记录与转出（Aldrete、交接） | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，契约 0.9.0 + V18；PACU 入室/Aldrete 服务端计算与 append-only/转出阈值 409/SBAR 交接；复审修复：前端去默认值、服务端 latest/时效口径、Aldrete 1995 校准、契约 400、文档 Q 登记；待复审 + 全量 verify） |
-| M3-M11-01 | 术后随访与镇痛（24/48h、PCA、并发症） | m2 契约/模块、前端 | M3-M10-01 | Blocked |
+| M3-M11-01 | 术后随访与镇痛（24/48h、PCA、并发症） | m2 契约/模块、前端 | M3-M10-01 | Review（2026-11-14，契约 0.10.0 + V19；随访前置/时间单调/评分边界/镇痛参数/append-only/权限范围/审计脱敏；独立评审 B-1 与 S-1～S-5 已修复：分隔/+86 手机号与 18/15 位含 X 身份证脱敏、drug 脱敏、422/409 契约口径、旧 `/follow-ups` deprecated、V19 patient_id 一致性守卫、TRUNCATE CASCADE/独立 PhiMaskerTest；待复审 + 全量 verify） |
 | M3-QA-01 | 临床记录专项测试 + E2E-02/03 | `apps/web/e2e/**`、各 `src/test/**` | M3-M2-03、M3-M8-01 | Blocked |
 
 ## 任务卡要点
@@ -92,8 +92,35 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
   （5，真实嵌入式 PG16，含 append-only 55000/审计/权限/结构）+ `PacuView.spec.ts`（5）。
 - 待确认：Aldrete 转出阈值（默认 9）、意识/气道/去向枚举、未处理严重告警是否阻断转出、
   PACU 护士独立角色与权限（§15.9 Q-1…Q-6）。
-### M3-M11-01 术后随访与镇痛
-- 24/48h 随访单、镇痛方式（PCA 参数）、并发症/不良事件、患者反馈（脱敏）。
+### M3-M11-01 术后随访与镇痛（2026-11-14 落地，待复审 + 全量 verify）
+- 契约 anesthesia 0.10.0（additive，5 operation / 11 schema）：`POST /v1/anesthesia/followups`
+  录入随访（anesthesiaRecordId、H24/H48、assessedAt、NRS 0–10、PONV 0–3、并发症多选 +
+  自由文本、患者反馈、随访人）、`GET /followups?recordId=`、`GET /followups/{id}`；
+  `POST/GET /followups/{id}/pain-management`（PCIA/PCEA/口服/静脉/神经阻滞、药物、
+  bolus/background/lockout、效果、调整记录）；示例全 SYNTHETIC，HEAD baseline PASS。
+  旧占位 `/follow-ups`（带连字符）保留未实现，未混用。
+- V19：`m2_anes.followup_record`（FK 记录单、H24/H48、assessed_at、NRS 0–10、PONV 0–3、
+  并发症 jsonb、脱敏说明/反馈、随访人、version；append-only）与 `m2_anes.pain_management`
+  （FK 随访、方式/药物/bolus/background/lockout/效果/调整记录；append-only）；BEFORE INSERT
+  守卫要求父记录已结束且 assessed_at ≥ ended_at（55000）；权限 `m2:followup:read|write`
+  （授 SYS_ADMIN/SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）；中文注释 + 回滚说明。
+- 服务层：事务内锁记录单行，记录不存在/不可见 422、未结束 409 + result=0 审计；随访时间
+  ≥ endedAt/≤ now+容差/同记录同类型不早于上一条（400，同刻允许）；NRS/PONV 边界、并发症
+  白名单去重、文本 ≤500、随访人 ≤64；镇痛参数物理校验（bolus>0、background≥0、lockout>0）；
+  append-only；DataScope 复用记录可见性（403/404/422）；自由文本（说明/反馈/调整说明/药物）
+  统一经 `PhiMasker` 脱敏——手机号容忍 `+86`/空格/短横线/括号，身份证容忍分隔（18 位含 X、
+  15 位）；审计 FOLLOWUP_CREATE/PAIN_MANAGE（detail 无自由文本/PHI）。
+- 数据库：BEFORE INSERT 守卫增加 `patient_id` 与父麻醉记录单一致性（不一致 55000，评审 S-4）。
+- 契约：随访录入 422/409 口径与实现一致（不存在/不可见 422，不泄露存在性）；旧占位
+  `/v1/anesthesia/follow-ups` 标 `deprecated: true` 并登记独立下线任务（评审 S-2/S-3）。
+- 测试：`FollowupServiceImplTest`（20）+ `PhiMaskerTest`（6，独立脱敏用例）+
+  `FollowupPainApiIntegrationTest`（4，真实嵌入式 PG16，含边界/单调/未结束/append-only
+  55000/TRUNCATE CASCADE/patient_id 守卫/权限范围/审计脱敏/V19 结构）+ `FollowupView.spec.ts`
+  （6）+ E2E `m2-followup.spec.ts`。
+- 待确认：随访窗口与超时提醒（Q-1）、PCA 默认值与剂量单位（Q-2）、并发症字典（Q-3）、
+  NRS/PONV 量表（Q-4）、随访角色与 DLP 脱敏深度（Q-5）、旧 `/follow-ups` 占位下线（Q-6）、
+  与麻醉总结/M7 质控联动（Q-7）、早于 endedAt 的 400/409 口径（Q-8）、24/48h 窗口本期
+  不校验（Q-9）、姓名/住院号与 DLP 前置（Q-10），见 `docs/modules/m2/README.md` §16.9。
 ### M3-QA-01 临床记录专项测试
 - 时间轴一致性、断网采集补传（E2E-02）、并发修改、签名锁定（E2E-03）为发布准入项；
   **E2E-02（断网补传）由 M3-QA-01 承接**（M3-M8-01 只交付平台 ingest 与网关适配器单测/集成，
