@@ -649,6 +649,35 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 - **权限**：`m4:qc:read|write|review|export`（V25，最小授予 SYS_ADMIN/SYS_QC_MANAGER 四项、
   SYS_OR_MANAGER 读+写）；审计动作见 `docs/modules/m4/README.md` §48。
 
+### 3.16 实时态势与 KPI 看板读模型（只读投影，无表，M5-M18-01，ADR-0023）
+
+实时态势与 KPI **不新增表**（V26 为 data-only 权限迁移）：看板是对既有术间、台次、麻醉记录单、
+术中告警与设备登记的只读聚合，字段来源如下（契约 `dashboard.yaml` 0.1.0，口径 dashboard-1.0.0）。
+
+| 看板字段 | 来源 | 说明 |
+|---|---|---|
+| `updatedAt` / `timezone` | 服务端时钟 / 固定 `Asia/Shanghai` | RFC 3339 |
+| `dataDelaySeconds` | 台次 `updated_at`、记录单 `updated_at`、告警 `triggered_at`、设备 `last_seen_at` | 服务端当前时间 − 可见范围最新业务数据时间（向下取整）；`dataQuality` 按 120s 阈值标 `OK`/`DEGRADED`，无数据 `NO_DATA` |
+| `dataScope` | M0 `sys_role.data_scope` + `sys_user_org`/`sys_user_room` | ALL/SITE/DEPT/ROOM/SELF（取声明中最高优先级） |
+| `roomStatusCounts` / `rooms[].status` | `m1_sched.operating_room.status` + `deleted` | `ANESTHESIA`/`SURGERY`→`IN_SURGERY`、`IDLE`→`IDLE`、`CLEANING`→`CLEANING`、`PREPARING`→`PREPARING`、`PACU`→`RECOVERY`、软删除→`OUT_OF_SERVICE`（停用语义【待确认】） |
+| `rooms[].plannedCaseCount` | `m1_sched.schedule.status ≠ CANCELLED` 按 `room_id` 计数 | 当日台次（含未开始） |
+| `rooms[].caseInProgress` | `m1_sched.schedule.status = IN_PROGRESS` | 无台次标识/患者字段 |
+| `caseProgress` | `m1_sched.schedule.status` | 当日总数（含取消）、进行中数量与按状态计数 |
+| `alerts` | `m2_anes.alert.status/severity/triggered_at` | 未确认（TRIGGERED）按严重度分列；已确认/已忽略单列；无告警值/处置原因 |
+| `devices` | `m2_anes.device_registry.status/last_seen_at` | 在线 = `status ≠ MAINTENANCE` 且 `last_seen_at > now − 120s`（查询期推导，不写回） |
+| KPI 台次/已开始/已完成/取消 | `m1_sched.schedule` + `m2_anes.anesthesia_record.started_at/ended_at` | 口径同 report-1.0.0；已开始/已完成优先看记录单时间，其次台次状态 |
+| KPI 准点率 | 每术间当日计划最早台次 + 实际开始时间 | 实际开始优先取记录单 `started_at`，缺失回退台次 `updated_at`【待确认】；首台取消/未开始不评估 |
+| KPI 取消率 | `m1_sched.schedule.status` | 取消台次 / 当日总台次（分母含取消） |
+| KPI 利用率 | 台次计划起止与当日窗口重叠分钟 + 术间数 | 分母 = 可见术间数 × 每术间每日可用分钟（默认 600）；计划 vs 实际口径【待确认】 |
+| KPI 告警数 | `m2_anes.alert` | 当日触发告警数与其中 CRITICAL 数 |
+| KPI 平均麻醉时长 | `m2_anes.anesthesia_record.started_at/ended_at` | `Σ floor((ended_at − started_at)/60s) / 有记录台次`（2 位小数），无时长台次单列 |
+| 审计 | `m0_platform.sys_audit_log` | `DASHBOARD_VIEW` 按用户采样（默认 300s），detail 仅看板类型/日期/范围/计数/延迟 |
+
+说明：看板响应**不含**患者姓名、住院号/院内患者号、证件号、手机号、术前诊断、术式自由文本、
+记录单自由文本与告警处置原因（只有计数/状态/术间/科室）。跨 schema 读取只在装配层
+`DashboardCaseSourceAdapter`/`DashboardRoomSourceAdapter`/`DashboardAlertSourceAdapter`/
+`DashboardDeviceSourceAdapter` 的单条只读 SELECT 中发生，不复制其他模块 Mapper/实体。
+
 ## 4. 与契约的对应
 
 | 契约 Schema | 数据库实体 | 说明 |
@@ -745,3 +774,6 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 19. **Q-9 报表数据来源与时长口径**：`STAFF` 用记录单创建人还是排班/实际执行人、`DEPT` 用
     申请科室还是手术/患者科室、`SURGERY` 用 HIS 还是院内分级编码；麻醉时长是否扣除准备/
     复苏时间、跨零点如何展示（ADR-0021 Q-2/Q-3）。
+20. **Q-10 看板口径**：准点率“实际开始时间”来源（记录单 `started_at` vs 台次 `updated_at`）、
+    利用率计划/实际占用口径、停用术间语义（M1 无独立停用状态，暂以软删除表示）、SELF 范围
+    （本人台次所涉术间）是否满足麻醉医师个人看板；见 ADR-0023 Q-1–Q-4。

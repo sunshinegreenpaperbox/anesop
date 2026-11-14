@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD + M4-M16-01 工作量/多维报表/导出 + M4-M17-01 质控指标/不良事件 RCA/病历抽查/上报导出
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`、`report 0.1.0`、`qc 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD + M4-M16-01 工作量/多维报表/导出 + M4-M17-01 质控指标/不良事件 RCA/病历抽查/上报导出 + M5-M18-01 实时态势与 KPI 看板
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`、`report 0.1.0`、`qc 0.1.0`、`dashboard 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -20,7 +20,8 @@ packages/contracts/
 │   ├── material.yaml      # 耗材主数据、批次库存/出入库、UDI 一物一码追溯、SPD 适配器（EXT-03）
 │   ├── report.yaml        # 工作量统计、多维报表与脱敏 CSV 导出（口径 report-1.0.0）
 │   ├── qc.yaml            # 质控指标、不良事件 RCA、病历抽查与上报导出（口径 qc-1.0.0）
-│   └── baseline/          # 当前已发布兼容基线（10 份快照）
+│   ├── dashboard.yaml     # 实时态势与当日 KPI 看板（口径 dashboard-1.0.0，只读、无 PHI）
+│   └── baseline/          # 当前已发布兼容基线（11 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -39,7 +40,8 @@ packages/contracts/
 | `material.yaml` | 12 | 15 | 耗材目录（列表/检索/详情/创建/更新/启停）、科室选项、批次库存、出入库（IN/OUT/RETURN/ADJUST）、UDI 实例登记/使用/追溯链、SPD 适配器状态与模拟同步（EXT-03） | §2.5、§3.4、§3.9.2 |
 | `report.yaml` | 3 | 3 | 工作量统计（台次/麻醉时长/加权台次/术式分布）、多维报表（组合维度 + 指标 + 分页 + 全量合计）、报表 CSV 导出（BOM/脱敏/防公式注入） | §2.4.7、§2.7.2、§3.8.1 |
 | `qc.yaml` | 9 | 11 | 质控指标定义/周期结果（分子/分母/达标/版本）、不良事件登记与 RCA 分阶段闭环、病历质量抽查评分与整改闭环、上报脱敏 CSV 导出 | §2.9、§2.9.2、§2.5.3 I-10 |
-| **合计** | **117** | **155** | 10 个限界上下文骨架 | — |
+| `dashboard.yaml` | 2 | 2 | 实时态势（术间状态/台次进度/未确认与严重告警/设备在线/数据延迟）、当日运营 KPI（台次/准点/取消/利用率/告警/平均麻醉时长；口径复用 M2-M6-01 与 M4 report） | §2.4.9、E-M18 |
+| **合计** | **119** | **157** | 11 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 

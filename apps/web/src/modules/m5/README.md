@@ -1,6 +1,7 @@
-# m5 — 药品统计（前端分包）
+# m5 — 实时态势与 KPI 看板（前端分包）
 
-**一句话职责**：药品统计的浏览器页面、模块内组件与组合式函数；当前为占位，随 M5 交付。
+**一句话职责**：驾驶舱页面（术间状态/台次进度/告警/设备/KPI 卡片、10s 轮询、暂停刷新、
+大屏友好布局）。
 
 本目录只放 M5 的页面、模块内组件与组合式函数，不对外导出内部实现。
 
@@ -8,46 +9,44 @@
 
 - 跨模块复用只经 `packages/ui`（展示组件）与 `src/api/generated/`（契约类型）；
 - 禁止引用其他 `src/modules/mX` 的内部文件；
-- 路由按模块注册，菜单与权限由 S0-08 统一装配。
+- 契约类型从 `@anesop/contracts/dashboard` 导入，禁止手写重复模型；
+- **不引入 ECharts / WebSocket**：看板用 Element Plus 卡片/进度条/表格即可满足大屏需求，
+  刷新走 10s 轮询（无新依赖，ADR-0023）。
 
 ## 目录
 
-本目录当前只有 `README.md`；页面按 `views/`、模块内组件按 `components/` 组织（与 m0 一致）。
-禁止其他模块引用本目录内部文件。
+```text
+m5/
+├── api/dashboard.ts     # 契约类型别名、轮询间隔、标签与格式化函数
+├── views/DashboardView.vue
+└── __tests__/DashboardView.spec.ts
+```
 
 ## 如何运行
 
 ```bash
 source scripts/env.sh
 pnpm install --frozen-lockfile
-pnpm -C apps/web dev        # http://localhost:5173；/api 代理到 8080
+pnpm -C apps/web dev        # http://localhost:5173/m5/dashboard；/api 代理到 8080
 ```
 
-路由按模块注册，菜单/权限由 `src/router`、`src/navigation.ts` 与 Pinia `menu` 统一装配；
-当前无 M5 页面，访问对应路由为占位/404 属预期。后端启动见
-[`docs/guides/demo.md`](../../../../../docs/guides/demo.md)。
+页面需要 `m5:dashboard:read`；无权限时路由守卫跳 `/403`，页面内也会展示权限态（不发请求）。
 
 ## 如何测试
 
 ```bash
 pnpm -C apps/web exec vue-tsc --noEmit
-pnpm test:unit
-pnpm e2e
+pnpm test:unit                 # 含 m5 的 6 个 Vitest 用例
+pnpm e2e                       # 含看板加载 → 手动刷新 → 10s 自动刷新 → 暂停
 ```
-
-页面落地时必须补 Vitest 用例；关键路径补 Playwright E2E（E2E-01–05 按模块归属）。
 
 ## 关键契约
 
-- 契约：暂无（M5 启动时先评审契约）；类型经 `@anesop/contracts` 导入，禁止手改生成物。
-- 跨模块只经 `packages/ui` 与 `src/api/generated/`；禁止引用其他 `src/modules/mX` 内部文件。
-- 权限点/菜单 meta 见 `src/navigation.ts` 与 [`docs/modules/m0/README.md`](../../../../../docs/modules/m0/README.md)。
+- 契约：`packages/contracts/openapi/dashboard.yaml` 0.1.0（口径 dashboard-1.0.0）；
+- 权限点/菜单 meta：`src/navigation.ts`（`/m5/dashboard`，`m5:dashboard:read`）；
+- 页面数据只含术间/科室/状态/计数与 KPI，无 PHI。
 
 ## 负责人（占位）
 
-- Owner：`@anesop/m5-pharmacy` + `@anesop/web-core`（CODEOWNERS 占位团队；远端组织未建，审批暂不生效）
+- Owner：`@anesop/m5-dashboard` + `@anesop/web-core`（CODEOWNERS 占位团队；远端组织未建，审批暂不生效）
 - 备份：`@anesop/maintainers`
-
-## 状态
-
-S0-02 分包占位，无页面代码；首个页面随对应业务任务落地。

@@ -1,0 +1,742 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 实时态势与 KPI 看板契约（dashboard）
+  summary: 术间状态、台次进度、告警与设备在线态势（10s 轮询）与当日运营 KPI
+  description: |
+    ANESOP 驾驶舱契约（第 11 域），对应方案书 §2.4.9（M8 驾驶舱：实时手术态势、临床风险、
+    资源态势、运营 KPI、大屏与移动摘要）、§2.4.9 关键规则（驾驶舱只读、指标口径与 M6/M7 同源、
+    实时数据延迟超过 2 分钟须标注）、§3.4.3（时间与时区）与 E-M18；决策 D-14（运营 T+1）与
+    ADR-0023（实时看板口径）。契约版本 0.1.0 为首个版本（additive）。口径版本
+    **dashboard-1.0.0**，时区固定 **Asia/Shanghai**。
+
+    硬规则：
+    1) **只读、无写操作**：驾驶舱只消费 M1 排程台次/术间、M2 麻醉记录单/术中告警/设备登记、
+       M4 质控与人员聚合，不产生任何业务数据，不新增结果表，不落库实时快照。
+       权限 `m5:dashboard:read`（V26 data-only，最小授予 SYS_ADMIN / SYS_OR_MANAGER /
+       SYS_ANESTHESIOLOGIST / SYS_QC_MANAGER）。
+    2) **无 PHI**：响应只含术间、科室、台次状态与计数、告警/设备聚合与 KPI 数值；
+       **不含**患者姓名、住院号/院内患者号、身份证号、手机号、术前诊断、术式自由文本、
+       麻醉记录单自由文本与告警处置原因。台次只以标识与状态参与计数，不返回患者维度字段。
+    3) **刷新机制：10s 前端轮询**（后端无状态、无 SSE/WebSocket）。理由：看板为只读聚合，
+       单次查询是几条索引扫描 + 应用内聚合（实测见 docs/modules/m5/README.md），10s 轮询的
+       资源开销远低于长连接与断线重连治理成本；且本契约不引入新依赖（AGENTS 依赖准入）。
+       轮询间隔与暂停由前端控制，服务端每次请求独立计算，不做会话级缓存。
+    4) **时效标注**：`dataDelaySeconds` = 服务端当前时间 − 可见范围内最新业务数据时间
+       （取台次 `updated_at`、麻醉记录单 `updated_at`、告警 `triggered_at`、设备
+       `last_seen_at` 的最大值），向下取整到秒；`dataQuality` 按阈值标注：
+       `OK`（≤120s）、`DEGRADED`（&gt;120s，对应方案书“延迟超过 2 分钟须标注”）、
+       `NO_DATA`（可见范围内无任何业务数据）。阈值可由
+       `anesop.m5.dashboard.stale-threshold-seconds` 收紧，不得放宽到 120s 以上。
+    5) **时区与窗口**：所有“当日”按 `Asia/Shanghai` 自然日 `[00:00, 次日 00:00)`；
+       实时态势的台次/告警窗口为当日 `[00:00, now]`，KPI 为**整日**（`date` 缺省为服务端
+       当日）。时间戳一律 RFC 3339（带偏移），响应内 `timezone` 固定 `Asia/Shanghai`。
+    6) **数据范围（fail-closed）**：`ALL` 全院；`SITE`/`DEPT` 按术间所属院区/科室过滤
+       （台次另按申请科室/院区过滤）；`ROOM` 按绑定术间过滤；`SELF` 按**本人创建麻醉记录单
+       的当日台次所涉术间**过滤（聚合计数无 PHI，幂等：重复应用同一范围不改变结果）。
+       无任何可用范围、或范围解析失败 → 403；绝不退化为全院查询。
+    7) **台次口径复用**：台次 = `m1_sched.schedule` 中 `deleted=false` 的记录；非取消台次
+       另要求 `status ≠ CANCELLED`（与 M4 report / ADR-0021 一致）；按计划开始时间
+       `start_at` 的本地日期归集，跨日只计首日（与 M1 analytics-1.0.0 一致）。
+    8) **KPI 口径复用**（详见 ADR-0023，【待确认】项在 `pendingConfirmations` 显式返回）：
+       - `caseCount`：当日非取消台次（口径同 report-1.0.0）；
+       - `startedCount`：当日已开始台次 = 麻醉记录单 `started_at` 非空 或 台次状态
+         `IN_PROGRESS`/`COMPLETED`；
+       - `completedCount`：当日已完成台次 = 麻醉记录单 `ended_at` 非空 或 台次状态
+         `COMPLETED`；
+       - `onTimeRate`：当日**每术间计划开始最早台次**中按“实际开始时间 − 计划开始时间
+         ≤ 阈值（默认 15 分钟，取绝对值）”判定的比例，分母为已评估首台数（取消/未开始/
+         缺实际开始的术间-日不评估，与 analytics-1.0.0 一致）；实际开始时间优先取麻醉记录单
+         `started_at`，缺失回退台次 `updated_at` **【待确认】**；
+       - `cancellationRate`：当日取消台次 / 当日总台次（分母含取消，同 analytics-1.0.0）；
+       - `utilizationRate`：当日非取消台次与当日窗口重叠的手术分钟数之和 /
+         （可见术间数 × 每术间每日可用分钟数，默认 600，取
+         `anesop.m5.dashboard.room-daily-available-minutes`）；计划 vs 实际占用口径
+         **【待确认】**（同 ADR-0015 Q-3）；
+       - `alertCount`：当日触发告警数；`criticalAlertCount`：其中 `severity=CRITICAL` 的数；
+       - `averageAnesthesiaMinutes`：当日有可用时长的台次的
+         `Σ floor((ended_at − started_at)/60s) / 记录数`，四舍五入 2 位小数（口径同
+         report-1.0.0，分母单列 `recordedCaseCount`，无时长台次单列 `unrecordedCaseCount`）；
+       - 比率字段一律以 **0–1 小数**返回（4 位小数，`utilizationRate` 可 &gt; 1），
+         分母为 0 时返回 0，不返回 404、不做除零。
+    9) **空数据 0**：可见范围内无术间/台次/告警/设备时计数为 0、数组为空、
+       `dataQuality=NO_DATA`，不返回 404。
+    所有示例均为 SYNTHETIC 合成数据（无真实患者、人员与设备序列号）。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 实时态势
+    description: 术间状态、台次进度、未确认告警与设备在线态势（10s 前端轮询，只读、无 PHI）。
+  - name: 运营 KPI
+    description: 当日台次、准点率、取消率、利用率、告警数与平均麻醉时长（口径复用 M2-M6-01 / M4 report）。
+paths:
+  /v1/dashboard/realtime:
+    get:
+      operationId: getRealtimeDashboard
+      tags:
+        - 实时态势
+      summary: 实时态势（术间/台次/告警/设备 + 数据延迟）
+      description: |
+        只读聚合，权限 `m5:dashboard:read`。口径版本 **dashboard-1.0.0**，时区 **Asia/Shanghai**。
+
+        返回：
+        - `roomStatusCounts` + `rooms`：术间状态（手术中/空闲/清洁/准备/复苏/停用）计数与明细；
+          状态映射：`ANESTHESIA`/`SURGERY`→`IN_SURGERY`、`IDLE`→`IDLE`、`CLEANING`→`CLEANING`、
+          `PREPARING`→`PREPARING`、`PACU`→`RECOVERY`，软删除术间（`deleted=true`）按
+          `OUT_OF_SERVICE`（停用）计入 —— M1 无独立“停用”状态，停用语义暂由软删除承载
+          **【待确认】**；
+        - `caseProgress`：当日台次总数、进行中台次数量与按状态计数；
+        - `alerts`：当日**未确认**告警数（`status=TRIGGERED`）及按严重度分列，
+          另有已确认/已忽略计数；不含告警处置原因与患者关联字段；
+        - `devices`：设备总数与在线/离线/维护中计数（离线 = `MAINTENANCE` 以外且
+          `last_seen_at + 超时阈值 ≤ now`，超时阈值默认 120s，与 M2 采集离线判定一致）；
+        - `updatedAt` 与 `dataDelaySeconds`/`dataQuality`：数据时效标识。
+
+        数据范围 fail-closed：`ALL` 全院；`SITE`/`DEPT` 按术间院区/科室；`ROOM` 按术间；
+        `SELF` 按本人当日台次所涉术间。无可用范围 403。空数据返回 0 与空数组。
+        查询写审计 `DASHBOARD_VIEW`（按用户采样，避免 10s 轮询刷屏）。
+      responses:
+        '200':
+          description: 实时态势快照（计数 + 术间明细，无患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RealtimeDashboard'
+              example:
+                updatedAt: '2026-11-15T09:30:12+08:00'
+                timezone: Asia/Shanghai
+                dataDelaySeconds: 8
+                dataQuality: OK
+                dataScope: ALL
+                roomStatusCounts:
+                  total: 3
+                  inSurgery: 1
+                  idle: 1
+                  cleaning: 1
+                  preparing: 0
+                  recovery: 0
+                  outOfService: 0
+                rooms:
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c1'
+                    roomNo: OR-01
+                    roomName: 一号手术间（合成）
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    status: IN_SURGERY
+                    caseInProgress: true
+                    plannedCaseCount: 2
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c2'
+                    roomNo: OR-02
+                    roomName: 二号手术间（合成）
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    status: IDLE
+                    caseInProgress: false
+                    plannedCaseCount: 0
+                  - roomId: 'f2000000-0000-4000-8000-0000000000c5'
+                    roomNo: OR-05
+                    roomName: 五号手术间（合成）
+                    deptId: 'f1000000-0000-4000-8000-000000000003'
+                    deptName: 手术室（合成）
+                    status: CLEANING
+                    caseInProgress: false
+                    plannedCaseCount: 1
+                caseProgress:
+                  totalCount: 3
+                  activeCount: 1
+                  statusCounts:
+                    - status: IN_PROGRESS
+                      count: 1
+                    - status: PLANNED
+                      count: 1
+                    - status: COMPLETED
+                      count: 1
+                alerts:
+                  unacknowledgedCount: 2
+                  acknowledgedCount: 1
+                  ignoredCount: 0
+                  criticalCount: 1
+                  warnCount: 1
+                  infoCount: 0
+                  latestTriggeredAt: '2026-11-15T09:28:40+08:00'
+                devices:
+                  total: 4
+                  online: 3
+                  offline: 1
+                  maintenance: 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/dashboard/kpi:
+    get:
+      operationId: getDashboardKpi
+      tags:
+        - 运营 KPI
+      summary: 当日运营 KPI（台次/准点/取消/利用率/告警/平均麻醉时长）
+      description: |
+        只读聚合，权限 `m5:dashboard:read`。口径版本 **dashboard-1.0.0**，时区 **Asia/Shanghai**。
+
+        公式（与 M2-M6-01 analytics-1.0.0、M4 report-1.0.0 同源，见 ADR-0023）：
+        - `caseCount` = 当日非取消台次（`deleted=false` 且 `status ≠ CANCELLED`）；
+        - `totalCaseCount` = 当日全部台次（分母含取消，用于取消率）；
+        - `startedCount` = 麻醉记录单 `started_at` 非空 或 状态 `IN_PROGRESS`/`COMPLETED`；
+        - `completedCount` = 麻醉记录单 `ended_at` 非空 或 状态 `COMPLETED`；
+        - `cancelledCount` = 当日取消台次；
+        - `onTimeRate` = 准点首台数 / 已评估首台数（首台取消/未开始/缺实际开始不计入分母）；
+        - `cancellationRate` = 取消台次 / 当日总台次（分母含取消）；
+        - `utilizationRate` = Σ 当日非取消台次与当日重叠的手术分钟 /（可见术间数 ×
+          每术间每日可用分钟），分母为 0 时 0，可 &gt; 1；
+        - `alertCount` / `criticalAlertCount` = 当日触发告警数 / 其中严重告警数；
+        - `averageAnesthesiaMinutes` = Σ floor((ended_at − started_at)/60s) / 有可用时长台次数
+          （2 位小数），无时长台次单列 `unrecordedCaseCount`。
+
+        分母为 0 时返回 0（不返回 404/NaN）。`pendingConfirmations` 显式列出尚未获院方确认的
+        口径项（如准点实际开始来源、利用率计划/实际、停用术间语义），前端应展示“口径待确认”
+        标识。数据范围与实时接口一致；查询写审计 `DASHBOARD_VIEW`（采样）。
+      parameters:
+        - name: date
+          in: query
+          required: false
+          description: |
+            统计自然日（Asia/Shanghai），格式 `YYYY-MM-DD`；缺省为服务端当前本地日期。
+            格式非法或日期超出 `[today-366, today+31]` 返回 400。
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: 当日 KPI（计数、比率与时长，无患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardKpi'
+              example:
+                date: '2026-11-15'
+                timezone: Asia/Shanghai
+                updatedAt: '2026-11-15T09:30:12+08:00'
+                dataDelaySeconds: 8
+                dataQuality: OK
+                dataScope: ALL
+                caseCount: 3
+                totalCaseCount: 4
+                startedCount: 2
+                completedCount: 1
+                cancelledCount: 1
+                onTimeEvaluatedCount: 2
+                onTimeCount: 1
+                onTimeRate: 0.5
+                onTimeThresholdMinutes: 15
+                cancellationRate: 0.25
+                utilizationRate: 0.35
+                totalSurgeryMinutes: 630
+                availableMinutes: 1800
+                roomCount: 3
+                alertCount: 3
+                criticalAlertCount: 1
+                averageAnesthesiaMinutes: 107.5
+                recordedCaseCount: 2
+                unrecordedCaseCount: 1
+                formula: '台次 = 当日非取消台次；准点率 = 准点首台 / 已评估首台；取消率 = 取消台次 / 当日总台次；利用率 = 当日重叠手术分钟 / (术间数 × 每日可用分钟)；平均麻醉时长 = Σ floor((ended_at − started_at)/60s) / 有记录台次'
+                pendingConfirmations:
+                  - 准点率的“实际开始时间”优先取麻醉记录单 started_at，缺失回退台次 updated_at【待确认】
+                  - 利用率为“计划手术时长 / 可用时长”，是否改为实际占用【待确认】
+                  - 停用术间语义：M1 无独立停用状态，暂以软删除表示【待确认】
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
+  responses:
+    BadRequest:
+      description: 请求参数校验失败（`date` 格式非法或超出允许范围）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-0911
+            details:
+              - field: date
+                reason: date 必须为 YYYY-MM-DD 格式的本地日期
+    Unauthorized:
+      description: 未认证或令牌已失效（fail-closed）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-0912
+            details: []
+    Forbidden:
+      description: 已认证但缺权限（m5:dashboard:read）或数据范围不足（无可用范围/范围解析失败）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-0913
+            details:
+              - field: dataScope
+                reason: 当前用户无可用看板数据范围
+  schemas:
+    Error:
+      type: object
+      description: 统一错误响应（与其余契约一致）。
+      required:
+        - code
+        - message
+        - traceId
+      properties:
+        code:
+          type: string
+          description: 稳定错误码（如 PARAM_INVALID / AUTH_UNAUTHORIZED / AUTH_FORBIDDEN）。
+        message:
+          type: string
+          description: 面向用户的中文提示（不含患者标识、SQL 实参与内部堆栈）。
+        traceId:
+          type: string
+          description: 链路追踪标识（与响应头 X-Trace-Id 一致）。
+        details:
+          type: array
+          description: 字段级错误明细（缺省为空数组）。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    ErrorDetail:
+      type: object
+      description: 字段级错误明细。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 出错字段名。
+        reason:
+          type: string
+          description: 中文原因（由服务端固定提供，不回显原始入参）。
+    DataQuality:
+      type: string
+      description: |
+        数据时效标识：`OK`（延迟 ≤ 阈值，默认 120s）、`DEGRADED`（延迟 &gt; 阈值，前端须标注
+        “数据延迟”）、`NO_DATA`（可见范围内无任何业务数据）。
+      enum:
+        - OK
+        - DEGRADED
+        - NO_DATA
+    DataScopeType:
+      type: string
+      description: 本次响应的数据范围类型（ALL/SITE/DEPT/ROOM/SELF），前端据此提示可见范围。
+      enum:
+        - ALL
+        - SITE
+        - DEPT
+        - ROOM
+        - SELF
+    RoomStatus:
+      type: string
+      description: |
+        看板术间状态（由 M1 术间运行状态映射）：`IN_SURGERY`=手术中（ANESTHESIA/SURGERY）、
+        `IDLE`=空闲、`CLEANING`=清洁、`PREPARING`=准备、`RECOVERY`=复苏（PACU）、
+        `OUT_OF_SERVICE`=停用（软删除术间；M1 无独立停用状态【待确认】）。
+      enum:
+        - IN_SURGERY
+        - IDLE
+        - CLEANING
+        - PREPARING
+        - RECOVERY
+        - OUT_OF_SERVICE
+    CaseStatus:
+      type: string
+      description: 台次状态（与 M1 排程契约一致）。
+      enum:
+        - PLANNED
+        - PUBLISHED
+        - IN_PROGRESS
+        - COMPLETED
+        - CANCELLED
+        - DELAYED
+    RoomStatusCounts:
+      type: object
+      description: 术间状态计数（各项之和等于 `total`）。
+      required:
+        - total
+        - inSurgery
+        - idle
+        - cleaning
+        - preparing
+        - recovery
+        - outOfService
+      properties:
+        total:
+          type: integer
+          description: 可见术间总数（含停用）。
+          minimum: 0
+        inSurgery:
+          type: integer
+          description: 手术中术间数。
+          minimum: 0
+        idle:
+          type: integer
+          description: 空闲术间数。
+          minimum: 0
+        cleaning:
+          type: integer
+          description: 清洁中术间数。
+          minimum: 0
+        preparing:
+          type: integer
+          description: 准备中术间数。
+          minimum: 0
+        recovery:
+          type: integer
+          description: 复苏（PACU）术间数。
+          minimum: 0
+        outOfService:
+          type: integer
+          description: 停用术间数（软删除；M1 无独立停用状态【待确认】）。
+          minimum: 0
+    RoomSituation:
+      type: object
+      description: 单个术间的实时状态（无患者标识、无术式文本）。
+      required:
+        - roomId
+        - roomNo
+        - roomName
+        - status
+        - caseInProgress
+        - plannedCaseCount
+      properties:
+        roomId:
+          type: string
+          format: uuid
+          description: 术间标识。
+        roomNo:
+          type: string
+          description: 术间编号（院内唯一，如 OR-01）。
+        roomName:
+          type: string
+          description: 术间名称。
+        deptId:
+          type: string
+          format: uuid
+          description: 术间所属科室标识；未设置为 null。
+        deptName:
+          type: string
+          description: 术间所属科室名称；未设置为 null。
+        status:
+          $ref: '#/components/schemas/RoomStatus'
+        caseInProgress:
+          type: boolean
+          description: 该术间当前是否有进行中台次（状态 IN_PROGRESS）。
+        plannedCaseCount:
+          type: integer
+          description: 当日该术间非取消台次数（进度参考，不含患者信息）。
+          minimum: 0
+    CaseStatusCount:
+      type: object
+      description: 单个台次状态的计数。
+      required:
+        - status
+        - count
+      properties:
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        count:
+          type: integer
+          description: 该状态的台次数（当日窗口）。
+          minimum: 0
+    CaseProgress:
+      type: object
+      description: 当日台次进度（总数、进行中数量与按状态计数）。
+      required:
+        - totalCount
+        - activeCount
+        - statusCounts
+      properties:
+        totalCount:
+          type: integer
+          description: 当日台次总数（含取消）。
+          minimum: 0
+        activeCount:
+          type: integer
+          description: 进行中台次数（状态 IN_PROGRESS）。
+          minimum: 0
+        statusCounts:
+          type: array
+          description: 按状态计数（按状态枚举顺序，未出现的状态不返回；空数据为空数组）。
+          items:
+            $ref: '#/components/schemas/CaseStatusCount'
+    AlertSummary:
+      type: object
+      description: 当日告警态势（计数按未确认口径分列，`unacknowledgedCount = critical + warn + info`）。
+      required:
+        - unacknowledgedCount
+        - acknowledgedCount
+        - ignoredCount
+        - criticalCount
+        - warnCount
+        - infoCount
+      properties:
+        unacknowledgedCount:
+          type: integer
+          description: 未确认告警数（status=TRIGGERED）。
+          minimum: 0
+        acknowledgedCount:
+          type: integer
+          description: 已确认告警数（status=ACKNOWLEDGED）。
+          minimum: 0
+        ignoredCount:
+          type: integer
+          description: 已忽略告警数（status=IGNORED）。
+          minimum: 0
+        criticalCount:
+          type: integer
+          description: 未确认且严重（severity=CRITICAL）的告警数。
+          minimum: 0
+        warnCount:
+          type: integer
+          description: 未确认且警告（severity=WARN）的告警数。
+          minimum: 0
+        infoCount:
+          type: integer
+          description: 未确认且提示（severity=INFO）的告警数。
+          minimum: 0
+        latestTriggeredAt:
+          type: string
+          format: date-time
+          description: 当日最近一次告警触发时间；无告警为 null。
+    DeviceSummary:
+      type: object
+      description: 设备在线态势（状态为查询期推导，不写回设备登记）。
+      required:
+        - total
+        - online
+        - offline
+        - maintenance
+      properties:
+        total:
+          type: integer
+          description: 可见设备总数。
+          minimum: 0
+        online:
+          type: integer
+          description: 在线设备数（last_seen_at + 超时阈值 &gt; now）。
+          minimum: 0
+        offline:
+          type: integer
+          description: 离线设备数（从未上报或超时；不含维护中）。
+          minimum: 0
+        maintenance:
+          type: integer
+          description: 维护中设备数（显式状态，不参与离线推导）。
+          minimum: 0
+        offlineTimeoutSeconds:
+          type: integer
+          description: 离线判定阈值（秒，默认 120，与 M2 采集一致）。
+          minimum: 1
+    RealtimeDashboard:
+      type: object
+      description: 实时态势快照（口径 dashboard-1.0.0；只读、无 PHI）。
+      required:
+        - updatedAt
+        - timezone
+        - dataDelaySeconds
+        - dataQuality
+        - dataScope
+        - roomStatusCounts
+        - rooms
+        - caseProgress
+        - alerts
+        - devices
+      properties:
+        updatedAt:
+          type: string
+          format: date-time
+          description: 服务端生成响应的时刻（RFC 3339，Asia/Shanghai 偏移）。
+        timezone:
+          type: string
+          description: 统计时区，固定 Asia/Shanghai。
+        dataDelaySeconds:
+          type: integer
+          description: 数据延迟秒数（服务端当前时间 − 可见范围最新业务数据时间，向下取整）；无数据为 0。
+          minimum: 0
+        dataQuality:
+          $ref: '#/components/schemas/DataQuality'
+        dataScope:
+          $ref: '#/components/schemas/DataScopeType'
+        roomStatusCounts:
+          $ref: '#/components/schemas/RoomStatusCounts'
+        rooms:
+          type: array
+          description: 术间明细（按院区→科室→术间编号稳定排序；空数据为空数组）。
+          items:
+            $ref: '#/components/schemas/RoomSituation'
+        caseProgress:
+          $ref: '#/components/schemas/CaseProgress'
+        alerts:
+          $ref: '#/components/schemas/AlertSummary'
+        devices:
+          $ref: '#/components/schemas/DeviceSummary'
+    DashboardKpi:
+      type: object
+      description: 当日运营 KPI（口径 dashboard-1.0.0；比率一律 0–1 小数，分母为 0 时为 0）。
+      required:
+        - date
+        - timezone
+        - updatedAt
+        - dataDelaySeconds
+        - dataQuality
+        - dataScope
+        - caseCount
+        - totalCaseCount
+        - startedCount
+        - completedCount
+        - cancelledCount
+        - onTimeEvaluatedCount
+        - onTimeCount
+        - onTimeRate
+        - onTimeThresholdMinutes
+        - cancellationRate
+        - utilizationRate
+        - totalSurgeryMinutes
+        - availableMinutes
+        - roomCount
+        - alertCount
+        - criticalAlertCount
+        - averageAnesthesiaMinutes
+        - recordedCaseCount
+        - unrecordedCaseCount
+        - formula
+        - pendingConfirmations
+      properties:
+        date:
+          type: string
+          format: date
+          description: 统计自然日（Asia/Shanghai）。
+        timezone:
+          type: string
+          description: 统计时区，固定 Asia/Shanghai。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 服务端生成响应的时刻（RFC 3339）。
+        dataDelaySeconds:
+          type: integer
+          description: 数据延迟秒数（同实时态势口径）。
+          minimum: 0
+        dataQuality:
+          $ref: '#/components/schemas/DataQuality'
+        dataScope:
+          $ref: '#/components/schemas/DataScopeType'
+        caseCount:
+          type: integer
+          description: 当日非取消台次数（口径同 report-1.0.0）。
+          minimum: 0
+        totalCaseCount:
+          type: integer
+          description: 当日全部台次数（含取消，取消率分母）。
+          minimum: 0
+        startedCount:
+          type: integer
+          description: 当日已开始台次数（记录单 started_at 非空或状态 IN_PROGRESS/COMPLETED）。
+          minimum: 0
+        completedCount:
+          type: integer
+          description: 当日已完成台次数（记录单 ended_at 非空或状态 COMPLETED）。
+          minimum: 0
+        cancelledCount:
+          type: integer
+          description: 当日取消台次数。
+          minimum: 0
+        onTimeEvaluatedCount:
+          type: integer
+          description: 纳入准点评估的首台数（取消/未开始/缺实际开始不计入）。
+          minimum: 0
+        onTimeCount:
+          type: integer
+          description: 准点首台数（|实际开始 − 计划开始| ≤ 阈值）。
+          minimum: 0
+        onTimeRate:
+          type: number
+          format: double
+          description: 准点率 = 准点首台数 / 已评估首台数（0–1，4 位小数；分母 0 时为 0）。
+          minimum: 0
+          maximum: 1
+        onTimeThresholdMinutes:
+          type: integer
+          description: 准点判定阈值（分钟，默认 15）。
+          minimum: 0
+        cancellationRate:
+          type: number
+          format: double
+          description: 取消率 = 取消台次 / 当日总台次（0–1，4 位小数；分母 0 时为 0）。
+          minimum: 0
+          maximum: 1
+        utilizationRate:
+          type: number
+          format: double
+          description: 利用率 = 当日重叠手术分钟 / (术间数 × 每日可用分钟)；分母 0 时为 0，可大于 1。
+          minimum: 0
+        totalSurgeryMinutes:
+          type: integer
+          description: 当日非取消台次与当日窗口重叠的手术分钟数之和。
+          minimum: 0
+        availableMinutes:
+          type: integer
+          description: 可用分钟数 = 可见术间数 × 每术间每日可用分钟（默认 600）。
+          minimum: 0
+        roomCount:
+          type: integer
+          description: 参与利用率分母的可见术间数（不含停用术间）。
+          minimum: 0
+        alertCount:
+          type: integer
+          description: 当日触发告警数。
+          minimum: 0
+        criticalAlertCount:
+          type: integer
+          description: 当日触发的严重（CRITICAL）告警数。
+          minimum: 0
+        averageAnesthesiaMinutes:
+          type: number
+          format: double
+          description: 平均麻醉时长（分钟，2 位小数；无记录台次时为 0）。
+          minimum: 0
+        recordedCaseCount:
+          type: integer
+          description: 有可用麻醉时长的台次数（平均时长分母）。
+          minimum: 0
+        unrecordedCaseCount:
+          type: integer
+          description: 无可用麻醉时长的台次数（无记录单/未结束），用于数据质量复核。
+          minimum: 0
+        formula:
+          type: string
+          description: 全部 KPI 的公式说明（随响应返回，口径可追溯）。
+        pendingConfirmations:
+          type: array
+          description: 尚未获院方确认的口径项（前端须展示“口径待确认”标识；无则空数组）。
+          items:
+            type: string

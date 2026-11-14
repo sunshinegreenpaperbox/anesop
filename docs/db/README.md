@@ -722,6 +722,35 @@ append-only 触发器。不改写 V1–V23 既有列、权限与角色。迁移�
 - **演练要求**：不可逆脚本（删留痕）必须附回滚演练记录并在 PR 声明；`m4_qc` 表禁止直接
   `TRUNCATE`（触发器拒绝），归档请走离线追溯库。
 
+### 4.21 V26（M5 实时态势与 KPI 看板权限点，data-only）回滚说明
+
+V26 是 **data-only** 迁移（**无任何 DDL**）：不建 schema/表/索引/触发器，只新增 1 个权限点
+`m5:dashboard:read`（实时态势与当日 KPI 只读，path `/api/v1/dashboard/*`，一个权限码覆盖
+realtime 与 kpi）与 4 条最小授权（SYS_ADMIN / SYS_OR_MANAGER / SYS_ANESTHESIOLOGIST /
+SYS_QC_MANAGER），并带 `DO $$` 自检（权限点数量 ≠ 1 或授权缺失即 fail-fast）。看板是对既有
+`m1_sched.operating_room` / `schedule` / `surgery_application`、`m2_anes.anesthesia_record` /
+`alert` / `device_registry` 的**只读聚合**（口径 dashboard-1.0.0，见
+[ADR-0023](../adr/0023-实时看板口径.md)），不新增看板结果表/物化视图/快照；查询写既有
+`m0_platform.sys_audit_log`（`DASHBOARD_VIEW`，按用户采样），复用 V1 审计表与 append-only
+触发器。不改写 V1–V25 既有列、权限与角色。迁移后无演示数据（统计源为 M1/M2 临床数据），
+自动化测试使用 SYNTHETIC 术间/台次/告警/设备在线构造并清理。
+
+- **应用回滚**：下线 `/v1/dashboard/*` 端点与前端“实时看板”菜单（`/m5/dashboard`）；看板
+  只读，不产生业务数据，回滚不丢数据、不影响 M1/M2/M3 排程与记录单、M4 报表与质控。
+- **库层回滚**（纯 data-only，DELETE 即可；需 DBA 审批 + 备份，顺序不可颠倒）：
+  先 `DELETE FROM m0_platform.sys_role_permission WHERE permission_id =
+  'b0000000-0000-4000-8000-00000000007d'` → 再
+  `DELETE FROM m0_platform.sys_permission WHERE code = 'm5:dashboard:read'`
+  （先删授权再删权限点，满足外键顺序）。
+- **令牌影响**：权限点在登录时写入 JWT claim，回滚后已签发令牌在过期前仍带旧权限点；
+  回滚后需强制重新登录（或等待令牌过期）使看板端点真正不可达。
+- **重放/前滚**：INSERT 带 `ON CONFLICT DO NOTHING`，权限点/授权已存在时重放不会因主键冲突
+  中断，可用于迁移演练；Flyway 仍只执行一次，人工重放前建议核对 `sys_permission.code` 与
+  4 条授权是否齐全（自检块会 fail-fast 兜底）。
+- **后续**：看板历史回放/结果固化（方案书 §2.4.9 后续需求）如确认，按 expand 新增
+  V27+ 读模型与快照表，不在 V26 预置。
+
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）
