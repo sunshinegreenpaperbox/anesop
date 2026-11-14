@@ -631,6 +631,24 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 申请号（导出脱敏见契约 §导出）；人员工号与姓名属院内在册人员数据（非患者标识）。跨 schema
 读取只在装配层 `ReportCaseSourceAdapter` 的单条只读 SELECT 中发生，不复制 m1/m2 Mapper/实体。
 
+### 3.15 质控指标、不良事件与病历抽查（V25 已实现，M4-M17-01，ADR-0022）
+
+| 表 | 关键字段 | 约束/说明 |
+|---|---|---|
+| `m4_qc.qc_indicator` | `code`/`version`/`name`/`category`(STRUCTURE/PROCESS/OUTCOME)/`definition`/`data_source`/`numerator_label`/`denominator_label`/`unit`(PERCENT/PER_1000_CASES)/`threshold_operator`(GTE/LTE)/`threshold_value`/`effective_from`/`effective_to`/`status`(ACTIVE/RETIRED)/`provisional`/`in_target_statistics` | `(code, version)` 唯一；口径/阈值/身份列/`provisional`/`in_target_statistics` 不可改（55000），只允许 `ACTIVE→RETIRED`；`DELETE`/`TRUNCATE` 拒绝（55000）；计算按 `effective_from/effective_to` 选择版本，同 `code` 周期内重叠 → 409；语义变更新增版本行；`provisional=true` 为合成参考指标【待确认】；`in_target_statistics=false`（`QC-SYN-PROC-004` 结构合规率）不计入达标统计 |
+| `m4_qc.qc_indicator_result` | `indicator_id`/`indicator_code`/`indicator_version`/`period_from`/`period_to`/`dept_id`/`numerator`/`denominator`/`value`/`target_met`/`computed_at` | `(indicator_id, period_from, period_to, dept_id)` 唯一；`dept_id` 全 0 哨兵=全院；重算覆盖同一快照（upsert），跨版本历史独立保留；`numerator/denominator/value ≥ 0` |
+| `m4_qc.adverse_event` | `event_no`/`event_type`/`severity`/`occurred_at`/`dept_id`/`dept_name`/`schedule_id`/`description`/`reporter_id`/`reporter_name`/`anonymous`/`status`/`version` | 业务内容 append-only；状态 `REPORTED→RCA→RECTIFYING→CLOSED` 逐级前移且 `version+1`（越级/回退/删除/清空 55000）；`event_no` 唯一；`description` ≤500 且必须已脱敏 |
+| `m4_qc.adverse_rca` | `event_id`/`event_no`/`timeline`(jsonb 1–20)/`root_cause`/`corrective_action`/`responsible_name`/`due_date`/`status`(OPEN/CLOSED)/`reviewer_*`/`reviewed_at`/`review_conclusion`/`closed_at` | 一条事件一条 RCA（`event_id` 唯一）；内容不可改；复核/闭环字段只从 NULL 写一次；`OPEN→CLOSED` 一次性 |
+| `m4_qc.chart_review` | `review_no`/`schedule_id`/`record_id`/`dept_id`/`reviewer_name`/`reviewed_at`/`items`(jsonb 1–12)/`total_score`/`max_score`/`grade`(A/B/C/D)/`defect_count`/`status`/`version` | 总分/满分/等级/缺陷由服务端计算（`total_score ≤ max_score`）；评分内容不可改；`OPEN→RECTIFYING→CLOSED` 且 `version+1`；`review_no` 唯一 |
+| `m4_qc.rectification` | `review_id`/`review_no`/`corrective_action`/`responsible_name`/`due_date`/`status`/`reviewer_*`/`closed_at` | 一条抽查一条整改（`review_id` 唯一）；内容不可改；闭环字段一次性写入；`OPEN→CLOSED` |
+
+- **脱敏**：本域不存患者标识；`description`/`defect_note` 为已脱敏文本（服务端拒绝身份证/
+  住院号/手机号关键词与连续 11–19 位数字）；导出不输出任何自由文本原文。
+- **跨模块**：`schedule_id`/`record_id` 为逻辑关联（不建外键）；指标计数由装配层只读投影
+  从 M2 排程、M3 记录单/访视/三方核查、M4 麻精/高值耗材流水获取（ADR-0022）。
+- **权限**：`m4:qc:read|write|review|export`（V25，最小授予 SYS_ADMIN/SYS_QC_MANAGER 四项、
+  SYS_OR_MANAGER 读+写）；审计动作见 `docs/modules/m4/README.md` §48。
+
 ## 4. 与契约的对应
 
 | 契约 Schema | 数据库实体 | 说明 |

@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD + M4-M16-01 工作量/多维报表/导出 + M4-M17-01 质控指标/不良事件 RCA/病历抽查/上报导出
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`、`report 0.1.0`、`qc 0.1.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -19,7 +19,8 @@ packages/contracts/
 │   ├── staff.yaml         # 人员档案、分级授权（R1–R5）、排班、培训与到期提醒
 │   ├── material.yaml      # 耗材主数据、批次库存/出入库、UDI 一物一码追溯、SPD 适配器（EXT-03）
 │   ├── report.yaml        # 工作量统计、多维报表与脱敏 CSV 导出（口径 report-1.0.0）
-│   └── baseline/          # 当前已发布兼容基线（9 份快照）
+│   ├── qc.yaml            # 质控指标、不良事件 RCA、病历抽查与上报导出（口径 qc-1.0.0）
+│   └── baseline/          # 当前已发布兼容基线（10 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -37,7 +38,8 @@ packages/contracts/
 | `staff.yaml` | 10 | 15 | 人员档案（列表/详情/创建/更新）、科室选项、分级授权（当前 + append-only 历史、授予/撤销、授权校验）、排班（查询/新建/更新/取消、冲突检测）、培训（查询/登记/到期提醒） | §2.4.4、§3.4.1、§3.9.2 |
 | `material.yaml` | 12 | 15 | 耗材目录（列表/检索/详情/创建/更新/启停）、科室选项、批次库存、出入库（IN/OUT/RETURN/ADJUST）、UDI 实例登记/使用/追溯链、SPD 适配器状态与模拟同步（EXT-03） | §2.5、§3.4、§3.9.2 |
 | `report.yaml` | 3 | 3 | 工作量统计（台次/麻醉时长/加权台次/术式分布）、多维报表（组合维度 + 指标 + 分页 + 全量合计）、报表 CSV 导出（BOM/脱敏/防公式注入） | §2.4.7、§2.7.2、§3.8.1 |
-| **合计** | **108** | **144** | 9 个限界上下文骨架 | — |
+| `qc.yaml` | 9 | 11 | 质控指标定义/周期结果（分子/分母/达标/版本）、不良事件登记与 RCA 分阶段闭环、病历质量抽查评分与整改闭环、上报脱敏 CSV 导出 | §2.9、§2.9.2、§2.5.3 I-10 |
+| **合计** | **117** | **155** | 10 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -642,6 +644,57 @@ packages/contracts/
   `docs/modules/m4/README.md` §33–§41 与 ADR-0021。
 - **示例**：全部 SYNTHETIC（演示科室/术间/术式/人员工号与聚合值），不含真实患者标识。
 
+### 3.17 质控指标、不良事件 RCA、病历抽查与上报导出（M4-M17-01，qc 0.1.0 新增域）
+
+> 0.1.0 是**新增域**（9 条路径 / 11 个 operation / 21 个 schema，第 10 域），不改动既有九份
+> 契约；`qc.yaml` 与 `baseline/qc.yaml` 同步落地，oasdiff（baseline → 当前、HEAD baseline →
+> 当前）均无破坏性变更。口径版本 **qc-1.0.0**，时区 **Asia/Shanghai**；指标清单/阈值、上报
+> 格式、匿名化与闭环时限【待确认】（ADR-0022）。
+
+- **指标定义**（`m4:qc:read`）：`GET /v1/qc/indicators`。返回全部 ACTIVE 版本，按
+  `code + version` 版本化，含类别（STRUCTURE/PROCESS/OUTCOME）、口径、数据来源、分子/分母
+  含义、单位（PERCENT/PER_1000_CASES）、阈值方向（GTE/LTE）、`provisional`（合成参考指标
+  =true）与 `inTargetStatistics`（是否计入达标统计）。
+- **指标结果**（`m4:qc:read`）：`GET /v1/qc/indicator-results?from&to&deptId?`。
+  `value = round(numerator/denominator × 100, 2)`（PERCENT）或 `× 1000`（PER_1000_CASES）；
+  分母 0 → `value=0` 且 `targetMet=false`；结果按 `指标+版本+周期+科室` 唯一留存（重算覆盖同一
+  快照，跨版本历史独立保留）；分子/分母由服务端从声明的数据源计算，不接受客户端传入。
+  版本按有效期选择：`effective_from ≤ to` 且（`effective_to` 为空或 `≥ from`）；同一 `code`
+  周期内只允许一个生效版本，重叠 → **409**；区间跨版本时按有效期切分为多行（每段一个版本，
+  `periodFrom/periodTo` 为切分后的真实区间）。`inTargetStatistics=false` 时 `targetMet`
+  固定 false。跨度（含首尾）≤ **366 天**（超过 400）。
+- **不良事件**（`m4:qc:write`）：`POST /v1/qc/adverse-events`（201，状态 `REPORTED`，事件号
+  `AE-<yyyyMMdd>-<8hex>` 服务端生成；描述必须已脱敏，含疑似患者标识 400；`anonymous=true`
+  对外只返回“匿名上报”；`scheduleId` 可选，台次不存在/已删除 **422**、属他科 **403**）；
+  `GET /v1/qc/adverse-events?status&from&to&deptId&page&size`。
+- **RCA 与闭环**：`POST /v1/qc/adverse-events/{id}/rca`（201，仅 REPORTED，一条事件一条 RCA，
+  时间线 1–20 条按时间升序，事件 → `RCA`；重复/越级 409）；`POST /v1/qc/rca/{id}/close`
+  （`m4:qc:review`）**分阶段**：阶段 1 复核（`rectificationCompleted=false`）事件 → `RECTIFYING`；
+  阶段 2 必须 `rectificationCompleted=true` 事件 → `CLOSED`；越级/重复/提前声明完成 409，
+  复核人为上报人/责任人 422。主体与 RCA **append-only**（数据库触发器 55000）。
+- **病历质量抽查**（`m4:qc:write`）：`POST /v1/qc/chart-reviews`（201，评分项白名单
+  COMPLETENESS/TIMELINESS/SIGNATURE/CONSISTENCY，1–12 项且不重复；每项 0 ≤ score ≤ maxScore ≤ 100；
+  总分/满分/等级/缺陷由服务端计算，缺陷项必须填脱敏说明；等级 A≥95/B≥90/C≥80/D<80，
+  合格线 90%【待确认】；`scheduleId`/`recordId` 可选，目标不存在/已删除 **422**、属他科
+  **403**）；`GET /v1/qc/chart-reviews?status&from&to&deptId&page&size`（返回
+  `rectificationId` 供闭环）；`POST /v1/qc/chart-reviews/{id}/rectify`（201，抽查 → RECTIFYING）；
+  `POST /v1/qc/rectify/{id}/close`（`m4:qc:review`，整改与抽查 → CLOSED，复核人不得为责任人 422）。
+- **上报导出**（`m4:qc:export`）：`GET /v1/qc/export?type=indicator|adverse|review&format=csv&from&to&deptId?`。
+  CSV 为 UTF-8 **BOM** + 首行列头 + `text/csv` 流式；`adverse`/`review` **不输出**描述/根因/
+  整改/结论等自由文本原文，只输出标识/类型/等级/状态/时间/科室/计数/院内在册人员姓名；
+  防公式注入同报表导出（前导单引号 + RFC 4180）。行数上限 50000：以 `LIMIT 50000+1` 探测，
+  超限**不截断**并返回 **422**；失败审计仍写 `QC_EXPORT`（含真实 `dataRows` 与
+  `truncated=true`）。I-10 平台字段映射与文件格式【待确认】，本期为 **EXT 占位模板**，
+  不直连外部系统；成功导出写审计 `QC_EXPORT`。
+- **数据范围**：ALL 全院；SITE/DEPT 按科室；ROOM/SELF/无范围 403（质控为科室/全院聚合口径）；
+  `deptId` 越界 403；单对象越界/不存在 404。
+- **权限**：V25 新增 `m4:qc:read|write|review|export`，最小授予 SYS_ADMIN/SYS_QC_MANAGER
+  四项、SYS_OR_MANAGER 读+写（无 export/review，调用导出/复核端点 **403**）；跨 schema 只读
+  投影在装配层 `QcIndicatorSourceAdapter`（5 条计数 SELECT）与 `QcCaseReferenceAdapter`
+  （2 条台次/记录单科室 SELECT），口径与待确认项见 `docs/modules/m4/README.md` §42–§51
+  与 ADR-0022。
+- **示例**：全部 SYNTHETIC（演示事件号/科室/人员名/评分），不含真实患者标识与自由文本原文。
+
 ## 4. 错误模型
 
 统一返回 `Error`；所有 4xx/5xx 响应必须 `$ref` 到 `components.responses` 共享组件，禁止内联定义。
@@ -778,4 +831,9 @@ pnpm -C packages/contracts check:breaking   # 仅 breaking
   准备/复苏时间、`STAFF`/`DEPT`/`SURGERY` 的数据来源、报表锁定与定时生成、是否需要 Excel/PDF
   与医师个人视图，均待院方确认，见 ADR-0021 与 `docs/modules/m4/README.md` §41；
   本期系统只出数、权重默认 1.0 且可配置，不内置绩效公式（D-21）。
+- **质控/不良事件口径【待确认】**：正式指标清单/阈值/单位/统计周期、I-10 上报格式与字段映射、
+  匿名上报范围、病历抽查评分权重与合格线、复核人资质与是否双人复核、48h 分级初评与整改
+  闭环时限是否硬校验、指标钻取与结果锁定策略，均待院方确认，见 ADR-0022 与
+  `docs/modules/m4/README.md` §51；本期 7 条指标为 `QC-SYN-*` 合成参考（`provisional=true`），
+  上报为 EXT 占位 CSV，不臆造平台字段。
 - 生命体征高频序列与波形查询接口不在本基线，按 §3.4.4 的分区/归档方案在 M2 细化。

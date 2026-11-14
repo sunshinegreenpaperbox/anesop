@@ -61,6 +61,9 @@
 | M4 | 人员排班 | `m4_staff.staff_schedule` | 同人员同日同班次、同术间同日同班次唯一 | `StaffSchedule` | §2.4.4、V21 |
 | M4 | 培训记录 | `m4_staff.staff_training` | 课程/完成/到期/证书号；到期提醒 | `StaffTraining` | §2.4.4、V21 |
 | M4 | 工作量/多维报表 | **无表**（读时投影） | 台次/麻醉时长/加权台次/维度桶；只读聚合，不落库 | `WorkloadReport`、`MultiReport` | §2.4.7、§2.7.2、ADR-0021、V24 |
+| M4 | 质控指标定义/结果 | `m4_qc.qc_indicator`、`m4_qc.qc_indicator_result` | 指标按 code+version 版本化；结果按 指标+版本+周期+科室 唯一留存 | `QcIndicator`、`QcIndicatorResult` | §2.9.2、ADR-0022、V25 |
+| M4 | 不良事件/RCA | `m4_qc.adverse_event`、`m4_qc.adverse_rca` | 主体 append-only + 状态机；RCA 复核/闭环一次性写入 | `AdverseEvent`、`AdverseRca` | §2.9.2、ADR-0022、V25 |
+| M4 | 病历抽查/整改 | `m4_qc.chart_review`、`m4_qc.rectification` | 评分项 jsonb；整改 append-only，闭环需复核人 | `ChartReview`、`Rectification` | §2.9.2、ADR-0022、V25 |
 
 > “契约暂未单列”表示该实体已由方案书确认，但 S0-05 的四个域契约只覆盖主链路；后续任务按契约优先顺序补接口，禁止先写后端 DTO。
 

@@ -658,6 +658,70 @@ append-only 触发器。不改写 V1–V23 既有列、权限与角色。迁移�
 - **后续**：报表数据锁定/定时生成（方案书 §2.4.7）如确认，按 expand 新增 V25+ 读模型与
   锁定表，不在 V24 预置。
 
+
+### 4.20 V25（M4 质控指标、不良事件 RCA、病历抽查与导出）回滚说明
+
+- **范围**：新增 schema `m4_qc` 与 6 张表（`qc_indicator`/`qc_indicator_result`/`adverse_event`/
+  `adverse_rca`/`chart_review`/`rectification`）、append-only/状态机/一次性写入触发器、4 个权限点
+  （`m4:qc:read|write|review|export`）、10 条最小授权与 7 条合成参考指标（`QC-SYN-*`，
+  其中 `QC-SYN-PROC-004` 为结构合规口径、`in_target_statistics=false` 不计入达标统计）；
+  不改写 V1–V24 的列、数据与权限。
+- **不变量**：
+  1. `qc_indicator` 按 `code + version` 唯一；口径/阈值/身份列/`provisional`/
+     `in_target_statistics` 不可改（只允许 `ACTIVE→RETIRED`），语义变更必须新增版本行；
+     `DELETE`/`TRUNCATE` 由触发器拒绝（55000），防止删定义抹掉结果快照追溯链；
+  2. `qc_indicator_result` 唯一键 `(indicator_id, period_from, period_to, dept_id)`，`dept_id`
+     全 0 表示全院；重算只覆盖同一快照，跨版本历史结果独立保留；
+  3. `adverse_event` 业务内容 append-only，状态只允许 `REPORTED→RCA→RECTIFYING→CLOSED`
+     逐级前移且 `version +1`；DELETE/TRUNCATE 与越级迁移由触发器拒绝（55000）；
+  4. `adverse_rca`/`rectification` 内容 append-only，复核/闭环字段只允许从 NULL 写一次，
+     状态只允许 `OPEN→CLOSED`；
+  5. `chart_review` 评分内容不可改，状态只允许 `OPEN→RECTIFYING→CLOSED` 且 `version +1`；
+  6. 每条不良事件一条 RCA、每条抽查一条整改（唯一约束）。
+- **应用回滚**：下线 `/v1/qc/*` 端点与前端“质控指标/不良事件/病历抽查”菜单；质控数据保留，
+  不参与临床记录与排程；指标结果可由源数据重算。
+- **库层前向修复**（需 DBA 审批 + 备份 + 归档；不良事件/RCA/整改属质量追溯留痕，回滚前必须
+  导出归档并校验行数，生产执行须人签字）：
+  ```sql
+  DROP TRIGGER IF EXISTS trg_adverse_event_no_delete ON m4_qc.adverse_event;
+  DROP TRIGGER IF EXISTS trg_adverse_event_no_truncate ON m4_qc.adverse_event;
+  DROP TRIGGER IF EXISTS trg_adverse_event_guard ON m4_qc.adverse_event;
+  DROP TRIGGER IF EXISTS trg_adverse_rca_guard ON m4_qc.adverse_rca;
+  DROP TRIGGER IF EXISTS trg_adverse_rca_no_delete ON m4_qc.adverse_rca;
+  DROP TRIGGER IF EXISTS trg_chart_review_guard ON m4_qc.chart_review;
+  DROP TRIGGER IF EXISTS trg_chart_review_no_delete ON m4_qc.chart_review;
+  DROP TRIGGER IF EXISTS trg_rectification_guard ON m4_qc.rectification;
+  DROP TRIGGER IF EXISTS trg_qc_indicator_guard ON m4_qc.qc_indicator;
+  DROP TRIGGER IF EXISTS trg_qc_indicator_no_delete ON m4_qc.qc_indicator;
+  DROP TRIGGER IF EXISTS trg_qc_indicator_no_truncate ON m4_qc.qc_indicator;
+  DROP FUNCTION IF EXISTS m4_qc.fn_adverse_event_guard();
+  DROP FUNCTION IF EXISTS m4_qc.fn_adverse_rca_guard();
+  DROP FUNCTION IF EXISTS m4_qc.fn_chart_review_guard();
+  DROP FUNCTION IF EXISTS m4_qc.fn_rectification_guard();
+  DROP FUNCTION IF EXISTS m4_qc.fn_indicator_guard();
+  DROP FUNCTION IF EXISTS m4_qc.fn_reject_mutation();
+  DROP FUNCTION IF EXISTS m4_qc.fn_reject_truncate();
+  DROP TABLE m4_qc.rectification;
+  DROP TABLE m4_qc.chart_review;
+  DROP TABLE m4_qc.adverse_rca;
+  DROP TABLE m4_qc.adverse_event;
+  DROP TABLE m4_qc.qc_indicator_result;
+  DROP TABLE m4_qc.qc_indicator;
+  DROP SCHEMA IF EXISTS m4_qc;
+  DELETE FROM m0_platform.sys_role_permission
+   WHERE permission_id IN ('b0000000-0000-4000-8000-000000000079',
+                           'b0000000-0000-4000-8000-00000000007a',
+                           'b0000000-0000-4000-8000-00000000007b',
+                           'b0000000-0000-4000-8000-00000000007c');
+  DELETE FROM m0_platform.sys_permission
+   WHERE code IN ('m4:qc:read', 'm4:qc:write', 'm4:qc:review', 'm4:qc:export');
+  ```
+- **顺序**：先删子表后删主表（`rectification→chart_review`、`adverse_rca→adverse_event`），
+  先删授权再删权限点（`sys_role_permission.permission_id` 外键）；回滚后重新登录刷新 JWT 权限
+  claim。V25 含 7 条参考指标数据，若只回滚代码需保留 `qc_indicator` 表以免历史结果悬空。
+- **演练要求**：不可逆脚本（删留痕）必须附回滚演练记录并在 PR 声明；`m4_qc` 表禁止直接
+  `TRUNCATE`（触发器拒绝），归档请走离线追溯库。
+
 ## 5. 运行方式
 
 ### 5.1 本地 / CI（无 Docker，EXT-08）

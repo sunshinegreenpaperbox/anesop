@@ -1,0 +1,1880 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 质控指标、不良事件 RCA、病历质量抽查与上报导出契约（qc）
+  summary: 质控指标定义与结果（结构/过程/结果）、不良事件登记与 RCA 闭环、病历质量抽查与整改、脱敏上报导出
+  description: |
+    ANESOP 管理域质控契约（第 10 域），对应方案书 §2.9（M7 质量控制）、§2.9.2（指标体系与
+    自动计算/钻取、不良事件与 RCA/PDCA、质控看板与报告、病历质量抽查、规则版本管理）、
+    §2.5.3（I-10 国家/省级麻醉质控平台上报表 2-6）、E-M17。
+
+    契约版本 **0.1.0** 为首个版本（additive）。口径版本 **qc-1.0.0**，时区固定
+    **Asia/Shanghai**。本域只做「指标出数 + 不良事件闭环 + 病历抽查整改 + 脱敏导出」，
+    不做绩效/计费，不直连外部上报平台。
+
+    硬规则：
+    1) **指标可追溯**：指标定义按 `code + version` 版本化，跨期结果按**当期版本**计算并留存
+       （`qc_indicator_result` 唯一键含版本与周期）；每条结果必须能给出分子/分母，
+       分母为 0 时 `value=0` 且 `targetMet=false`（不判达标、不做除零），并保留
+       `denominator=0` 供数据质量复核。
+    2) **数据来源明确**：每个指标在 `dataSource` 字段声明其计算来源（M3 麻醉记录单/时间轴、
+       M4 药品/耗材、M2 排程台次、本域不良事件与病历抽查）；计算在服务端完成，不接受
+       客户端传入分子分母。**指标清单、阈值与国家/省级口径【待确认】**（ADR-0022）：
+       本期随迁移落地 7 条**合成参考指标**（`QC-SYN-*`，`provisional=true`），
+       院方指标目录确认后按新版本替换，不覆盖历史版本。
+    3) **不良事件状态机**：`REPORTED → RCA → RECTIFYING → CLOSED`，**只允许逐级前进**；
+       越级、跳级、重复闭环一律 409（不回显数据库约束名）。`REPORTED` 阶段才有 RCA 可提交
+       （`POST /adverse-events/{id}/rca`），RCA 复核通过后事件转 `RECTIFYING`，
+       整改完成确认后转 `CLOSED`；两次复核均须**复核人**，且复核人不得为上报人/责任人
+       （独立复核，口径【待确认】）。不良事件主体与 RCA 记录 **append-only**：
+       业务内容不可改删，只有状态机字段可一次性前移（数据库触发器兜底 55000）。
+    4) **病历质量抽查**：评分项白名单 `COMPLETENESS`/`TIMELINESS`/`SIGNATURE`/`CONSISTENCY`，
+       每项 0–100 分且 `score ≤ maxScore`；`totalScore`/`maxScore` 由服务端求和，不接受
+       客户端传总分；`totalScore / maxScore ≥ 90%` 为合格（**合格线【待确认】**）；
+       存在缺陷项（`score < maxScore`）时必须给出责任整改；整改闭环须复核人。
+    5) **脱敏与上报占位**：本域任何接口与导出**不含患者标识**（姓名、住院号、院内患者号、
+       身份证号、手机号、术前诊断、HIS 申请号）；不良事件 `description` 为**已脱敏描述**
+       （服务端拒绝疑似患者标识的入参，见 400 规则），导出**不输出**描述与根因自由文本，
+       只输出类型/等级/状态/时间/科室/计数；上报给国家/省级平台（I-10）的**格式与字段
+       映射【待确认】**，本期 `GET /v1/qc/export` 的 CSV 为占位模板（EXT，不直连外部系统）。
+    6) **导出防注入**：CSV 为 UTF-8 **BOM**、首行列头、`text/csv` 流式输出；
+       命中公式起始字符（`=`/`+`/`-`/`@`/制表符/回车）的单元格以**前导单引号中和**，
+       必要时按 **RFC 4180** 加双引号并转义内部引号；导出写审计 `QC_EXPORT`。
+    7) **数据范围（fail-closed）**：`ALL` 全院；`SITE`/`DEPT` 按科室（或院区）过滤；
+       `ROOM`/`SELF` 或无任何可用范围 → 403（质控为科室/全院聚合口径，不做个人视图）；
+       `deptId` 越界 → 403；单对象越界与不存在统一 404（不泄露存在性）。
+    8) **权限**：`m4:qc:read`（指标/结果/列表）、`m4:qc:write`（登记不良事件、提交 RCA、
+       创建抽查、提交整改）、`m4:qc:review`（RCA 复核与闭环、抽查整改闭环）、
+       `m4:qc:export`（上报导出）。最小授予见 V25 与 docs/db/README.md。
+    9) **审计无 PHI**：`QC_INDICATOR_QUERY`/`QC_INDICATOR_COMPUTE`/`ADVERSE_EVENT_CREATE`/
+       `ADVERSE_EVENT_QUERY`/`ADVERSE_EVENT_STATUS`/`RCA_CREATE`/`RCA_REVIEW`/`RCA_CLOSE`/
+       `CHART_REVIEW_CREATE`/`CHART_REVIEW_QUERY`/`RECTIFICATION_CREATE`/
+       `RECTIFICATION_CLOSE`/`QC_EXPORT`，detail 只含标识/类型/状态/周期/计数。
+    所有示例均为 SYNTHETIC 合成数据（演示科室/工号/事件号，无真实患者与真实人员）。
+  version: 0.1.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 质控指标
+    description: 指标定义（结构/过程/结果，版本化口径与阈值）与周期结果（分子/分母/值/达标）。
+  - name: 不良事件
+    description: 不良事件登记、分级、状态机与 RCA（时间线/根因/整改/责任人/期限/闭环）。
+  - name: 病历质量抽查
+    description: 病历质量抽查评分（完整性/时效性/签名/逻辑一致性）、缺陷项与整改闭环。
+  - name: 上报导出
+    description: 质控指标、不良事件与抽查结果的脱敏 CSV 导出（UTF-8 BOM、防注入、无 PHI）。
+paths:
+  /v1/qc/indicators:
+    get:
+      operationId: getQcIndicators
+      tags:
+        - 质控指标
+      summary: 质控指标定义列表（版本化口径、阈值、数据来源）
+      description: |
+        权限 `m4:qc:read`。返回全部 **ACTIVE 版本**的指标定义（目录展示，含未来生效版本；
+        按类别、编码稳定排序）。计算/导出按查询周期选择生效版本（见 `/indicator-results`）。
+
+        - `code` 院内唯一标识指标，`version` 为口径版本（语义变更必须升版本，不得原地改口径）；
+        - `category`：`STRUCTURE`（结构）/`PROCESS`（过程）/`OUTCOME`（结果）；
+        - `unit`：`PERCENT`（百分比）或 `PER_1000_CASES`（每千台次）；
+        - `thresholdOperator`：`GTE`（≥ 阈值达标）/`LTE`（≤ 阈值达标）；
+        - `dataSource` 声明计算来源（M3 记录单/时间轴、M4 药品/耗材、M2 排程台次、本域数据），
+          保证指标可追溯到原始记录条目；
+        - `provisional=true` 表示该条为**合成参考指标**，阈值/口径【待确认】（ADR-0022）；
+        - `inTargetStatistics=false` 表示该条**不计入达标统计**（如结构合规口径），
+          `targetMet` 固定 `false`，待 Q-1 确认后升版本开启。
+        查询写审计 `QC_INDICATOR_QUERY`（detail 仅指标数与版本）。
+      responses:
+        '200':
+          description: 指标定义列表（生效版本）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcIndicatorList'
+              example:
+                items:
+                  - id: '7c000000-0000-4000-8000-000000000001'
+                    code: QC-SYN-STRUCT-001
+                    name: 麻醉记录单完成率
+                    category: STRUCTURE
+                    definition: 区间内已完成（有结束时间）的麻醉记录单台次 / 同期非取消台次 × 100%
+                    dataSource: M3 麻醉记录单（m2_anes.anesthesia_record）+ M2 排程台次（m1_sched.schedule）
+                    numeratorLabel: 已完成麻醉记录单的台次数
+                    denominatorLabel: 同期非取消台次数
+                    unit: PERCENT
+                    thresholdOperator: GTE
+                    thresholdValue: 95
+                    version: 1.0.0
+                    effectiveFrom: '2026-01-01'
+                    effectiveTo: null
+                    status: ACTIVE
+                    provisional: true
+                    inTargetStatistics: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/qc/indicator-results:
+    get:
+      operationId: getQcIndicatorResults
+      tags:
+        - 质控指标
+      summary: 周期指标结果（分子/分母/值/达标状态，按当期版本留存）
+      x-allow-query-conflict: true
+      description: |
+        权限 `m4:qc:read`。按 `from`/`to` 本地日期闭区间（Asia/Shanghai）计算全部生效指标，
+        并**按当期版本留存**结果快照（同一指标 + 版本 + 周期 + 科室唯一，重算覆盖该快照的
+        数值与计算时间，不产生多行）。查询写审计 `QC_INDICATOR_COMPUTE`
+        （detail 仅周期/指标数/是否带科室过滤）。
+
+        计算规则（口径 qc-1.0.0）：
+        - `value = round(numerator / denominator × 100, 2)`（`PERCENT`）或
+          `round(numerator / denominator × 1000, 2)`（`PER_1000_CASES`）；
+        - `denominator = 0` 时 `value = 0`、`targetMet = false`（不判达标、不做除零）；
+        - `targetMet = (thresholdOperator = GTE 且 value ≥ thresholdValue) 或
+          (thresholdOperator = LTE 且 value ≤ thresholdValue)`；
+        - 分子/分母均由服务端从声明的数据源计算，**不接受客户端传入**；`deptId` 只收窄科室，
+          不扩大数据范围（越界 403）；
+        - 版本选择：按有效期取生效版本，`effective_from <= to` 且
+          （`effective_to` 为空或 `effective_to >= from`）；同一 `code` 在查询周期内
+          **只允许一个生效版本**，版本区间重叠 → **409**（fail-closed，先修复版本数据）；
+        - 跨期指标按**当期版本**计算：指标升版本后历史结果仍保留旧版本行，不回溯重写；
+          查询区间跨版本时按有效期切分为多段，同一 `code` 可返回多行（每段一个版本，
+          `periodFrom`/`periodTo` 为切分后的真实统计区间）；
+        - `inTargetStatistics=false` 的指标 `targetMet` 固定 `false`，不计入达标统计。
+        `from`/`to` 必填、跨度（含首尾）≤ **366 天**（超过 400）；非法日期/标识 400。
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: 起始本地日期（含），格式 YYYY-MM-DD，按 Asia/Shanghai 解释。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: 结束本地日期（含）；与 from 跨度（含首尾）≤ 366 天，超过 400。
+          schema:
+            type: string
+            format: date
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；只统计该科室，必须在当前用户数据范围内（越界 403）。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 指标结果列表（仅聚合计数与达标状态，不含患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcIndicatorResultList'
+              example:
+                from: '2031-03-01'
+                to: '2031-03-31'
+                timezone: Asia/Shanghai
+                formula: value = round(numerator / denominator × 100, 2)；分母为 0 时 value = 0 且 targetMet = false
+                items:
+                  - indicatorId: '7c000000-0000-4000-8000-000000000001'
+                    code: QC-SYN-STRUCT-001
+                    name: 麻醉记录单完成率
+                    category: STRUCTURE
+                    indicatorVersion: 1.0.0
+                    definition: 区间内已完成（有结束时间）的麻醉记录单台次 / 同期非取消台次 × 100%
+                    unit: PERCENT
+                    periodFrom: '2031-03-01'
+                    periodTo: '2031-03-31'
+                    deptId: null
+                    numerator: 3
+                    denominator: 4
+                    value: 75
+                    thresholdOperator: GTE
+                    thresholdValue: 95
+                    targetMet: false
+                    computedAt: '2031-03-31T03:00:00Z'
+                    provisional: true
+                    inTargetStatistics: true
+                  - indicatorId: '7c000000-0000-4000-8000-000000000002'
+                    code: QC-SYN-PROC-002
+                    name: 术前访视完成率
+                    category: PROCESS
+                    indicatorVersion: 1.0.0
+                    definition: 区间内已完成术前访视的台次 / 同期非取消台次 × 100%
+                    unit: PERCENT
+                    periodFrom: '2031-03-01'
+                    periodTo: '2031-03-31'
+                    deptId: null
+                    numerator: 4
+                    denominator: 4
+                    value: 100
+                    thresholdOperator: GTE
+                    thresholdValue: 95
+                    targetMet: true
+                    computedAt: '2031-03-31T03:00:00Z'
+                    provisional: true
+                    inTargetStatistics: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/qc/adverse-events:
+    post:
+      operationId: createAdverseEvent
+      tags:
+        - 不良事件
+      summary: 登记不良事件（脱敏描述、分级、状态机起点 REPORTED）
+      description: |
+        权限 `m4:qc:write`。创建后事件状态为 `REPORTED`，`eventNo` 由服务端生成
+        （`AE-<yyyyMMdd>-<8 位十六进制>`），`reporterName` 取当前登录账号显示名，
+        请求体不接受上报人字段（防止冒名）。
+
+        - `description` 必须是**已脱敏描述**（≤500 字），不得含患者姓名/住院号/身份证号/
+          手机号/HIS 申请号等直接标识；服务端按固定规则拒绝疑似标识（400，`details.field=description`），
+          不回合用户输入原文；
+        - `anonymous=true` 时对外只显示"匿名上报"，**不返回**上报人姓名；内部审计仍记录
+          上报人标识（可追溯性与匿名口径【待确认】，ADR-0022 Q-3）；
+        - `deptId` 必须是当前用户数据范围内科室（越界 403）；`scheduleId` 可选，
+          逻辑关联台次（跨模块不建外键）：台次不存在/已删除 → 422，台次属他科 → 403；
+          不校验患者归属；
+        - 写审计 `ADVERSE_EVENT_CREATE`（detail 仅事件号/类型/等级/科室，无描述原文）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAdverseEventRequest'
+            example:
+              eventType: MEDICATION
+              severity: LEVEL_II
+              occurredAt: '2031-03-02T10:30:00+08:00'
+              deptId: 'f1000000-0000-4000-8000-000000000002'
+              scheduleId: null
+              description: 术中诱导后出现一过性血压下降（合成事件描述，已脱敏）
+              anonymous: false
+      responses:
+        '201':
+          description: 已登记的不良事件（状态 REPORTED，无患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdverseEvent'
+              example:
+                id: '7d000000-0000-4000-8000-000000000001'
+                eventNo: AE-20310302-1a2b3c4d
+                eventType: MEDICATION
+                severity: LEVEL_II
+                occurredAt: '2031-03-02T10:30:00+08:00'
+                deptId: 'f1000000-0000-4000-8000-000000000002'
+                deptName: 麻醉科（合成）
+                scheduleId: null
+                description: 术中诱导后出现一过性血压下降（合成事件描述，已脱敏）
+                reporterName: 演示质控专员（合成）
+                anonymous: false
+                status: REPORTED
+                rcaId: null
+                version: 1
+                createdAt: '2031-03-02T03:05:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      operationId: listAdverseEvents
+      tags:
+        - 不良事件
+      summary: 不良事件台账（按状态/日期/科室过滤，分页）
+      description: |
+        权限 `m4:qc:read`。按 `occurredAt` 本地日期过滤（`from`/`to` 可选，闭区间），
+        按发生时间倒序、事件号倒序稳定排序；`page` 从 1 起、`size` 1–200（默认 20）。
+        返回 `meta` 为全量条数与页数。列表写审计 `ADVERSE_EVENT_QUERY`
+        （detail 仅过滤条件与条数，无描述原文）。
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: 事件状态过滤（REPORTED/RCA/RECTIFYING/CLOSED）。
+          schema:
+            type: string
+            enum:
+              - REPORTED
+              - RCA
+              - RECTIFYING
+              - CLOSED
+        - name: from
+          in: query
+          required: false
+          description: 发生时间起始本地日期（含），格式 YYYY-MM-DD。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: 发生时间结束本地日期（含）；与 from 跨度（含首尾）≤ 366 天。
+          schema:
+            type: string
+            format: date
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；越界 403。
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 页码，从 1 开始。
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          required: false
+          description: 每页条数（1–200）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 不良事件台账（分页，仅聚合状态与标识，不含患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdverseEventList'
+              example:
+                items:
+                  - id: '7d000000-0000-4000-8000-000000000001'
+                    eventNo: AE-20310302-1a2b3c4d
+                    eventType: MEDICATION
+                    severity: LEVEL_II
+                    occurredAt: '2031-03-02T10:30:00+08:00'
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    scheduleId: null
+                    description: 术中诱导后出现一过性血压下降（合成事件描述，已脱敏）
+                    reporterName: 演示质控专员（合成）
+                    anonymous: false
+                    status: RCA
+                    rcaId: '7e000000-0000-4000-8000-000000000001'
+                    version: 2
+                    createdAt: '2031-03-02T03:05:00Z'
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/qc/adverse-events/{id}/rca:
+    post:
+      operationId: createAdverseRca
+      tags:
+        - 不良事件
+      summary: 提交 RCA（时间线/根因/整改/责任人/期限），事件 REPORTED → RCA
+      description: |
+        权限 `m4:qc:write`。RCA **append-only**：提交后内容不可改删（更正只能新建事件或
+        由管理员按数据修复流程处理，本期不提供修改端点）。
+
+        - 仅 `REPORTED` 状态可提交；已有 RCA、`RCA`/`RECTIFYING`/`CLOSED` 状态提交 → **409**
+          （越级/重复，不跳过状态机）；
+        - `timeline` 1–20 条，按 `occurredAt` 升序由服务端稳定排序后保存；时间不得晚于当前时间；
+        - `rootCause`/`correctiveAction` ≤500 字、`responsibleName` ≤64 字、`dueDate` 不早于
+          事件发生本地日期（422）；
+        - 提交成功后事件状态转 `RCA`；写审计 `RCA_CREATE`（detail 仅事件号/RCA 标识/时间线条数，
+          不含根因与整改原文）。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 不良事件标识（UUID）。
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAdverseRcaRequest'
+            example:
+              timeline:
+                - occurredAt: '2031-03-02T10:30:00+08:00'
+                  description: 诱导后 3 分钟血压下降（合成）
+                - occurredAt: '2031-03-02T10:33:00+08:00'
+                  description: 加快补液并给予升压药后回升（合成）
+              rootCause: 诱导期容量评估不足（合成根因）
+              correctiveAction: 修订诱导期容量评估清单并纳入科内培训（合成整改）
+              responsibleName: 演示责任人（合成）
+              dueDate: '2031-04-15'
+      responses:
+        '201':
+          description: 已提交的 RCA（事件状态 RCA）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdverseRca'
+              example:
+                id: '7e000000-0000-4000-8000-000000000001'
+                eventId: '7d000000-0000-4000-8000-000000000001'
+                eventNo: AE-20310302-1a2b3c4d
+                timeline:
+                  - occurredAt: '2031-03-02T10:30:00+08:00'
+                    description: 诱导后 3 分钟血压下降（合成）
+                  - occurredAt: '2031-03-02T10:33:00+08:00'
+                    description: 加快补液并给予升压药后回升（合成）
+                rootCause: 诱导期容量评估不足（合成根因）
+                correctiveAction: 修订诱导期容量评估清单并纳入科内培训（合成整改）
+                responsibleName: 演示责任人（合成）
+                dueDate: '2031-04-15'
+                status: OPEN
+                reviewerName: null
+                reviewedAt: null
+                closedAt: null
+                createdAt: '2031-03-03T02:00:00Z'
+                eventStatus: RCA
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/qc/rca/{id}/close:
+    post:
+      operationId: closeAdverseRca
+      tags:
+        - 不良事件
+      summary: RCA 复核 / 整改闭环（分阶段，需复核人，事件逐级前进）
+      description: |
+        权限 `m4:qc:review`。本端点是**分阶段闭环**：同一 RCA 调用两次，每次推进一级状态，
+        保证 `REPORTED→RCA→RECTIFYING→CLOSED` 全程留痕、不可越级。
+
+        - 阶段 1（事件 `RCA`、RCA 未复核）：记录复核人/复核结论，事件 → `RECTIFYING`，
+          RCA 仍为 `OPEN`（整改执行期）；请求 `rectificationCompleted` 必须缺省或 `false`；
+        - 阶段 2（事件 `RECTIFYING`、RCA 已复核未闭环）：确认整改完成（`rectificationCompleted=true`），
+          记录闭环时间，事件 → `CLOSED`，RCA → `CLOSED`；
+        - 越级/重复（事件 `REPORTED` 直接闭环、已 `CLOSED` 再次闭环、阶段 2 未确认整改完成
+          或阶段 1 提前声明完成）→ **409**（`details.field=rectificationCompleted` 或
+          `details.field=status`）；`reviewerName` 与上报人/责任人相同 → **422**（独立复核）；
+        - 复核/闭环均写审计 `RCA_REVIEW`/`RCA_CLOSE` 与 `ADVERSE_EVENT_STATUS`
+          （detail 仅事件号/阶段/状态，不含结论原文）。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: RCA 标识（UUID）。
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseAdverseRcaRequest'
+            example:
+              reviewerName: 演示复核人（合成）
+              conclusion: 根因与整改措施认可，进入整改执行（合成结论）
+              rectificationCompleted: false
+      responses:
+        '200':
+          description: 复核/闭环后的 RCA（含事件当前状态）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdverseRca'
+              example:
+                id: '7e000000-0000-4000-8000-000000000001'
+                eventId: '7d000000-0000-4000-8000-000000000001'
+                eventNo: AE-20310302-1a2b3c4d
+                timeline:
+                  - occurredAt: '2031-03-02T10:30:00+08:00'
+                    description: 诱导后 3 分钟血压下降（合成）
+                rootCause: 诱导期容量评估不足（合成根因）
+                correctiveAction: 修订诱导期容量评估清单并纳入科内培训（合成整改）
+                responsibleName: 演示责任人（合成）
+                dueDate: '2031-04-15'
+                status: OPEN
+                reviewerName: 演示复核人（合成）
+                reviewedAt: '2031-03-05T03:00:00Z'
+                closedAt: null
+                createdAt: '2031-03-03T02:00:00Z'
+                eventStatus: RECTIFYING
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/qc/chart-reviews:
+    post:
+      operationId: createChartReview
+      tags:
+        - 病历质量抽查
+      summary: 创建病历质量抽查（评分表 + 缺陷项，服务端算总分与合格）
+      description: |
+        权限 `m4:qc:write`。评分项白名单 `COMPLETENESS`（完整性）/`TIMELINESS`（时效性）/
+        `SIGNATURE`（签名）/`CONSISTENCY`（逻辑一致性），1–12 项且同一 `itemCode` 不得重复
+        （400）；每项 `0 ≤ score ≤ maxScore ≤ 100`，`maxScore ≥ 1`（400）。
+
+        - `totalScore = Σ score`、`maxScore = Σ maxScore` 由服务端计算，**不接受**客户端传总分；
+          `totalScore / maxScore ≥ 90%` 为合格（`grade`：A ≥95%、B ≥90%、C ≥80%、D <80%，
+          合格线【待确认】）；
+        - `defects[]` 由服务端按 `score < maxScore` 派生，`defectNote` 为脱敏缺陷描述；
+          存在缺陷项时后续整改必须逐项覆盖（整改端点校验）；
+        - `scheduleId`/`recordId` 可选，逻辑关联台次与记录单（跨模块不建外键）：
+          目标不存在/已删除 → 422，目标属他科 → 403；不校验患者归属；
+          `reviewNo` 由服务端生成（`CR-<yyyyMMdd>-<8 位十六进制>`）；
+        - 写审计 `CHART_REVIEW_CREATE`（detail 仅抽查号/总分的整数部分/缺陷数/科室，
+          不含缺陷描述原文）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChartReviewRequest'
+            example:
+              scheduleId: null
+              recordId: null
+              deptId: 'f1000000-0000-4000-8000-000000000002'
+              reviewedAt: '2031-03-06T09:00:00+08:00'
+              items:
+                - itemCode: COMPLETENESS
+                  itemName: 完整性
+                  score: 28
+                  maxScore: 30
+                  defectNote: 缺术后随访记录（合成）
+                - itemCode: TIMELINESS
+                  itemName: 时效性
+                  score: 25
+                  maxScore: 25
+                - itemCode: SIGNATURE
+                  itemName: 签名
+                  score: 20
+                  maxScore: 20
+                - itemCode: CONSISTENCY
+                  itemName: 逻辑一致性
+                  score: 15
+                  maxScore: 25
+                  defectNote: 出入量与麻醉记录不一致（合成）
+      responses:
+        '201':
+          description: 已创建的抽查记录（含总分、等级、缺陷项与状态 OPEN）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChartReview'
+              example:
+                id: '7f000000-0000-4000-8000-000000000001'
+                reviewNo: CR-20310306-5e6f7a8b
+                scheduleId: null
+                recordId: null
+                deptId: 'f1000000-0000-4000-8000-000000000002'
+                deptName: 麻醉科（合成）
+                reviewerName: 演示质控专员（合成）
+                reviewedAt: '2031-03-06T09:00:00+08:00'
+                items:
+                  - itemCode: COMPLETENESS
+                    itemName: 完整性
+                    score: 28
+                    maxScore: 30
+                    defectNote: 缺术后随访记录（合成）
+                  - itemCode: TIMELINESS
+                    itemName: 时效性
+                    score: 25
+                    maxScore: 25
+                    defectNote: null
+                  - itemCode: SIGNATURE
+                    itemName: 签名
+                    score: 20
+                    maxScore: 20
+                    defectNote: null
+                  - itemCode: CONSISTENCY
+                    itemName: 逻辑一致性
+                    score: 15
+                    maxScore: 25
+                    defectNote: 出入量与麻醉记录不一致（合成）
+                totalScore: 88
+                maxScore: 100
+                grade: C
+                defectCount: 2
+                status: OPEN
+                createdAt: '2031-03-06T01:10:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+    get:
+      operationId: listChartReviews
+      tags:
+        - 病历质量抽查
+      summary: 病历质量抽查列表（按状态/日期/科室过滤，分页）
+      description: |
+        权限 `m4:qc:read`。按 `reviewedAt` 本地日期过滤（`from`/`to` 可选，闭区间），
+        按抽查时间倒序、抽查号倒序稳定排序；`page` 从 1 起、`size` 1–200（默认 20）。
+        列表写审计 `CHART_REVIEW_QUERY`（detail 仅过滤条件与条数）。
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: 抽查状态过滤（OPEN/RECTIFYING/CLOSED）。
+          schema:
+            type: string
+            enum:
+              - OPEN
+              - RECTIFYING
+              - CLOSED
+        - name: from
+          in: query
+          required: false
+          description: 抽查时间起始本地日期（含），格式 YYYY-MM-DD。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: 抽查时间结束本地日期（含）；与 from 跨度（含首尾）≤ 366 天。
+          schema:
+            type: string
+            format: date
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；越界 403。
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 页码，从 1 开始。
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          required: false
+          description: 每页条数（1–200）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 抽查记录列表（分页，仅评分与缺陷计数，不含患者标识）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChartReviewList'
+              example:
+                items:
+                  - id: '7f000000-0000-4000-8000-000000000001'
+                    reviewNo: CR-20310306-5e6f7a8b
+                    scheduleId: null
+                    recordId: null
+                    deptId: 'f1000000-0000-4000-8000-000000000002'
+                    deptName: 麻醉科（合成）
+                    reviewerName: 演示质控专员（合成）
+                    reviewedAt: '2031-03-06T09:00:00+08:00'
+                    items:
+                      - itemCode: COMPLETENESS
+                        itemName: 完整性
+                        score: 28
+                        maxScore: 30
+                        defectNote: 缺术后随访记录（合成）
+                    totalScore: 88
+                    maxScore: 100
+                    grade: C
+                    defectCount: 2
+                    status: RECTIFYING
+                    createdAt: '2031-03-06T01:10:00Z'
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/qc/chart-reviews/{id}/rectify:
+    post:
+      operationId: createChartRectification
+      tags:
+        - 病历质量抽查
+      summary: 提交整改（针对抽查缺陷项，抽查 OPEN → RECTIFYING）
+      description: |
+        权限 `m4:qc:write`。整改记录 append-only（内容不可改删），一条抽查允许一条在执行整改。
+
+        - 仅抽查 `OPEN` 状态可提交；`RECTIFYING`/`CLOSED` 再次提交 → **409**；
+        - `correctiveAction` ≤500 字，`responsibleName` ≤64 字，`dueDate` 不早于抽查本地日期（422）；
+        - 提交后抽查状态转 `RECTIFYING`，返回整改记录（状态 `OPEN`）；
+        - 写审计 `RECTIFICATION_CREATE`（detail 仅抽查号/整改标识/期限，不含整改原文）。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 抽查记录标识（UUID）。
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRectificationRequest'
+            example:
+              correctiveAction: 补录术后随访并核对出入量记录（合成整改）
+              responsibleName: 演示责任人（合成）
+              dueDate: '2031-03-20'
+      responses:
+        '201':
+          description: 已提交的整改记录（抽查状态 RECTIFYING）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rectification'
+              example:
+                id: '7a000000-0000-4000-8000-000000000001'
+                reviewId: '7f000000-0000-4000-8000-000000000001'
+                reviewNo: CR-20310306-5e6f7a8b
+                correctiveAction: 补录术后随访并核对出入量记录（合成整改）
+                responsibleName: 演示责任人（合成）
+                dueDate: '2031-03-20'
+                status: OPEN
+                reviewerName: null
+                reviewedAt: null
+                closedAt: null
+                createdAt: '2031-03-07T02:00:00Z'
+                reviewStatus: RECTIFYING
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/qc/rectify/{id}/close:
+    post:
+      operationId: closeChartRectification
+      tags:
+        - 病历质量抽查
+      summary: 整改闭环（需复核人，抽查 → CLOSED）
+      description: |
+        权限 `m4:qc:review`。整改复核通过后整改 → `CLOSED`，抽查 → `CLOSED`。
+
+        - 仅整改 `OPEN` 且抽查 `RECTIFYING` 可闭环；已闭环/状态不符 → **409**；
+        - `reviewerName` 不得为整改责任人（独立复核）→ 否则 **422**；
+        - 闭环写审计 `RECTIFICATION_CLOSE` 与 `CHART_REVIEW_STATUS`（detail 仅抽查号/整改标识/
+          状态，不含结论原文）。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 整改记录标识（UUID）。
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseRectificationRequest'
+            example:
+              reviewerName: 演示复核人（合成）
+              conclusion: 缺陷已整改，抽查闭环（合成结论）
+      responses:
+        '200':
+          description: 闭环后的整改记录（抽查状态 CLOSED）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rectification'
+              example:
+                id: '7a000000-0000-4000-8000-000000000001'
+                reviewId: '7f000000-0000-4000-8000-000000000001'
+                reviewNo: CR-20310306-5e6f7a8b
+                correctiveAction: 补录术后随访并核对出入量记录（合成整改）
+                responsibleName: 演示责任人（合成）
+                dueDate: '2031-03-20'
+                status: CLOSED
+                reviewerName: 演示复核人（合成）
+                reviewedAt: '2031-03-08T02:00:00Z'
+                closedAt: '2031-03-08T02:00:00Z'
+                createdAt: '2031-03-07T02:00:00Z'
+                reviewStatus: CLOSED
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/qc/export:
+    get:
+      operationId: exportQcReport
+      tags:
+        - 上报导出
+      summary: 导出质控指标/不良事件/病历抽查 CSV（脱敏、防注入、无 PHI）
+      x-allow-query-conflict: true
+      description: |
+        权限 `m4:qc:export`。CSV 为 UTF-8 **BOM** + 首行列头 + `text/csv` 流式输出；
+        参数校验与数据范围解析在写任何字节前完成，非法参数仍返回 JSON 400/403。
+
+        - `type=indicator`：导出区间内全部指标结果（**先按 qc-1.0.0 计算并留存快照**，
+          与 `GET /v1/qc/indicator-results` 同源）；列头
+          `type,code,name,category,indicatorVersion,periodFrom,periodTo,deptId,deptName,
+          numerator,denominator,value,unit,thresholdOperator,thresholdValue,targetMet,
+          inTargetStatistics,provisional,timezone`；
+        - `type=adverse`：导出区间内不良事件台账，**不输出 `description`/根因/整改等自由文本**，
+          只输出事件号/类型/等级/发生时间/科室/状态/RCA 状态/责任人/期限/上报时间；列头
+          `type,eventNo,eventType,severity,occurredAt,deptId,deptName,status,rcaStatus,
+          responsibleName,dueDate,reviewerName,closedAt,anonymous,timezone`；
+        - `type=review`：导出区间内病历抽查，**不输出缺陷描述原文**，只输出抽查号/时间/科室/
+          总分/满分/等级/缺陷数/状态/整改进度/期限；列头
+          `type,reviewNo,reviewedAt,deptId,deptName,totalScore,maxScore,grade,defectCount,status,
+          rectificationStatus,responsibleName,dueDate,closedAt,timezone`；
+        - 防公式注入：见本契约 info 第 6 条；脱敏：只含科室/工号姓名/聚合值，**不含**患者姓名、
+          住院号、院内患者号、身份证号、手机号、术前诊断、HIS 申请号；
+        - 上报国家/省级平台（I-10）的**字段映射与文件格式【待确认】**：本期 CSV 为 **EXT 占位模板**，
+          不直连外部平台、不写外部系统；导出写审计 `QC_EXPORT`（detail 仅类型/日期/数据行数）。
+        - 行数上限 **50000**：服务端以 `LIMIT 50000+1` 探测，超限 **不截断**，返回 **422**；
+          失败审计仍写 `QC_EXPORT`（result=0，detail 含真实 `dataRows` 与 `truncated=true`）。
+        `from`/`to` 必填、跨度（含首尾）≤ 366 天（超过 400）；`format` 当前仅 `csv`。
+      parameters:
+        - name: type
+          in: query
+          required: true
+          description: 导出类型：`indicator`（指标结果）/`adverse`（不良事件）/`review`（病历抽查）。
+          schema:
+            type: string
+            enum:
+              - indicator
+              - adverse
+              - review
+        - name: format
+          in: query
+          required: true
+          description: 导出格式；当前仅支持 csv（UTF-8 BOM）。
+          schema:
+            type: string
+            enum:
+              - csv
+        - name: from
+          in: query
+          required: true
+          description: 起始本地日期（含），格式 YYYY-MM-DD。
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: 结束本地日期（含）；与 from 跨度（含首尾）≤ 366 天，超过 400。
+          schema:
+            type: string
+            format: date
+        - name: deptId
+          in: query
+          required: false
+          description: 科室标识（UUID）；仅导出该科室，越界 403。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 脱敏 CSV 文件（UTF-8 BOM），仅标识/聚合值/状态，无患者标识与自由文本原文。
+          headers:
+            Content-Disposition:
+              description: 附件文件名，形如 attachment; filename="qc-indicator-2031-03-01-2031-03-31.csv"。
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+              example: |
+                type,code,name,category,indicatorVersion,periodFrom,periodTo,deptId,deptName,numerator,denominator,value,unit,thresholdOperator,thresholdValue,targetMet,inTargetStatistics,provisional,timezone
+                qc-indicator,QC-SYN-STRUCT-001,麻醉记录单完成率,STRUCTURE,1.0.0,2031-03-01,2031-03-31,,,3,4,75.00,PERCENT,GTE,95,false,true,true,Asia/Shanghai
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
+  responses:
+    BadRequest:
+      description: 请求参数校验失败（必填缺失、日期格式非法、跨度 > 366 天、枚举/评分项/分值越界、描述含疑似患者标识、导出类型或格式非法）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-1001
+            details:
+              - field: items
+                reason: 评分项 itemCode 不得重复
+    Unauthorized:
+      description: 未认证或令牌已失效（fail-closed）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-1002
+            details: []
+    Forbidden:
+      description: 已认证但缺权限（m4:qc:read|write|review|export）或数据范围不足（无可用范围/科室越界）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源或数据范围不足
+            traceId: SYNTH-TRACE-1003
+            details:
+              - field: dataScope
+                reason: 质控仅按科室或全院数据范围开放
+    NotFound:
+      description: 资源不存在或不可见（不良事件/RCA/抽查/整改；不泄露其他科室数据的存在性）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-1004
+            details: []
+    Conflict:
+      description: 状态机/唯一性/版本冲突（不良事件/RCA 越级或重复闭环、整改进度不符、重复提交、并发版本冲突、指标版本有效期重叠）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: STATE_CONFLICT
+            message: 状态或版本冲突，操作未生效
+            traceId: SYNTH-TRACE-1005
+            details:
+              - field: status
+                reason: 不良事件当前状态不允许提交 RCA
+    UnprocessableEntity:
+      description: 业务规则拒绝（复核人非独立、整改完成未确认、期限早于事件/抽查日期、科室不可用、关联台次/记录单不存在、导出超过行数上限）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 业务规则拒绝，操作未生效
+            traceId: SYNTH-TRACE-1006
+            details:
+              - field: reviewerName
+                reason: 复核人不得为上报人或责任人
+  schemas:
+    PageMeta:
+      type: object
+      description: 分页元数据；`total` 为全量条数。
+      required:
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          description: 当前页码。
+        size:
+          type: integer
+          minimum: 1
+          description: 每页条数。
+        total:
+          type: integer
+          minimum: 0
+          description: 全量条数。
+        totalPages:
+          type: integer
+          minimum: 0
+          description: 总页数 = ceil(total / size)；空数据为 0。
+    QcIndicator:
+      type: object
+      description: 质控指标定义（按 code + version 版本化；provisional=true 为合成参考口径【待确认】）。
+      required:
+        - id
+        - code
+        - name
+        - category
+        - definition
+        - dataSource
+        - numeratorLabel
+        - denominatorLabel
+        - unit
+        - thresholdOperator
+        - thresholdValue
+        - version
+        - effectiveFrom
+        - status
+        - provisional
+        - inTargetStatistics
+      properties:
+        id:
+          type: string
+          description: 指标标识（UUID）。
+        code:
+          type: string
+          description: 指标编码（院内唯一，如 QC-SYN-STRUCT-001）。
+        name:
+          type: string
+          description: 指标名称（中文）。
+        category:
+          type: string
+          description: 类别：STRUCTURE=结构、PROCESS=过程、OUTCOME=结果。
+          enum:
+            - STRUCTURE
+            - PROCESS
+            - OUTCOME
+        definition:
+          type: string
+          description: 口径说明（分子/分母定义，可追溯）。
+        dataSource:
+          type: string
+          description: 数据来源声明（M3 记录单/时间轴、M4 药品/耗材、M2 排程、本域数据）。
+        numeratorLabel:
+          type: string
+          description: 分子含义。
+        denominatorLabel:
+          type: string
+          description: 分母含义。
+        unit:
+          type: string
+          description: 单位：PERCENT=百分比、PER_1000_CASES=每千台次。
+          enum:
+            - PERCENT
+            - PER_1000_CASES
+        thresholdOperator:
+          type: string
+          description: 达标判定：GTE=值 ≥ 阈值为达标、LTE=值 ≤ 阈值为达标。
+          enum:
+            - GTE
+            - LTE
+        thresholdValue:
+          type: number
+          description: 阈值（与 unit 同单位）。
+        version:
+          type: string
+          description: 口径版本（语义变更必须升版本）。
+        effectiveFrom:
+          type: string
+          format: date
+          description: 生效起始本地日期（含）。
+        effectiveTo:
+          type: string
+          format: date
+          nullable: true
+          description: 生效结束本地日期（含）；null 表示长期有效。
+        status:
+          type: string
+          description: 状态：ACTIVE=生效、RETIRED=停用（停用后不再参与计算，历史结果保留）。
+          enum:
+            - ACTIVE
+            - RETIRED
+        provisional:
+          type: boolean
+          description: 是否为合成参考指标（口径/阈值待院方确认，ADR-0022）。
+        inTargetStatistics:
+          type: boolean
+          description: 是否计入达标统计；false 时 targetMet 固定 false（结构合规口径，Q-1 确认前）。
+    QcIndicatorList:
+      type: object
+      description: 指标定义列表（按类别、编码稳定排序）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 生效指标定义（空数据为空数组）。
+          items:
+            $ref: '#/components/schemas/QcIndicator'
+    QcIndicatorResult:
+      type: object
+      description: 单个指标在周期内的结果快照（分子/分母/值/达标；不含患者标识）。
+      required:
+        - indicatorId
+        - code
+        - name
+        - category
+        - indicatorVersion
+        - definition
+        - unit
+        - periodFrom
+        - periodTo
+        - numerator
+        - denominator
+        - value
+        - thresholdOperator
+        - thresholdValue
+        - targetMet
+        - computedAt
+        - provisional
+        - inTargetStatistics
+      properties:
+        indicatorId:
+          type: string
+          description: 指标标识（UUID）。
+        code:
+          type: string
+          description: 指标编码。
+        name:
+          type: string
+          description: 指标名称。
+        category:
+          type: string
+          description: 类别（STRUCTURE/PROCESS/OUTCOME）。
+          enum:
+            - STRUCTURE
+            - PROCESS
+            - OUTCOME
+        indicatorVersion:
+          type: string
+          description: 计算所用口径版本（跨期按当期版本）。
+        definition:
+          type: string
+          description: 口径说明。
+        unit:
+          type: string
+          description: 单位（PERCENT/PER_1000_CASES）。
+          enum:
+            - PERCENT
+            - PER_1000_CASES
+        periodFrom:
+          type: string
+          format: date
+          description: 周期起始本地日期（含）。
+        periodTo:
+          type: string
+          format: date
+          description: 周期结束本地日期（含）。
+        deptId:
+          type: string
+          nullable: true
+          description: 科室标识；null 表示全院口径。
+        numerator:
+          type: integer
+          minimum: 0
+          description: 分子（整数计数）。
+        denominator:
+          type: integer
+          minimum: 0
+          description: 分母（整数计数）；0 表示无基数（不判达标）。
+        value:
+          type: number
+          description: 指标值（按 unit 换算，保留 2 位小数）；分母为 0 时为 0。
+        thresholdOperator:
+          type: string
+          description: 达标判定方向（GTE/LTE）。
+          enum:
+            - GTE
+            - LTE
+        thresholdValue:
+          type: number
+          description: 阈值。
+        targetMet:
+          type: boolean
+          description: 是否达标（分母为 0 或 inTargetStatistics=false 时固定 false）。
+        computedAt:
+          type: string
+          format: date-time
+          description: 计算时间（服务端 UTC）。
+        provisional:
+          type: boolean
+          description: 是否为合成参考指标（口径/阈值待确认）。
+        inTargetStatistics:
+          type: boolean
+          description: 是否计入达标统计；false 时 targetMet 固定 false，不计入达标率。
+    QcIndicatorResultList:
+      type: object
+      description: 周期指标结果列表。
+      required:
+        - from
+        - to
+        - timezone
+        - formula
+        - items
+      properties:
+        from:
+          type: string
+          format: date
+          description: 周期起始本地日期（含）。
+        to:
+          type: string
+          format: date
+          description: 周期结束本地日期（含）。
+        timezone:
+          type: string
+          description: 统计时区，固定 Asia/Shanghai。
+        formula:
+          type: string
+          description: 指标值换算口径说明（可追溯）。
+        items:
+          type: array
+          description: 指标结果（按类别、编码稳定排序；空数据为空数组）。
+          items:
+            $ref: '#/components/schemas/QcIndicatorResult'
+    AdverseEvent:
+      type: object
+      description: 不良事件（主体 append-only；状态机 REPORTED→RCA→RECTIFYING→CLOSED）。
+      required:
+        - id
+        - eventNo
+        - eventType
+        - severity
+        - occurredAt
+        - deptId
+        - description
+        - reporterName
+        - anonymous
+        - status
+        - version
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: 事件标识（UUID）。
+        eventNo:
+          type: string
+          description: 事件号（AE-<yyyyMMdd>-<8 位十六进制>，服务端生成）。
+        eventType:
+          type: string
+          description: 事件类型（麻醉相关不良事件类型；院内字典【待确认】）。
+          enum:
+            - RESPIRATORY
+            - CIRCULATORY
+            - MEDICATION
+            - TRANSFUSION
+            - EQUIPMENT
+            - NERVE_INJURY
+            - AWARENESS
+            - FALL
+            - OTHER
+        severity:
+          type: string
+          description: 事件分级（I 级最重；分级定义与映射【待确认】）。
+          enum:
+            - LEVEL_I
+            - LEVEL_II
+            - LEVEL_III
+            - LEVEL_IV
+        occurredAt:
+          type: string
+          format: date-time
+          description: 发生时间（RFC 3339，含时区）。
+        deptId:
+          type: string
+          description: 科室标识。
+        deptName:
+          type: string
+          nullable: true
+          description: 科室名称（组织主数据；不含患者信息）。
+        scheduleId:
+          type: string
+          nullable: true
+          description: 关联台次标识（逻辑关联，跨模块不建外键）。
+        description:
+          type: string
+          description: 已脱敏事件描述（≤500 字；导出不输出）。
+        reporterName:
+          type: string
+          description: 上报人显示名；`anonymous=true` 时为“匿名上报”。
+        anonymous:
+          type: boolean
+          description: 是否匿名上报（匿名时对外不返回上报人姓名）。
+        status:
+          type: string
+          description: 状态：REPORTED=已上报、RCA=根因分析中、RECTIFYING=整改中、CLOSED=已闭环。
+          enum:
+            - REPORTED
+            - RCA
+            - RECTIFYING
+            - CLOSED
+        rcaId:
+          type: string
+          nullable: true
+          description: 当前 RCA 标识；无 RCA 时为 null。
+        version:
+          type: integer
+          minimum: 1
+          description: 状态机版本号（每次状态前移递增）。
+        createdAt:
+          type: string
+          format: date-time
+          description: 登记时间（服务端 UTC）。
+    AdverseEventList:
+      type: object
+      description: 不良事件台账（分页）。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页事件（发生时间倒序、事件号倒序）。
+          items:
+            $ref: '#/components/schemas/AdverseEvent'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CreateAdverseEventRequest:
+      type: object
+      description: 不良事件登记请求（不含上报人与患者标识；描述必须已脱敏）。
+      required:
+        - eventType
+        - severity
+        - occurredAt
+        - deptId
+        - description
+      properties:
+        eventType:
+          type: string
+          description: 事件类型。
+          enum:
+            - RESPIRATORY
+            - CIRCULATORY
+            - MEDICATION
+            - TRANSFUSION
+            - EQUIPMENT
+            - NERVE_INJURY
+            - AWARENESS
+            - FALL
+            - OTHER
+        severity:
+          type: string
+          description: 事件分级。
+          enum:
+            - LEVEL_I
+            - LEVEL_II
+            - LEVEL_III
+            - LEVEL_IV
+        occurredAt:
+          type: string
+          format: date-time
+          description: 发生时间（RFC 3339，含时区；不得晚于当前时间）。
+        deptId:
+          type: string
+          description: 科室标识（UUID，须在数据范围内）。
+        scheduleId:
+          type: string
+          nullable: true
+          description: 关联台次标识（可选，逻辑关联）。
+        description:
+          type: string
+          maxLength: 500
+          description: 已脱敏事件描述（≤500 字；不得含患者直接标识）。
+        anonymous:
+          type: boolean
+          default: false
+          description: 是否匿名上报（默认 false）。
+    AdverseRca:
+      type: object
+      description: RCA 记录（append-only；复核与闭环字段一次性写入）。
+      required:
+        - id
+        - eventId
+        - eventNo
+        - timeline
+        - rootCause
+        - correctiveAction
+        - responsibleName
+        - dueDate
+        - status
+        - createdAt
+        - eventStatus
+      properties:
+        id:
+          type: string
+          description: RCA 标识（UUID）。
+        eventId:
+          type: string
+          description: 关联不良事件标识。
+        eventNo:
+          type: string
+          description: 关联事件号。
+        timeline:
+          type: array
+          description: 事件时间线（按发生时间升序，1–20 条）。
+          items:
+            $ref: '#/components/schemas/RcaTimelineItem'
+        rootCause:
+          type: string
+          description: 根因分析（≤500 字；导出不输出）。
+        correctiveAction:
+          type: string
+          description: 整改措施（≤500 字；导出不输出）。
+        responsibleName:
+          type: string
+          description: 整改责任人显示名（≤64 字）。
+        dueDate:
+          type: string
+          format: date
+          description: 整改期限（本地日期，不早于事件发生日）。
+        status:
+          type: string
+          description: RCA 状态：OPEN=未闭环、CLOSED=已闭环。
+          enum:
+            - OPEN
+            - CLOSED
+        reviewerName:
+          type: string
+          nullable: true
+          description: 复核人显示名（阶段 1 写入后不可改）。
+        reviewedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 复核时间（阶段 1）。
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 闭环时间（阶段 2）。
+        createdAt:
+          type: string
+          format: date-time
+          description: RCA 提交时间。
+        eventStatus:
+          type: string
+          description: 关联事件当前状态。
+          enum:
+            - REPORTED
+            - RCA
+            - RECTIFYING
+            - CLOSED
+    RcaTimelineItem:
+      type: object
+      description: RCA 时间线条目（只含时间与脱敏描述）。
+      required:
+        - occurredAt
+        - description
+      properties:
+        occurredAt:
+          type: string
+          format: date-time
+          description: 该节点时间（含时区，不晚于当前时间）。
+        description:
+          type: string
+          maxLength: 200
+          description: 该节点脱敏描述（≤200 字，不含患者标识）。
+    CreateAdverseRcaRequest:
+      type: object
+      description: RCA 提交请求（时间线/根因/整改/责任人/期限）。
+      required:
+        - timeline
+        - rootCause
+        - correctiveAction
+        - responsibleName
+        - dueDate
+      properties:
+        timeline:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: 事件时间线（服务端按发生时间升序稳定排序）。
+          items:
+            $ref: '#/components/schemas/RcaTimelineItem'
+        rootCause:
+          type: string
+          maxLength: 500
+          description: 根因分析（≤500 字）。
+        correctiveAction:
+          type: string
+          maxLength: 500
+          description: 整改措施（≤500 字）。
+        responsibleName:
+          type: string
+          maxLength: 64
+          description: 整改责任人显示名（≤64 字）。
+        dueDate:
+          type: string
+          format: date
+          description: 整改期限（本地日期，不早于事件发生日）。
+    CloseAdverseRcaRequest:
+      type: object
+      description: RCA 复核/闭环请求（分阶段；复核人须独立）。
+      required:
+        - reviewerName
+        - conclusion
+      properties:
+        reviewerName:
+          type: string
+          maxLength: 64
+          description: 复核人显示名（不得为上报人或责任人）。
+        conclusion:
+          type: string
+          maxLength: 300
+          description: 复核/闭环结论（≤300 字；导出不输出）。
+        rectificationCompleted:
+          type: boolean
+          default: false
+          description: 是否确认整改完成（阶段 2 必须为 true；阶段 1 必须缺省或 false）。
+    ChartReview:
+      type: object
+      description: 病历质量抽查（评分项 1–12；总分/等级/缺陷由服务端计算）。
+      required:
+        - id
+        - reviewNo
+        - deptId
+        - reviewerName
+        - reviewedAt
+        - items
+        - totalScore
+        - maxScore
+        - grade
+        - defectCount
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: 抽查标识（UUID）。
+        reviewNo:
+          type: string
+          description: 抽查号（CR-<yyyyMMdd>-<8 位十六进制>，服务端生成）。
+        scheduleId:
+          type: string
+          nullable: true
+          description: 关联台次标识（逻辑关联）。
+        recordId:
+          type: string
+          nullable: true
+          description: 关联麻醉记录单标识（逻辑关联）。
+        rectificationId:
+          type: string
+          nullable: true
+          description: 当前整改标识；未提交整改时为 null（供前端直接闭环，避免二次查询）。
+        deptId:
+          type: string
+          description: 科室标识。
+        deptName:
+          type: string
+          nullable: true
+          description: 科室名称（组织主数据）。
+        reviewerName:
+          type: string
+          description: 抽查人显示名（取当前登录账号）。
+        reviewedAt:
+          type: string
+          format: date-time
+          description: 抽查时间。
+        items:
+          type: array
+          description: 评分项明细（按白名单顺序、去重后 1–12 项）。
+          items:
+            $ref: '#/components/schemas/ChartReviewItem'
+        totalScore:
+          type: integer
+          minimum: 0
+          description: 总分（Σ score，服务端计算）。
+        maxScore:
+          type: integer
+          minimum: 1
+          description: 满分（Σ maxScore，服务端计算）。
+        grade:
+          type: string
+          description: 等级：A ≥95%、B ≥90%、C ≥80%、D <80%（合格线 90%【待确认】）。
+          enum:
+            - A
+            - B
+            - C
+            - D
+        defectCount:
+          type: integer
+          minimum: 0
+          description: 缺陷项数（score < maxScore 的项数）。
+        status:
+          type: string
+          description: 状态：OPEN=待整改、RECTIFYING=整改中、CLOSED=已闭环。
+          enum:
+            - OPEN
+            - RECTIFYING
+            - CLOSED
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间。
+    ChartReviewItem:
+      type: object
+      description: 抽查评分项。
+      required:
+        - itemCode
+        - itemName
+        - score
+        - maxScore
+      properties:
+        itemCode:
+          type: string
+          description: 评分项编码：COMPLETENESS=完整性、TIMELINESS=时效性、SIGNATURE=签名、CONSISTENCY=逻辑一致性。
+          enum:
+            - COMPLETENESS
+            - TIMELINESS
+            - SIGNATURE
+            - CONSISTENCY
+        itemName:
+          type: string
+          description: 评分项名称（中文；缺省由服务端按编码补全）。
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 得分（≤ maxScore）。
+        maxScore:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: 满分。
+        defectNote:
+          type: string
+          nullable: true
+          maxLength: 200
+          description: 缺陷说明（得分 < 满分时必填，已脱敏，≤200 字）。
+    ChartReviewList:
+      type: object
+      description: 病历抽查列表（分页）。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 当前页抽查（抽查时间倒序、抽查号倒序）。
+          items:
+            $ref: '#/components/schemas/ChartReview'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CreateChartReviewRequest:
+      type: object
+      description: 创建病历抽查请求（总分由服务端计算，不接受客户端传总分）。
+      required:
+        - deptId
+        - reviewedAt
+        - items
+      properties:
+        scheduleId:
+          type: string
+          nullable: true
+          description: 关联台次标识（可选）。
+        recordId:
+          type: string
+          nullable: true
+          description: 关联麻醉记录单标识（可选）。
+        deptId:
+          type: string
+          description: 科室标识（UUID，须在数据范围内）。
+        reviewedAt:
+          type: string
+          format: date-time
+          description: 抽查时间（不得晚于当前时间）。
+        items:
+          type: array
+          minItems: 1
+          maxItems: 12
+          description: 评分项（itemCode 不得重复）。
+          items:
+            $ref: '#/components/schemas/ChartReviewItem'
+    Rectification:
+      type: object
+      description: 整改变更记录（append-only 内容；复核与闭环字段一次性写入）。
+      required:
+        - id
+        - reviewId
+        - reviewNo
+        - correctiveAction
+        - responsibleName
+        - dueDate
+        - status
+        - createdAt
+        - reviewStatus
+      properties:
+        id:
+          type: string
+          description: 整改标识（UUID）。
+        reviewId:
+          type: string
+          description: 关联抽查标识。
+        reviewNo:
+          type: string
+          description: 关联抽查号。
+        correctiveAction:
+          type: string
+          description: 整改措施（≤500 字；导出不输出）。
+        responsibleName:
+          type: string
+          description: 整改责任人显示名（≤64 字）。
+        dueDate:
+          type: string
+          format: date
+          description: 整改期限（本地日期，不早于抽查日）。
+        status:
+          type: string
+          description: 整改状态：OPEN=未闭环、CLOSED=已闭环。
+          enum:
+            - OPEN
+            - CLOSED
+        reviewerName:
+          type: string
+          nullable: true
+          description: 复核人显示名。
+        reviewedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 复核时间。
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 闭环时间。
+        createdAt:
+          type: string
+          format: date-time
+          description: 提交时间。
+        reviewStatus:
+          type: string
+          description: 关联抽查当前状态。
+          enum:
+            - OPEN
+            - RECTIFYING
+            - CLOSED
+    CreateRectificationRequest:
+      type: object
+      description: 提交整改请求（针对抽查缺陷项）。
+      required:
+        - correctiveAction
+        - responsibleName
+        - dueDate
+      properties:
+        correctiveAction:
+          type: string
+          maxLength: 500
+          description: 整改措施（≤500 字）。
+        responsibleName:
+          type: string
+          maxLength: 64
+          description: 整改责任人显示名（≤64 字）。
+        dueDate:
+          type: string
+          format: date
+          description: 整改期限（本地日期，不早于抽查日）。
+    CloseRectificationRequest:
+      type: object
+      description: 整改闭环请求（需独立复核人）。
+      required:
+        - reviewerName
+        - conclusion
+      properties:
+        reviewerName:
+          type: string
+          maxLength: 64
+          description: 复核人显示名（不得为整改责任人）。
+        conclusion:
+          type: string
+          maxLength: 300
+          description: 闭环结论（≤300 字；导出不输出）。
+    ErrorDetail:
+      type: object
+      description: 字段级或范围级错误明细；不含用户输入原文与患者标识。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 出错字段名（查询参数名或固定语义字段）。
+        reason:
+          type: string
+          description: 固定安全中文说明。
+    Error:
+      type: object
+      description: 统一错误响应；不暴露堆栈、SQL 实参与患者标识。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示。
+        traceId:
+          type: string
+          description: 链路追踪标识，与日志、审计记录关联。
+        details:
+          type: array
+          description: 字段级或范围级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'

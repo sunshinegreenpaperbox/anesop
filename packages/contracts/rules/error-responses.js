@@ -9,6 +9,8 @@
  *   4. 带 requestBody 的 operation 必备 400（入参校验失败）；
  *   5. 路径含资源参数 `{...}` 的 operation 必备 404；集合查询/创建类不得声明 404；
  *   6. 409 只允许出现在状态变更操作（带 requestBody）上；GET/DELETE 等不得声明。
+ *      例外：查询操作可显式声明 `x-allow-query-conflict: true`，用于 fail-closed 的
+ *      数据完整性冲突（如指标版本有效期重叠，无法给出可信单值时必须拒绝而非静默取一条）。
  *
  * 404/409 为条件化声明：只有单资源操作或业务状态冲突才出现，避免“每个接口都 404/409”的噪声。
  */
@@ -36,6 +38,7 @@ module.exports = function errorResponses(targetVal, _opts, context) {
   const rawResponses = (rawOperation && rawOperation.responses) || {}
   const hasPathParam = typeof template === 'string' && /\{[^}]+\}/.test(template)
   const hasRequestBody = Boolean(operation.requestBody)
+  const allowsQueryConflict = operation['x-allow-query-conflict'] === true
   const security = operation.security !== undefined ? operation.security : document.security
   const isUnauthenticated = !Array.isArray(security) || security.length === 0
   const requiresAuth = !isUnauthenticated && operation.operationId !== 'logout'
@@ -103,11 +106,12 @@ module.exports = function errorResponses(targetVal, _opts, context) {
     ])
   }
 
-  if (!hasRequestBody && responses['409']) {
-    push('409 仅用于状态变更操作（带 requestBody）；查询类 operation 不得声明 409', [
-      'responses',
-      '409',
-    ])
+  if (!hasRequestBody && responses['409'] && !allowsQueryConflict) {
+    push(
+      '409 仅用于状态变更操作（带 requestBody）；查询类 operation 不得声明 409' +
+        '（确需 fail-closed 时显式标记 x-allow-query-conflict: true）',
+      ['responses', '409'],
+    )
   }
   if (isUnauthenticated && responses['409']) {
     push('未认证 operation（security: []）不得声明 409', ['responses', '409'])

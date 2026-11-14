@@ -702,3 +702,184 @@
 8. **报表域 Q-8 workload 导出上限**（评审 Q-3）：当前仅多维导出有 50000 行硬上限；工作量导出
    为“TOTAL + 维度桶 + 术式分布”，行数受维度基数与每桶 50 项术式分布约束，未设统一行数上限。
    是否统一设置上限（如 50000 行）或按桶数/台次预检，待压测与院方确认。
+
+## 42. 质控域数据归属与边界（E-M17）
+
+- **归属**：指标定义/结果、不良事件与 RCA、病历抽查与整改全部落在 `m4_qc` schema
+  （`qc_indicator`/`qc_indicator_result`/`adverse_event`/`adverse_rca`/`chart_review`/
+  `rectification`，V25），只经 `m4-api` 对外暴露；其他模块不得直连本域表。
+- **数据来源**：指标计数来自 M2 排程台次、M3 麻醉记录单/术前访视/三方核查、M4 麻精专册与
+  高值耗材流水，以及本域不良事件/病历抽查。m4-impl 不访问其他模块表/Mapper，跨 schema
+  只读投影统一放在装配层：`QcIndicatorSourceAdapter`（5 条计数 `SELECT`）与
+  `QcCaseReferenceAdapter`（2 条台次/记录单所属科室 `SELECT`，ADR-0022）。
+- **不写入其他模块**：质控只做计数与留痕，不回写排程、记录单、药品或耗材表。
+- **表只增不删**：迁移 V25 只新增 schema/表/索引/触发器/权限点与 7 条合成参考指标，
+  不改写 V1–V24；结构变更走 V26+。
+
+## 43. 权限与数据范围
+
+| 权限点 | 用途 | SYS_ADMIN | SYS_QC_MANAGER | SYS_OR_MANAGER |
+|---|---|:-:|:-:|:-:|
+| `m4:qc:read` | 指标/结果/不良事件台账/抽查列表 | ✓ | ✓ | ✓ |
+| `m4:qc:write` | 登记不良事件、提交 RCA、创建抽查、提交整改 | ✓ | ✓ | ✓ |
+| `m4:qc:review` | RCA 复核/闭环、整改闭环 | ✓ | ✓ | — |
+| `m4:qc:export` | 上报导出（另写 `QC_EXPORT`） | ✓ | ✓ | — |
+
+- **数据范围**：`ALL` 全院；`SITE`/`DEPT` 按可见科室（`OrganizationQueryService` 收敛）；
+  `ROOM`/`SELF` 或无任何可用范围 **403**（质控为科室/全院聚合口径，不做个人质控视图）。
+- `deptId` 只收窄不扩大：越界 403；科室不存在/停用/非 DEPT → 422；单对象越界/不存在 → 404。
+- 质控指标目录（`GET /v1/qc/indicators`）是全院配置，不按数据范围裁剪，但需 `m4:qc:read`
+  且用户必须有可用数据范围（无范围仍 403，避免“无范围账号看全院配置”）。
+- 反例：SYS_OR_MANAGER 有 read+write 但无 `export`/`review`，`GET /v1/qc/export` 与
+  `POST /rca/{id}/close`、`POST /rectify/{id}/close` 一律 **403**（权限先于资源存在性）；
+  集成用例 `qcReadWriteRoleCannotExportOrReview` 固化。
+
+## 44. 质控指标口径（qc-1.0.0）
+
+- **版本化与版本选择**：`qc_indicator(code, version)`；语义/阈值变更必须新增版本行（守卫
+  55000；定义 `DELETE`/`TRUNCATE` 同样拒绝 55000）。计算/导出按有效期选择版本：
+  `effective_from <= to AND (effective_to IS NULL OR effective_to >= from)`；同一 `code`
+  在查询周期内只允许一个生效版本，区间重叠 → **409**（契约以 `x-allow-query-conflict: true`
+  显式声明查询类冲突）。查询区间跨版本时按有效期切分为多段，
+  同一 `code` 返回多行（每段一个版本，`periodFrom/periodTo` 为切分后的真实区间）。
+  结果唯一键 `(indicator_id, period_from, period_to, dept_id)`，`dept_id` 全 0 哨兵表示全院；
+  重算覆盖同一快照的分子/分母/值/达标与 `computed_at`，跨版本历史结果独立保留。
+- **计算**：`value = round(numerator / denominator × 100, 2)`（PERCENT）或 `× 1000`
+  （PER_1000_CASES）；`denominator = 0 → value = 0 且 targetMet = false`；
+  `targetMet` 按 `GTE`/`LTE` 与阈值比较；`inTargetStatistics=false` 的指标即使过阈值也固定
+  `targetMet=false`（不进达标统计）。分子/分母由服务端计数，不接受客户端传入。
+- **7 条合成参考指标**（`provisional=true`，阈值与清单【待确认】）：
+
+| 编码 | 名称 | 类别 | 分子 / 分母 | 数据来源 | 阈值 |
+|---|---|---|---|---|---|
+| QC-SYN-STRUCT-001 | 麻醉记录单完成率 | 结构 | 已结束记录单台次 / 非取消台次 | M3 记录单 + M2 排程 | ≥95% |
+| QC-SYN-PROC-002 | 术前访视完成率 | 过程 | 有术前访视台次 / 非取消台次 | M3 访视 + M2 排程 | ≥95% |
+| QC-SYN-PROC-003 | 三方核查完成率 | 过程 | 完成 Time-out 与 Sign-out 台次 / 非取消台次 | M3 三方核查 + M2 排程 | ≥95% |
+| QC-SYN-PROC-004 | 麻精专册双人签字结构合规率 | 结构 | 双人签字字段完整条数 / 登记条数（`inTargetStatistics=false`，Q-1 前不计入达标） | M4 麻精专册 | ≥100%（仅展示） |
+| QC-SYN-OUT-005 | 不良事件上报率 | 结果 | 上报事件数 / 非取消台次 | 本域事件 + M2 排程 | ≥3‰ |
+| QC-SYN-PROC-006 | 病历质量抽查合格率 | 过程 | 得分率 ≥90% 抽查数 / 抽查数 | 本域病历抽查 | ≥90% |
+| QC-SYN-STRUCT-007 | 高值耗材 UDI 使用登记率 | 结构 | 带 UDI 高值出库条数 / 高值出库条数 | M4 高值耗材流水 | ≥100% |
+
+- **手算示例**（集成用例固定数据，2026-01）：台次 4（麻醉科 3 + 手术室 1）、已结束记录单 3、
+  访视 3、三方核查 2、麻精登记 2（双人完整 1）、不良事件 1、抽查 2（合格 1）、高值出库 3
+  （带 UDI 2）⇒ 75.00% / 75.00% / 50.00% / 50.00% / 250.00‰（达标）/ 50.00% / 66.67%。
+- **未登记编码**按 0/0 呈现“无数据”，不静默丢弃；正式指标由后续版本实现计算器。
+
+## 45. 不良事件状态机与 RCA
+
+```
+REPORTED --(提交 RCA)--> RCA --(复核)--> RECTIFYING --(整改完成确认)--> CLOSED
+```
+
+- 只允许逐级前进：越级/跳级/重复提交/重复闭环一律 **409**（`details.field=status`）。
+- `POST /adverse-events/{id}/rca`：仅 `REPORTED`，一条事件一条 RCA；`timeline` 1–20 条按时间
+  升序排序；`dueDate` 不早于事件发生日（422）。
+- `POST /rca/{id}/close` **分阶段**：
+  1. 事件 `RCA` 且 RCA 未复核：写复核人/结论，事件 → `RECTIFYING`；请求
+     `rectificationCompleted` 必须缺省/`false`（否则 409）。
+  2. 事件 `RECTIFYING` 且已复核未闭环：必须 `rectificationCompleted=true`（否则 409），
+     记录闭环时间，事件/RCA → `CLOSED`；闭环复核人必须与复核阶段一致（复核字段一次性写入）。
+- **关联台次**：`scheduleId` 可选；台次不存在/已删除 **422**，属他科 **403**（不校验患者归属）。
+- **独立复核**：复核人不得为上报人或责任人（422）。
+- **append-only**：事件业务内容（类型/等级/时间/科室/描述/上报人/匿名）、RCA 内容不可改删；
+  状态字段只允许前移且 `version +1`；复核/闭环字段只允许从 NULL 写一次；DELETE/TRUNCATE
+  与非法状态迁移均由触发器拒绝（55000）。
+- **匿名上报**：`anonymous=true` 对外只显示“匿名上报”，内部保留上报人标识用于追溯与独立
+  复核校验（匿名范围【待确认】Q-3）。
+
+## 46. 病历质量抽查与整改
+
+- **评分项白名单**：`COMPLETENESS`（完整性）/`TIMELINESS`（时效性）/`SIGNATURE`（签名）/
+  `CONSISTENCY`（逻辑一致性），1–12 项且编码不重复；每项 `0 ≤ score ≤ maxScore ≤ 100`。
+- **服务端计算**：`totalScore = Σ score`、`maxScore = Σ maxScore`、`defectCount = score < maxScore`
+  项数、`grade`：A≥95%、B≥90%、C≥80%、D<80%（合格线 **90%**【待确认】）。
+  `score < maxScore` 必须填脱敏缺陷说明（否则 400）；缺陷说明含疑似患者标识 → 400。
+- **状态机**：`OPEN --(提交整改)--> RECTIFYING --(复核闭环)--> CLOSED`；重复提交/状态不符 409；
+  整改期限不得早于抽查日（422）；复核人不得为整改责任人（422）。
+- **关联台次/记录单**：`scheduleId`/`recordId` 可选；目标不存在/已删除 **422**，
+  属他科 **403**（只做科室一致性校验，不校验患者归属）。
+- **append-only**：抽查评分内容与整改全文不可改删；状态前移 `version +1`；复核/闭环一次性写入。
+
+## 47. 导出（CSV，上报占位）
+
+- `GET /v1/qc/export?type=indicator|adverse|review&from&to&format=csv[&deptId]`，权限
+  `m4:qc:export`；UTF-8 **BOM** + 首行列头 + `text/csv` 流式。
+- `indicator` 导出先按 qc-1.0.0 计算并留存快照（与 `GET /indicator-results` 同源）；
+  列头 `type,code,name,category,indicatorVersion,periodFrom,periodTo,deptId,deptName,numerator,
+  denominator,value,unit,thresholdOperator,thresholdValue,targetMet,inTargetStatistics,provisional,timezone`。
+- `adverse` **不输出**描述/根因/整改等自由文本，只输出事件号/类型/等级/发生时间/科室/状态/
+  RCA 状态/责任人/期限/复核人/闭环时间/匿名标志；`review` 同理只输出评分与整改进度。
+- 防公式注入：`=`/`+`/`-`/`@`/制表符/回车开头的单元格以**前导单引号**中和，必要时 RFC 4180
+  加引号并转义内部引号；导出写审计 `QC_EXPORT`（type/日期/科室/真实行数/`truncated`）。
+- **行数上限 50000**：服务端以 `LIMIT 50000+1` 探测，超限**不截断**并返回 **422**；失败审计
+  仍写 `QC_EXPORT`（result=0，detail 含真实 `dataRows`、`truncated=true`、`limit`）。
+- 上报 I-10 的字段映射与文件格式未确认（EXT 占位）：本期不直连外部平台、不写外部系统。
+
+## 48. 审计
+
+| 动作 | 触发 | detail（无 PHI） |
+|---|---|---|
+| `QC_INDICATOR_QUERY` | 读取指标定义 | 指标数、口径版本 |
+| `ADVERSE_EVENT_CREATE` | 登记不良事件 | 事件号、类型、等级、科室、是否匿名 |
+| `ADVERSE_EVENT_QUERY` | 台账查询 | 状态、科室、分页、条数 |
+| `ADVERSE_EVENT_STATUS` | 状态机前移 | 事件号、目标状态 |
+| `RCA_CREATE` / `RCA_REVIEW` / `RCA_CLOSE` | RCA 提交/复核/闭环 | 事件号、RCA 标识、时间线条数/阶段 |
+| `CHART_REVIEW_CREATE` / `CHART_REVIEW_QUERY` / `CHART_REVIEW_STATUS` | 抽查 | 抽查号、总分/满分/缺陷数、目标状态 |
+| `RECTIFICATION_CREATE` / `RECTIFICATION_CLOSE` | 整改 | 抽查号、整改标识、期限/目标状态 |
+| `QC_INDICATOR_COMPUTE` | 计算/留存指标结果（查询与导出均写） | 周期、指标数、达标数、是否带科室、来源 `query`/`export` |
+| `QC_EXPORT` | 导出 | 类型、日期、科室、真实数据行数、是否超限（`truncated`/`limit`） |
+
+审计不写描述原文、根因/整改/结论原文、患者标识；导出与写操作均在同一请求内落库。
+
+## 49. 前端
+
+- `apps/web/src/modules/m4/views/QcIndicatorView.vue`：指标定义表 + 周期结果表（达标/未达标
+  tag、`inTargetStatistics=false` 显示“不计入达标”、分子/分母/值/阈值、provisional 标识）
+  + 导出按钮。
+- `AdverseEventView.vue`：台账（状态/日期/科室过滤、分页）、登记弹窗、按状态显示
+  “提交 RCA / 复核 / 整改闭环”，闭环需勾选“整改完成”。
+- `ChartReviewView.vue`：抽查列表（总分/得分率/等级/缺陷数/状态）、新建抽查（四项评分 +
+  实时预览总分/等级）、提交整改、整改闭环。
+- 路由 `/m4/qc/indicators`、`/m4/qc/adverse-events`、`/m4/qc/chart-reviews`；菜单权限
+  `m4:qc:read`；导出按钮需 `m4:qc:export`，复核/闭环需 `m4:qc:review`。
+- 质控指标看板只做表格 + 达标状态（ECharts 趋势图留待指标目录确认后另开）。
+
+## 50. 测试与验收
+
+- 单测 `QcServiceImplTest`（35 例）+ `QcAccessGuardTest`（5 例）+ `QcJsonTest`（3 例）：
+  7 条指标分子分母映射、换算/四舍五入/分母 0、达标判定、
+  数据范围快照、日期与跨度 400、PHI/未来时间 400、匿名上报、RCA 状态机与独立复核、
+  阶段 2 完成确认、抽查评分/等级/缺陷、重复评分项/缺缺陷说明 400、整改期限 422、
+  导出 BOM/防注入/无自由文本/审计、非法导出参数、**按有效期选择版本/跨版本切分/重叠 409/
+  结构合规不计达标/关联台次与记录单 422/403/导出超限 422 与失败审计**。
+- 集成 `M4QcApiIntegrationTest`（17 例，真跑嵌入式 PostgreSQL 16 + Flyway V25）：
+  指标手算（全院 7 条）、DEPT 数据范围与越界 403、无权限 403、**两版本跨期查询（旧版本/
+  新版本/跨版本切分）与重叠 409**、不良事件状态机（重复 RCA/两阶段闭环/重复闭环 409）、
+  append-only 55000（内容改删 + 越级迁移 + **指标定义 DELETE/TRUNCATE**）、
+  **关联台次/记录单不存在 422、跨科室 403**、**SYS_OR_MANAGER 无 export/review → 403**、
+  抽查评分与整改闭环、重复整改 409、非独立复核人 422、导出 BOM/`'=SUM(1,2)`/无 PHI/
+  无自由文本、**50001 行导出超限 422 + 失败审计真实行数**、导入非法参数 400、
+  V25 权限与 7 条合成指标。
+- 前端 Vitest `QcViews.spec.ts`（8 例）：看板/台账/抽查渲染与权限态、错误态、空态、
+  区间校验/得分率/等级/导出请求参数；E2E `m4-qc.spec.ts`（1 条）：上报 → RCA → 复核 →
+  闭环全链路（两次闭环请求体区分 `rectificationCompleted`）。
+- 覆盖率（本机 JaCoCo，2026-11-15 全量 verify）：**m4-impl 模块行 92.8% / 分支 73.3%**
+  （门禁 80%/70%）；质控实现包行 91.7% / 分支 70.3%、质控支撑类（`QcAccessGuard`/`QcJson`）
+  行 93.8% / 分支 84.6%；契约 11 个端点 100% 有用例（单测 + 集成 + E2E）。
+
+## 51. 待确认（质控域 Q，ADR-0022）
+
+1. **质控域 Q-1 指标清单与阈值**：7 条为合成参考（`QC-SYN-*`），国家/省级正式目录、阈值、
+   单位、统计周期与分母定义待院方/质控办确认；确认后升版本替换，不改历史行。
+2. **质控域 Q-2 上报格式**：I-10 平台文件/接口格式、字段映射、上报周期；本期 CSV 为 EXT 占位。
+3. **质控域 Q-3 匿名化**：匿名上报是否对质控专员匿名；内部追溯标识的可见范围。
+4. **质控域 Q-4 抽查规则**：评分项权重与满分分配、合格线（当前 90%）与等级划分。
+5. **质控域 Q-5 复核治理**：复核人资质（质控专员/科主任）、是否双人复核、回避范围。
+6. **质控域 Q-6 闭环时限**：48h 分级初评与整改期限是否硬校验（当前仅记录与提示）。
+7. **质控域 Q-7 指标钻取**：到患者/记录条目的明细钻取权限与脱敏方案（当前只给聚合计数）。
+8. **质控域 Q-8 结果锁定**：历史周期是否允许重算、是否需锁定/归档（当前重算覆盖同一快照）。
+9. **质控域 Q-9 病历抽查规则**：方案书要求按规则抽样；本期**降级为人工抽检**（抽查人逐份
+   录入四项评分），不做随机/分层自动抽样、抽样比例与必查清单硬校验，待质控办确认。
+10. **质控域 Q-10 复核人/责任人身份关联**：`reviewerName`/`responsibleName` 为自由文本，
+   未与 m0 用户表建立外键/工号关联，无法自动校验资质与在册状态；本期仅做“复核人≠上报人/
+   责任人”文本比对，属**已知取舍**，待院方确认是否改为用户选择 + 资质校验（Q-5 相关）。
