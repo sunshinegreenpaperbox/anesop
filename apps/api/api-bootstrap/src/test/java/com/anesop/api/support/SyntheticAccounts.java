@@ -38,6 +38,17 @@ public final class SyntheticAccounts {
     public static final String DEMO_SELF_USERNAME = "demo_self";
     public static final String DEMO_SELF_PASSWORD = "Anesop@2026";
 
+    /** 分级授权管理员复用 demo_dept（SYS_OR_MANAGER + SYS_AUTH_MANAGER，DEPT 范围）。 */
+
+    /** 分级授权审批人 1/2（SYS_AUTH_MANAGER；SYNTHETIC，不绑定组织，仅审批资格）。 */
+    public static final String APPROVER_1_ID = "e0000000-0000-4000-8000-000000000005";
+    public static final String APPROVER_1_USERNAME = "test.approver1";
+    public static final String APPROVER_2_ID = "e0000000-0000-4000-8000-000000000006";
+    public static final String APPROVER_2_USERNAME = "test.approver2";
+
+    /** SYS_AUTH_MANAGER 角色标识（V22）。 */
+    public static final String AUTH_MANAGER_ROLE_ID = "a0000000-0000-4000-8000-000000000008";
+
     /** V100 演示种子：麻醉科 / 手术室组织（DEPT 范围对象）。 */
     public static final String DEMO_ANES_ORG_ID = "f1000000-0000-4000-8000-000000000002";
     public static final String DEMO_OR_ORG_ID = "f1000000-0000-4000-8000-000000000003";
@@ -103,6 +114,46 @@ public final class SyntheticAccounts {
                 INSERT INTO m0_platform.sys_user_role (user_id, role_id)
                 VALUES (?::uuid, ?::uuid) ON CONFLICT DO NOTHING
                 """, SURGEON_ID, SURGEON_ROLE_ID);
+    }
+
+    /**
+     * 幂等创建分级授权治理账号：授权管理员 + 两名审批人（SYNTHETIC）。
+     *
+     * <p>V22 的 SYS_AUTH_MANAGER 赋予 demo_dept（DEPT 范围，绑定麻醉科）；审批人须具备
+     * {@code m4:staff:authorize}。三个账号分开，用于“操作者 ≠ 审批人 ≠ 第二审批人”用例。
+     */
+    public static void ensureStaffGovernanceAccounts(JdbcTemplate jdbcTemplate) {
+        String hash = new BCryptPasswordEncoder().encode("Synth@2026");
+        ensureGovernanceUser(jdbcTemplate, APPROVER_1_ID, APPROVER_1_USERNAME, hash);
+        ensureGovernanceUser(jdbcTemplate, APPROVER_2_ID, APPROVER_2_USERNAME, hash);
+        for (String userId : java.util.List.of(APPROVER_1_ID, APPROVER_2_ID)) {
+            jdbcTemplate.update("""
+                    INSERT INTO m0_platform.sys_user_role (user_id, role_id)
+                    VALUES (?::uuid, ?::uuid) ON CONFLICT DO NOTHING
+                    """, userId, AUTH_MANAGER_ROLE_ID);
+        }
+        // 授权管理员复用 demo_dept（已有麻醉科 DEPT 绑定，避免新增组织成员污染数据范围用例）。
+        jdbcTemplate.update("""
+                INSERT INTO m0_platform.sys_user_role (user_id, role_id)
+                VALUES (?::uuid, ?::uuid) ON CONFLICT DO NOTHING
+                """, DEMO_DEPT_ID, AUTH_MANAGER_ROLE_ID);
+        // 审批人只需审批权限，不绑定组织（不参与数据范围成员集合）。
+        jdbcTemplate.update("""
+                DELETE FROM m0_platform.sys_user_org WHERE user_id IN (?::uuid, ?::uuid)
+                """, APPROVER_1_ID, APPROVER_2_ID);
+    }
+
+    private static void ensureGovernanceUser(JdbcTemplate jdbcTemplate, String userId,
+            String username, String hash) {
+        jdbcTemplate.update("""
+                INSERT INTO m0_platform.sys_user
+                    (id, username, password_hash, display_name, status, must_change_password,
+                     failed_attempts, version, deleted)
+                VALUES (?::uuid, ?, ?, '分级授权治理账号（合成）', 1, false, 0, 0, false)
+                ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+                    must_change_password = false, failed_attempts = 0, locked_until = NULL,
+                    status = 1, deleted = false
+                """, userId, username, hash);
     }
 
     /** 幂等创建锁定用例账号（绑定 SYS_ANESTHESIOLOGIST，不影响 demo_admin 用例）。 */
@@ -171,6 +222,12 @@ public final class SyntheticAccounts {
         jdbcTemplate.update("""
                 INSERT INTO m0_platform.sys_role_permission (role_id, permission_id)
                 VALUES (?::uuid, 'b0000000-0000-4000-8000-000000000020') ON CONFLICT DO NOTHING
+                """, ROOM_ROLE_ID);
+        // M4 人员域只读：让 S-4“ROOM 数据范围访问 /v1/staff/departments 必须 403”
+        // 的拒绝来自数据范围而不是缺权限（区分 403 根因）。
+        jdbcTemplate.update("""
+                INSERT INTO m0_platform.sys_role_permission (role_id, permission_id)
+                VALUES (?::uuid, 'b0000000-0000-4000-8000-000000000081') ON CONFLICT DO NOTHING
                 """, ROOM_ROLE_ID);
         jdbcTemplate.update("""
                 INSERT INTO m0_platform.sys_user_room (user_id, room_id, status)

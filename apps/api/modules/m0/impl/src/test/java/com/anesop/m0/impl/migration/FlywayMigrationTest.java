@@ -202,8 +202,9 @@ class FlywayMigrationTest {
         migrateToLatest();
 
         assertThat(jdbc.queryForList("SELECT code FROM m0_platform.sys_role ORDER BY code", String.class))
-                .containsExactly("SYS_ADMIN", "SYS_ANESTHESIOLOGIST", "SYS_NURSE_ANESTHETIST",
-                        "SYS_OR_MANAGER", "SYS_PHARMACIST", "SYS_QC_MANAGER", "SYS_SURGEON");
+                .containsExactly("SYS_ADMIN", "SYS_ANESTHESIOLOGIST", "SYS_AUTH_MANAGER",
+                        "SYS_NURSE_ANESTHETIST", "SYS_OR_MANAGER", "SYS_PHARMACIST",
+                        "SYS_QC_MANAGER", "SYS_SURGEON");
 
         List<String> permissionCodes = jdbc.queryForList(
                 "SELECT code FROM m0_platform.sys_permission ORDER BY code", String.class);

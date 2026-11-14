@@ -71,8 +71,8 @@ class MigrationUpgradePathTest {
         assertThat(jdbc.queryForList(
                 "SELECT version FROM public.flyway_schema_history ORDER BY installed_rank", String.class))
                 .containsSubsequence("1", "2", "3");
-        // V2 预置 6 个平台角色 + V20 新增药房药师 SYS_PHARMACIST（M4-M15-01 药品域最小角色）。
-        assertThat(countRows("sys_role")).isEqualTo(7);
+        // V2 预置 6 个平台角色 + V20 药房药师 SYS_PHARMACIST + V22 分级授权管理员 SYS_AUTH_MANAGER。
+        assertThat(countRows("sys_role")).isEqualTo(8);
         assertThat(countRows("sys_dict_item")).isEqualTo(22);
         // 生产路径升级后仍无账号：演示账号只能来自独立 location。
         assertThat(countRows("sys_user")).isZero();

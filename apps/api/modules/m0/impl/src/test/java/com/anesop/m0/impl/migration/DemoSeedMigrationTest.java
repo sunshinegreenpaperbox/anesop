@@ -47,9 +47,9 @@ class DemoSeedMigrationTest {
         assertThat(versions.get(versions.size() - 1))
                 .as("演示种子 V101（M4 演示药品）必须最后执行").isEqualTo("101");
 
-        // 平台预置基线仍在（V20 追加 SYS_PHARMACIST 药房药师），演示种子只追加账号。
+        // 平台预置基线仍在（V20 SYS_PHARMACIST + V22 SYS_AUTH_MANAGER），演示种子只追加账号。
         assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM m0_platform.sys_role", Integer.class)).isEqualTo(7);
+                "SELECT count(*) FROM m0_platform.sys_role", Integer.class)).isEqualTo(8);
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM m0_platform.sys_dict_item", Integer.class)).isEqualTo(22);
         // M2-M0-01 追加 demo_dept / demo_self 两个受限演示账号（SYNTHETIC）。
