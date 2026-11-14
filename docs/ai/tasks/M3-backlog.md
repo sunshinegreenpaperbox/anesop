@@ -21,7 +21,7 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 | M3-M2-01 | 麻醉记录单、时间轴、用药/输液/出入量 | `anesthesia.yaml`、`apps/api/modules/m2/**`、`apps/web/src/modules/m2/**`、`db/migration/V13*` | M2-M4-01/M2-M5-01 | Review（2026-11-14，独立评审 blocking B-1/B-2/S-1…S-5 已修复，待复审 + 全量 verify） |
 | M3-M8-01 | 采集接入平台端（网关→平台体征、质量标记、幂等） | `services/device-gateway/**`、`db/migration/V14*`、`apps/api/modules/m2/**`、契约 device.yaml/anesthesia | S0-09 | Review（2026-11-14，独立评审 blocking B-1/S-1…S-6 已修复，待复审 + 全量 verify） |
 | M3-M2-02 | 术中预警规则与抢救记录 | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，契约 0.7.0 + V15/V16；独立评审 B-1～B-4 与 S-1～S-6 已修复：ingest 领域事件实时触发、水位增量、DRAFT 不评估、间歇指标 gap、规则待确认/历史版本、抢救 leader/rescuers、审计 alertId；待复审 + 全量 verify） |
-| M3-M2-03 | 锁单/修订/CA 签名（签名模拟） | m2 契约/模块、前端 | M3-M2-01 | Blocked |
+| M3-M2-03 | 锁单/修订/CA 签名（签名模拟） | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，复审修复：契约 0.8.1（confirmChecklist 必填/原因码收缩/effective 端点/409 示例）、快照含抢救+人员并按时间稳定排序、V17 链守卫与抢救冻结、effective 投影、失败审计/管理员标注、回滚文档；待全量 verify 后再复审） |
 | M3-M10-01 | 复苏记录与转出（Aldrete、交接） | m2 契约/模块、前端 | M3-M2-01 | Blocked |
 | M3-M11-01 | 术后随访与镇痛（24/48h、PCA、并发症） | m2 契约/模块、前端 | M3-M10-01 | Blocked |
 | M3-QA-01 | 临床记录专项测试 + E2E-02/03 | `apps/web/e2e/**`、各 `src/test/**` | M3-M2-03、M3-M8-01 | Blocked |
@@ -56,9 +56,22 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
   待确认、历史版本端点、阈值按指标范围校验；审计 ALERT_TRIGGERED 以告警主键为 resourceId。
 - 待确认：Q-1 可疑帧是否可触发 CRITICAL；Q-2 ACK 后升级提醒；Q-3 默认阈值/gap；
   Q-4 抢救人员是否绑定登录用户与 CA（M5/M3-M2-03）。
-### M3-M2-03 锁单/修订/CA 签名
-- 锁单前置：三方核查完成 + 记录完整性；锁单后不可改，只能新修订版本（原值/修改人/时间/原因，
-  可比对）；CA 签名占位（EXT-05，自签 hash）；E2E-03。
+### M3-M2-03 锁单/修订/CA 签名（2026-11-14 落地，复审修复待重新评审）
+- 契约 anesthesia 0.8.1（additive）：`GET /records/{recordId}/lock-status` 六项前置清单；
+  `GET /records/{recordId}/effective` 当前有效值投影（original + 最新修订更正）；
+  `POST /lock` 锁单（version + confirmChecklist，返回 lockedAt + SIMULATED 签名摘要）；
+  `GET/POST /revisions`、`GET /revisions/{revisionNo}`（原因码白名单、全量快照、版本链摘要、
+  与上一版差异）；示例全 SYNTHETIC，HEAD baseline PASS。
+- V17：`anesthesia_record` 增 `locked_at/locked_by/current_revision/lock_signature_*`、
+  `status` 扩展 LOCKED/REVISED；`record_revision` append-only + 链守卫（父记录已锁单、
+  版本号连续、上一版摘要一致）；锁单后禁止 INSERT 事件/用药/出入量/抢救（触发器 55000）、
+  记录内容不可改；权限 `m2:record:lock|revise`（授 SYS_ADMIN/SYS_ANESTHESIOLOGIST，护士
+  默认不含；管理员 break-glass 审计标注，Q-19）。
+- 服务层：前置未满足 409 逐项列出、确认清单缺失 400、重复/过期锁单 409、锁后写 409、
+  修订行锁内递增 revision_no、签名摘要=SHA-256(规范化快照 JSON)（版本链，覆盖抢救记录）；
+  失败冲突写 result=0 审计；`GET /effective` 只读投影，原行不可变。
+- 测试：单测（快照/锁单/抢救冻结）+ 集成 7 用例（真跑嵌入式 PG16，含并发修订/触发器直插/
+  抢救入快照/effective/审计/权限）+ 前端 Vitest 3 用例 + E2E-03。
 ### M3-M10-01 复苏记录与转出
 - PACU 记录、Aldrete 评分、转出条件、交接记录（SBAR）、与排程/病房衔接。
 ### M3-M11-01 术后随访与镇痛
