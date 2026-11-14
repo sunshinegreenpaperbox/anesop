@@ -23,8 +23,8 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 | M4-M15-01 | 药品目录与麻精五专（字典/五专/基数/日结班结/药房适配器模拟） | 新契约 drug.yaml、m4 模块、V20、前端 | M3 | Review（blocking 已清） |
 | M4-M13-01 | 人员档案、分级授权、排班、培训 | 新契约 staff.yaml、m4 模块、V21/V22、前端 | M3-M0-* | Review（blocking 已清） |
 | M4-M14-01 | 耗材主数据、出入库、UDI、高值追溯、SPD 模拟 | 新契约 material.yaml、m4 模块、V23、前端 | M4-M15-01 | Review |
-| M4-M16-01 | 工作量统计、多维报表、导出 | 报表接口/契约、m4 模块、前端 | M4-M13-01、M3 | Blocked |
-| M4-M17-01 | 质控指标、不良事件 RCA、病历质量抽查、上报导出 | m4 模块、契约、前端 | M4-M16-01 | Blocked |
+| M4-M16-01 | 工作量统计、多维报表、导出 | 报表接口/契约、m4 模块、前端 | M4-M13-01、M3 | Review（blocking 已清） |
+| M4-M17-01 | 质控指标、不良事件 RCA、病历质量抽查、上报导出 | m4 模块、契约、前端 | M4-M16-01 | 可解锁 |
 | M4-QA-01 | 管理域专项测试、覆盖率、导出脱敏与权限回归 | 测试/文档 | M4-M15-01…M4-M17-01 | Blocked |
 
 ## 任务卡要点
@@ -88,6 +88,20 @@ M4-QA-01 管理域专项测试与导出脱敏（E-M16/E-M17 + 权限）
 - 验收：唯一码全链路追溯（入库→使用→计费）、效期/批次校验、越权、审计、SPD 降级模拟。
 
 ### M4-M16-01 工作量与多维报表
+
+> **Review（2026-11-14）**：契约 `report.yaml 0.1.0`（3 路径 / 3 operation / 8 schema，第 9 域；
+> baseline 落地；口径 report-1.0.0 写入 description）、V24（**data-only** 权限点
+> `m4:report:read|export` 授 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER，无 DDL）、
+> m4-api（ReportService/ReportQuery/MultiReportQuery/ReportExportQuery/维度与指标白名单 +
+> `ReportCaseSource` 只读端口）、m4-impl（`ReportServiceImpl`：366 天跨度、Asia/Shanghai 自然日、
+> 台次/麻醉时长/加权台次/术式分布、多维组合 + 稳定排序 + 分页 + 全量合计、DataScope
+> ALL/SITE/DEPT/ROOM/SELF fail-closed、CSV BOM/列头/防公式注入/无 PHI、审计
+> REPORT_QUERY/REPORT_EXPORT、空数据 0、权重可配置默认 1.0；单测 25 例 + 装配层 fail-closed 2 例）、bootstrap（`ReportController` +
+> 装配层只读投影 `ReportCaseSourceAdapter` 单条 SELECT；集成 6 例真跑 PG16）、前端报表页（筛选/结果表/导出/空/错误/
+> 权限态，Vitest 7 例 + E2E 2 条）、文档（模块 README §33–§41、ADR-0021、docs-api §3.16、
+> docs-db §4.19、data-dictionary §3.14）已完成；独立评审建议 S-1…S-9 已修（无 blocking）。
+> 绩效权重/难度系数、时长口径、STAFF/DEPT 数据来源、报表锁定与个人视图标【待确认】
+> （ADR-0021 Q-1…Q-8 / 模块 README §41）；M4-M17-01 可解锁。
 - 目标：工作量统计口径（台次/麻醉时长/权重）、多维报表（科室/医师/术式/日期）、导出 CSV
   （脱敏、防公式注入）、与 M2-M6-01 排程分析口径一致；报表契约 additive；权限
   `m4:report:read|export`；导出审计。

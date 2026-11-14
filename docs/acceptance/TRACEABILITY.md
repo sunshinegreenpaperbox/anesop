@@ -39,3 +39,4 @@
 | 药品目录与麻精五专 | 2.5 | drug.yaml 0.1.0 | m4/drug | 药品/五专页 | M4DrugApiIntegrationTest | 已实现（M4-M15-01；T-4 收口；EXT-02 模拟） |
 | 人员档案与分级授权/排班/培训 | 2.5 | staff.yaml 0.1.0 | m4/staff | 人员/授权/排班页 | M4StaffApiIntegrationTest | 已实现（M4-M13-01；R1–R5 映射待确认） |
 | 耗材主数据与 UDI 追溯/SPD | 2.5 | material.yaml 0.1.0 | m4/material | 耗材/追溯页 | M4MaterialApiIntegrationTest | 已实现（M4-M14-01；EXT-03 模拟） |
+| 工作量与多维报表/导出 | 2.7.2 | report.yaml 0.1.0 | m4/report | 报表页 | M4ReportApiIntegrationTest | 已实现（M4-M16-01；权重口径待确认） |
