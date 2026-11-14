@@ -27,6 +27,7 @@ import StaffTrainingView from '../modules/m4/views/StaffTrainingView.vue'
 import MaterialCatalogView from '../modules/m4/views/MaterialCatalogView.vue'
 import MaterialStockView from '../modules/m4/views/MaterialStockView.vue'
 import MaterialTraceView from '../modules/m4/views/MaterialTraceView.vue'
+import ReportView from '../modules/m4/views/ReportView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -240,6 +241,12 @@ export const routes: RouteRecordRaw[] = [
         name: 'm4-materials-trace',
         component: MaterialTraceView,
         meta: menuMeta('/m4/materials/trace'),
+      },
+      {
+        path: 'm4/reports',
+        name: 'm4-reports',
+        component: ReportView,
+        meta: menuMeta('/m4/reports'),
       },
       {
         path: 'm0/sessions',

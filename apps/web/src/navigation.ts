@@ -123,6 +123,12 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m4:material:read'],
   },
   {
+    path: '/m4/reports',
+    title: '工作量报表',
+    icon: 'sessions',
+    permissions: ['m4:report:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',
