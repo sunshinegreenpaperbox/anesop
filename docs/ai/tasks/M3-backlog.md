@@ -22,7 +22,7 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 | M3-M8-01 | 采集接入平台端（网关→平台体征、质量标记、幂等） | `services/device-gateway/**`、`db/migration/V14*`、`apps/api/modules/m2/**`、契约 device.yaml/anesthesia | S0-09 | Review（2026-11-14，独立评审 blocking B-1/S-1…S-6 已修复，待复审 + 全量 verify） |
 | M3-M2-02 | 术中预警规则与抢救记录 | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，契约 0.7.0 + V15/V16；独立评审 B-1～B-4 与 S-1～S-6 已修复：ingest 领域事件实时触发、水位增量、DRAFT 不评估、间歇指标 gap、规则待确认/历史版本、抢救 leader/rescuers、审计 alertId；待复审 + 全量 verify） |
 | M3-M2-03 | 锁单/修订/CA 签名（签名模拟） | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，复审修复：契约 0.8.1（confirmChecklist 必填/原因码收缩/effective 端点/409 示例）、快照含抢救+人员并按时间稳定排序、V17 链守卫与抢救冻结、effective 投影、失败审计/管理员标注、回滚文档；待全量 verify 后再复审） |
-| M3-M10-01 | 复苏记录与转出（Aldrete、交接） | m2 契约/模块、前端 | M3-M2-01 | Blocked |
+| M3-M10-01 | 复苏记录与转出（Aldrete、交接） | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，契约 0.9.0 + V18；PACU 入室/Aldrete 服务端计算与 append-only/转出阈值 409/SBAR 交接；复审修复：前端去默认值、服务端 latest/时效口径、Aldrete 1995 校准、契约 400、文档 Q 登记；待复审 + 全量 verify） |
 | M3-M11-01 | 术后随访与镇痛（24/48h、PCA、并发症） | m2 契约/模块、前端 | M3-M10-01 | Blocked |
 | M3-QA-01 | 临床记录专项测试 + E2E-02/03 | `apps/web/e2e/**`、各 `src/test/**` | M3-M2-03、M3-M8-01 | Blocked |
 
@@ -72,8 +72,26 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
   失败冲突写 result=0 审计；`GET /effective` 只读投影，原行不可变。
 - 测试：单测（快照/锁单/抢救冻结）+ 集成 7 用例（真跑嵌入式 PG16，含并发修订/触发器直插/
   抢救入快照/effective/审计/权限）+ 前端 Vitest 3 用例 + E2E-03。
-### M3-M10-01 复苏记录与转出
-- PACU 记录、Aldrete 评分、转出条件、交接记录（SBAR）、与排程/病房衔接。
+### M3-M10-01 复苏记录与转出（2026-11-14 落地；复审修复 B-1/S-1…S-6 完成，待复审 + 全量 verify）
+- 契约 anesthesia 0.9.0（additive，7 operation / 11 schema）：`POST /pacu-records` 入室
+  （生命体征/意识/疼痛/恶心/气道）、`GET /pacu-records?recordId=`、`GET /pacu-records/{id}`、
+  `GET/POST /pacu-records/{id}/assessments`（Aldrete 五项 0–2，服务端算总分，append-only
+  时间序列）、`GET/POST /pacu-records/{id}/discharge`（去向 + SBAR + 达标确认；未达阈值 409）。
+- V18：`m2_anes.pacu_record`（一条记录单最多一条未转出，部分唯一索引；状态
+  ADMITTED/MONITORING/READY/DISCHARGED）、`pacu_assessment`（五项 0–2、总分 0–10 且=五项
+  之和；append-only）、`pacu_discharge`（pacu_id 唯一；SBAR/达标快照 jsonb；append-only）；
+  权限 `m2:pacu:read|write`（授 SYS_ADMIN/SYS_ANESTHESIOLOGIST/SYS_NURSE_ANESTHETIST）；
+  触发器：转出后禁评估、复苏记录身份/入室信息不可改、DISCHARGED 终态（READY 回落待确认）、
+  转出时间写一次。
+- 服务层：入室时间窗（≥ 记录 startedAt、≤ now+容差）、记录单未开始 409、重复未转出 409；
+  Aldrete 越界/缺项 400、总分服务端计算、状态 READY/MONITORING 推进（可回落）；转出前置
+  （ALDRETE_ASSESSED/ITEMS_COMPLETE/THRESHOLD_MET）未满足 409 details 逐项、确认缺失 400、
+  已转出再评估/重复转出 409；DataScope 复用记录可见性（403/404/422）；审计
+  PACU_ADMIT/PACU_ASSESS/PACU_DISCHARGE（无 PHI、无 SBAR 原文）。
+- 测试：`AldreteCalculatorTest`（4）+ `PacuServiceImplTest`（29）+ `PacuRecoveryApiIntegrationTest`
+  （5，真实嵌入式 PG16，含 append-only 55000/审计/权限/结构）+ `PacuView.spec.ts`（5）。
+- 待确认：Aldrete 转出阈值（默认 9）、意识/气道/去向枚举、未处理严重告警是否阻断转出、
+  PACU 护士独立角色与权限（§15.9 Q-1…Q-6）。
 ### M3-M11-01 术后随访与镇痛
 - 24/48h 随访单、镇痛方式（PCA 参数）、并发症/不良事件、患者反馈（脱敏）。
 ### M3-QA-01 临床记录专项测试
