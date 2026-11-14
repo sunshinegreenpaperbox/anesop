@@ -9,7 +9,7 @@
 
 | ID | 任务 | 写域 | 依赖 | 状态 |
 |---|---|---|---|---|
-| M5-M18-01 | 实时态势与 KPI 看板（术间/台次/告警/资源、SSE 或轮询） | dashboard.yaml（新域）、m5 模块、V26、前端 | M4 | Ready |
+| M5-M18-01 | 实时态势与 KPI 看板（术间/台次/告警/资源、SSE 或轮询） | dashboard.yaml（新域）、m5 模块、V26、前端 | M4 | Review |
 | M5-M18-02 | 风险与资源大屏（风险分层、利用率、告警聚合、大屏布局） | m5 模块、前端 | M5-M18-01 | Blocked |
 | M5-M19-01 | 集成联调模拟器与契约测试（HIS/药房/SPD/设备 + Pact/契约测试） | `services/simulators/**`（新建）、apps/api adapter、契约测试 | M4 | Ready |
 | M5-M19-02 | 安全加固（CSP/速率限制/依赖扫描/权限复核/审计覆盖） | apps/api 安全配置、deploy/nginx、CI 脚本 | M4 | Ready |
@@ -51,3 +51,8 @@
 - 前端可选 ECharts（allowlist 内）但需审批；优先原生/Element Plus 降低风险。
 - 临床/运营口径未确认标【待确认】并记 ADR。
 - 只用 SYNTHETIC；导出/看板不得含 PHI。
+- 执行结果（2026-11-15）：契约 `dashboard.yaml 0.1.0`（口径 dashboard-1.0.0，2 端点）、
+  V26 data-only（`m5:dashboard:read` 授 SYS_ADMIN/SYS_OR_MANAGER/SYS_ANESTHESIOLOGIST/
+  SYS_QC_MANAGER）、m5-api/impl（4 只读端口 + 装配层适配器）、`/m5/dashboard` 页面（10s 轮询 +
+  暂停刷新 + 空/错误/权限态）、ADR-0023；刷新采用 **10s 轮询**（无 SSE：只读聚合 + 无新依赖）。
+  待确认 Q-1–Q-4（准点实际开始来源、利用率口径、停用术间语义、SELF 范围/开放范围）见 ADR-0023。
