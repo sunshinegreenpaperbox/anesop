@@ -95,6 +95,30 @@ public final class M4Permissions {
     /** Spring Security 授权表达式中的报表导出权限：{@code PERM_m4:report:export}。 */
     public static final String AUTHORITY_REPORT_EXPORT = "PERM_" + REPORT_EXPORT;
 
+    /** 质控指标/不良事件/病历抽查只读（V25；按科室或全院数据范围裁剪）。 */
+    public static final String QC_READ = "m4:qc:read";
+
+    /** 质控登记与提交（不良事件登记、RCA 提交、病历抽查、整改提交；V25）。 */
+    public static final String QC_WRITE = "m4:qc:write";
+
+    /** 质控复核与闭环（RCA 复核/闭环、整改闭环；V25；须独立复核人）。 */
+    public static final String QC_REVIEW = "m4:qc:review";
+
+    /** 质控上报导出（V25；导出另写审计 QC_EXPORT，不含 PHI）。 */
+    public static final String QC_EXPORT = "m4:qc:export";
+
+    /** Spring Security 授权表达式中的质控只读权限：{@code PERM_m4:qc:read}。 */
+    public static final String AUTHORITY_QC_READ = "PERM_" + QC_READ;
+
+    /** Spring Security 授权表达式中的质控登记权限：{@code PERM_m4:qc:write}。 */
+    public static final String AUTHORITY_QC_WRITE = "PERM_" + QC_WRITE;
+
+    /** Spring Security 授权表达式中的质控复核权限：{@code PERM_m4:qc:review}。 */
+    public static final String AUTHORITY_QC_REVIEW = "PERM_" + QC_REVIEW;
+
+    /** Spring Security 授权表达式中的质控导出权限：{@code PERM_m4:qc:export}。 */
+    public static final String AUTHORITY_QC_EXPORT = "PERM_" + QC_EXPORT;
+
     private M4Permissions() {
     }
 }
