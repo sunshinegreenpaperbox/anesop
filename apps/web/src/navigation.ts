@@ -129,6 +129,24 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m4:report:read'],
   },
   {
+    path: '/m4/qc/indicators',
+    title: '质控指标',
+    icon: 'sessions',
+    permissions: ['m4:qc:read'],
+  },
+  {
+    path: '/m4/qc/adverse-events',
+    title: '不良事件',
+    icon: 'lock',
+    permissions: ['m4:qc:read'],
+  },
+  {
+    path: '/m4/qc/chart-reviews',
+    title: '病历抽查',
+    icon: 'sessions',
+    permissions: ['m4:qc:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',

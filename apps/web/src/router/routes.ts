@@ -28,6 +28,9 @@ import MaterialCatalogView from '../modules/m4/views/MaterialCatalogView.vue'
 import MaterialStockView from '../modules/m4/views/MaterialStockView.vue'
 import MaterialTraceView from '../modules/m4/views/MaterialTraceView.vue'
 import ReportView from '../modules/m4/views/ReportView.vue'
+import QcIndicatorView from '../modules/m4/views/QcIndicatorView.vue'
+import AdverseEventView from '../modules/m4/views/AdverseEventView.vue'
+import ChartReviewView from '../modules/m4/views/ChartReviewView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -247,6 +250,24 @@ export const routes: RouteRecordRaw[] = [
         name: 'm4-reports',
         component: ReportView,
         meta: menuMeta('/m4/reports'),
+      },
+      {
+        path: 'm4/qc/indicators',
+        name: 'm4-qc-indicators',
+        component: QcIndicatorView,
+        meta: menuMeta('/m4/qc/indicators'),
+      },
+      {
+        path: 'm4/qc/adverse-events',
+        name: 'm4-qc-adverse-events',
+        component: AdverseEventView,
+        meta: menuMeta('/m4/qc/adverse-events'),
+      },
+      {
+        path: 'm4/qc/chart-reviews',
+        name: 'm4-qc-chart-reviews',
+        component: ChartReviewView,
+        meta: menuMeta('/m4/qc/chart-reviews'),
       },
       {
         path: 'm0/sessions',
