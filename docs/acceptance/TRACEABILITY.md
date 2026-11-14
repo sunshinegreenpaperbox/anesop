@@ -6,9 +6,9 @@
 |---|---|---|---|---|---|---|
 | 排程冲突检测 | 2.4.1 | scheduling.yaml | m1/scheduling | 排程工作台 | SchedulingConflictTest | 待验 |
 | 术前访视与评分 | 2.4.2 | anesthesia.yaml | m2/preop | 访视单 | PreopScoreTest | 待验 |
-| 麻醉记录时间轴 | 2.4.2 | anesthesia.yaml | m2/intraop | 记录单 | TimelineTest | 待验 |
-| 采集断网补传 | 3.6 | device.yaml | gateway | — | GatewayBufferTest | 待验 |
-| 锁单与修订 | 2.4.2 | anesthesia.yaml | m2/record | 记录单 | LockRevisionTest | 待验 |
+| 麻醉记录时间轴 | 2.4.2 | anesthesia.yaml | m2/intraop | 记录单 | AnesthesiaRecordApiIntegrationTest / ClinicalRecordAcceptanceTest | 已实现（M3-M2-01/M3-QA-01，append-only+并发 seq） |
+| 采集断网补传 | 3.6 | device.yaml | gateway + m2/acquisition | — | DeviceAcquisitionApiIntegrationTest / ClinicalRecordAcceptanceTest / m2-device-ingest.spec.ts（E2E-02） | 已实现（M3-M8-01/M3-QA-01；E2E 为 UI+契约层，真实幂等以集成测试为准） |
+| 锁单与修订 | 2.4.2 | anesthesia.yaml | m2/record | 记录单 | RecordLockRevisionApiIntegrationTest / ClinicalRecordAcceptanceTest / m2-record-lock.spec.ts（E2E-03） | 已实现（M3-M2-03/M3-QA-01；CA 占位 EXT-05） |
 | 麻精双人核对 | 2.4.6 / 3.4.2 | drug.yaml（M5 建） | m5 | 药品台账 | NarcoticDoubleCheckTest | 待验 |
 | 权限与数据范围 | 3.9.2 | auth.yaml | m0/auth | 菜单/按钮 | PermissionTest | 待验（S0-07） |
 | 质控指标计算 | 2.4.8 | quality.yaml（M7 建） | m7 | 质控看板 | QcIndicatorTest | 待验 |
@@ -32,3 +32,7 @@
 | 术中预警与抢救记录 | 2.4.3 | anesthesia.yaml 0.7.0 | m2/alert+rescue | 记录单告警面板 | AlertRescueApiIntegrationTest | 已实现（M3-M2-02；阈值待临床确认 ADR-0017） |
 | 复苏记录与转出（Aldrete） | 2.4.3 | anesthesia.yaml 0.9.0 | m2/pacu | PACU 页面 | PacuRecoveryApiIntegrationTest | 已实现（M3-M10-01；阈值待确认） |
 | 术后随访与镇痛（PCA） | 2.4.3 | anesthesia.yaml 0.10.0 | m2/followup | 随访页 | FollowupPainApiIntegrationTest | 已实现（M3-M11-01；PHI 脱敏已评审修复） |
+| E2E-01 排程冲突 | 2.4.1 | scheduling.yaml | m1/scheduling | 排程工作台 | m1-schedule-conflict.spec.ts | 已实现（M2-M2-01，API 拦截） |
+| E2E-02 采集断网补传 | 3.6 | device.yaml | gateway + m2/acquisition | 记录单体征 | m2-device-ingest.spec.ts + DeviceAcquisitionApiIntegrationTest + ClinicalRecordAcceptanceTest | 已实现（M3-QA-01，2026-11-14） |
+| E2E-03 记录锁单修订 | 2.4.2 | anesthesia.yaml 0.8.1 | m2/record | 记录单 | m2-record-lock.spec.ts + RecordLockRevisionApiIntegrationTest | 已实现（M3-M2-03/M3-QA-01） |
+| 临床记录专项（发布准入） | AGENTS.md | anesthesia.yaml + device.yaml | m2/record + m2/acquisition | 记录单/PACU | ClinicalRecordAcceptanceTest（时间轴/补传/并发/签名锁定）+ 专项矩阵 docs/testing §9 | 已实现（M3-QA-01，2026-11-14；失败即阻断发布） |

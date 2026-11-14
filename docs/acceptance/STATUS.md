@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M2 达成（2026-11-14）**；M3 进行中（已完成 6/7：仅剩临床专项 M3-QA-01）
-- 当前 Round：25（2026-11-14，M3 随访镇痛）
-- 最近提交：`feat(m2)` M3-M11-01 随访与镇痛（转正）
-- 已完成任务：**S0 12/12；M2 9/9；M3 6/7**
-- 进行中：M3-QA-01 临床记录专项 + E2E-02（下一步）
+- 当前里程碑：**M2 达成（2026-11-14）**；M3 达成（7/7，M3-QA-01 转 Review 待全量 verify）
+- 当前 Round：26（2026-11-14，M3-QA-01 临床专项 + E2E-02）
+- 最近提交：`feat(m2)` M3-M11-01 随访与镇痛（转正）；本轮未提交（M3-QA-01 待验收）
+- 已完成任务：**S0 12/12；M2 9/9；M3 7/7（M3-QA-01 Review）**
+- 进行中：M3-QA-01 临床记录专项 + E2E-02（已实现并通过全量 verify，待独立复审）
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M3-QA-01 临床专项（时间轴/断网 E2E-02/并发/签名锁定回归）→ M3 收口（tag m3、交接单）
+- 下一步：M3 收口（独立复审 M3-QA-01 → tag m3、交接单）→ M4
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
@@ -27,6 +27,18 @@
   前端 32 用例覆盖率 88.3/80.21、Playwright 3/3、契约 lint/breaking/drift、规则检查。
 - `scripts/ci-local.sh --fast` → PASS（9m13s）。
 - 覆盖率（2026-11-13）：m0-impl LINE 96.34%/BRANCH 87.52%、gateway 91.68%/77.39%，ratchet 已清零，核心域 80/70 门禁真实生效；devDeps 漏洞例外清零（vitest 4.1.12 + glob/minimatch override）。
+
+## M3-QA-01 临床记录专项（2026-11-14）
+
+| 准入项 | 证据 |
+|---|---|
+| 时间轴一致性 | `ClinicalRecordAcceptanceTest#timelineIngestReplayAndConcurrentMutationsStayConsistent`（seq 1..3、occurredAt 非降序、UPDATE/DELETE 55000） |
+| 断网补传幂等 | 同 batchKey 重放 `acceptedRows=0/duplicateBatch=true`、行数 2 不变、`quality_flags=hr:RANGE` 保留；新 batchKey 补至 3；`DeviceAcquisitionApiIntegrationTest` 双层判重 |
+| 并发修改 | 并发事件 seq {2,3} 均落库；同 version 并发 PUT 恰 200/409，version +1；并发修订 revisionNo {1,2} |
+| 签名锁定 | 锁后事件/用药/出入量/PUT 409、数据库直写 55000；lock hash 64hex 稳定；修订 2 `previousSignatureHash` = 修订 1 hash |
+| E2E-02 | `m2-device-ingest.spec.ts` 2 条：重放不重复 + 记录页 2→3 条、无权限 403；`pnpm e2e` 34/34 |
+| 文档 | `docs/testing/README.md` §9 发布准入矩阵；`TRACEABILITY.md` 4 行 |
+| 门禁实跑 | `mvn -f apps/api/pom.xml clean verify` BUILD SUCCESS（803 用例，8m04s）；前端 111 单测 + build + lint + `pnpm e2e` 34/34；`./scripts/check.sh` OK（11m09s，含契约/规则） |
 
 ## 近期提交
 

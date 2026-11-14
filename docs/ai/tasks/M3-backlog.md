@@ -24,7 +24,7 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 | M3-M2-03 | 锁单/修订/CA 签名（签名模拟） | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，复审修复：契约 0.8.1（confirmChecklist 必填/原因码收缩/effective 端点/409 示例）、快照含抢救+人员并按时间稳定排序、V17 链守卫与抢救冻结、effective 投影、失败审计/管理员标注、回滚文档；待全量 verify 后再复审） |
 | M3-M10-01 | 复苏记录与转出（Aldrete、交接） | m2 契约/模块、前端 | M3-M2-01 | Review（2026-11-14，契约 0.9.0 + V18；PACU 入室/Aldrete 服务端计算与 append-only/转出阈值 409/SBAR 交接；复审修复：前端去默认值、服务端 latest/时效口径、Aldrete 1995 校准、契约 400、文档 Q 登记；待复审 + 全量 verify） |
 | M3-M11-01 | 术后随访与镇痛（24/48h、PCA、并发症） | m2 契约/模块、前端 | M3-M10-01 | Review（2026-11-14，契约 0.10.0 + V19；随访前置/时间单调/评分边界/镇痛参数/append-only/权限范围/审计脱敏；独立评审 B-1 与 S-1～S-5 已修复：分隔/+86 手机号与 18/15 位含 X 身份证脱敏、drug 脱敏、422/409 契约口径、旧 `/follow-ups` deprecated、V19 patient_id 一致性守卫、TRUNCATE CASCADE/独立 PhiMaskerTest；待复审 + 全量 verify） |
-| M3-QA-01 | 临床记录专项测试 + E2E-02/03 | `apps/web/e2e/**`、各 `src/test/**` | M3-M2-03、M3-M8-01 | Blocked |
+| M3-QA-01 | 临床记录专项测试 + E2E-02/03 | `apps/web/e2e/**`、各 `src/test/**` | M3-M2-03、M3-M8-01 | Review（2026-11-14：`ClinicalRecordAcceptanceTest` 2 条 + E2E-02 `m2-device-ingest.spec.ts` 2 条 + §9 发布准入矩阵；待全量 verify/复审） |
 
 ## 任务卡要点
 
@@ -142,4 +142,4 @@ M3-QA-01 临床记录专项测试（时间轴/断网/并发/签名锁定）与 E
 | T-2 | 共享令牌 token→gateway 绑定 / 单网关密钥 | 生产前（M3-M8-01 S-5 登记；见 `docs/gateway/README.md` §11.2、`docs/modules/m2/README.md` §12.1） |
 | T-3 | 麻精药品服务端判定（`narcotic` 不再由客户端声明） | 药品字典 I-07 落地后由 M5 承接（Q-8） |
 | T-4 | 临床角色按本台次读取体征（`vitalSigns` 映射口径） | M3-QA/M4 权限细化（Q-9） |
-| T-5 | E2E-02 断网补传端到端用例 | M3-QA-01 |
+| T-5 | E2E-02 断网补传端到端用例 | M3-QA-01（已交付 UI+契约层；真实全栈仍待 `scripts/e2e-full.sh`） |

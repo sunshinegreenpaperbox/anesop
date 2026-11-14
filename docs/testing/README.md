@@ -9,10 +9,10 @@
 
 | 层 | 技术 | 目标占比 | 当前落点 |
 |---|---|---|---|
-| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 140（m0-impl）+ 61（gateway）个用例、前端 32 个用例 |
+| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端全 reactor **803** 个用例（含集成）、前端 **111** 个用例 |
 | 集成 | Spring Boot Test + 嵌入式 PostgreSQL 16（Zonky）/ Testcontainers | ≈20% | 迁移、MyBatis、认证越权、审计、网关幂等与断网补传 |
 | 契约 | spectral + oasdiff（Java DTO 反序列化用例） | — | `apps/api/api-contracts/src/test` |
-| E2E | Playwright（Chromium） | 关键路径 | 13 条（首页冒烟 3 + 登录/越权 6 + M1 申请 4）；E2E-01–05 见 §6 |
+| E2E | Playwright（Chromium） | 关键路径 | **34 条**（首页 3 + 登录/越权 6 + M1 11 + M2 14）；E2E-01–05 见 §6，临床专项矩阵见 §9 |
 
 比例是目标而非硬门禁；骨架期没有业务域，集成/E2E 占比会随后续里程碑上升。
 
@@ -105,18 +105,18 @@ pnpm e2e
 - 阈值：行 ≥70%、分支 ≥55%；排除 `src/api/generated/**`、`src/env.d.ts`、`src/main.ts`、
   `src/**/__tests__/**`
 - 用例：`apps/web/src/__tests__/{App,router,HomeView}.spec.ts`
-- 实测：4/4 通过，行/分支/函数/语句均 100%
+- 实测：**111/111 通过**（22 个测试文件，2026-11-14），行 85.24%、分支 78.63%
 - 断言可失败：标题、文案、路由 path/name 均为精确值；不使用恒真断言
 
 ## 6. E2E 清单与落地计划
 
-| ID | 场景 | 依赖 | 落地里程碑 | 计划 |
-|---|---|---|---|---|
-| E2E-01 | 排程冲突 | M1 排程 API、登录、合成台次 | M1 | 新建台次 → 制造时间/术间冲突 → 断言 409 与冲突提示 → 调整后成功；复用登录 fixture |
-| E2E-02 | 采集断网补传 | S0-09 网关、M2 记录页 | M2 | 启动模拟设备 → 断网 5 分钟 → 恢复 → 断言数据补齐且不重复；网关侧已有集成测试，E2E 补 UI 可见性 |
-| E2E-03 | 记录锁单修订 | M2 术中记录、锁单/修订 | M2 | 开始记录 → 锁单 → 发起修订 → 断言版本号递增、原记录不可改、审计留痕 |
-| E2E-04 | 权限越权 | M0 登录/RBAC、受保护页面 | M1 | 低权限账号直接访问受限路由/接口 → 断言 403 与审计；页面不显示无权菜单 |
-| E2E-05 | 麻精药品双人核对 | M5 麻精五专、双人核对 | M5 | 双人登录 → 核对/签字 → 断言未双人不可发药、留痕完整 |
+| ID | 场景 | 依赖 | 落地里程碑 | 现状 | 计划 |
+|---|---|---|---|---|---|
+| E2E-01 | 排程冲突 | M1 排程 API、登录、合成台次 | M1 | **已实现**（`m1-schedule-conflict.spec.ts`，API 拦截） | 新建台次 → 冲突 409 提示 → 改术间成功 |
+| E2E-02 | 采集断网补传 | S0-09 网关、平台 ingest、M2 记录页 | M2 | **已实现**（`m2-device-ingest.spec.ts`，UI+契约拦截；真实 HTTP+PG 见 §9） | 同一 batchKey 重放不重复 → 新 batchKey 补齐可见 → 无权限 403 |
+| E2E-03 | 记录锁单修订 | M2 术中记录、锁单/修订 | M2 | **已实现**（`m2-record-lock.spec.ts`，API 拦截） | 锁单 → 编辑被拒 → 修订版本递增、原值不变 |
+| E2E-04 | 权限越权 | M0 登录/RBAC、受保护页面 | M1 | **已实现（UI 级）**（`auth.spec.ts`） | 低权限路由 → 403；真实 API 403 由集成测试覆盖 |
+| E2E-05 | 麻精药品双人核对 | M5 麻精五专、双人核对 | M5 | **待实现**（依赖 M5；记录单内麻精核对已由 `AnesthesiaRecordApiIntegrationTest` 与 `m2-record.spec.ts` 覆盖数据入口） | 双人登录 → 核对/签字 → 未双人不可发药、留痕完整 |
 
 当前已落地：
 
@@ -133,12 +133,21 @@ pnpm e2e
   2. 状态筛选：选择“已受理”后查询串携带 `status=ACCEPTED` 并渲染筛选结果；
   3. 详情：点击详情进入 `/m1/applications/:id`，展示申请与 create→SUBMITTED 状态历史；
   4. 只读权限：`m1:application:read` 用户不显示导入/取消按钮（写权限按钮隐藏）。
-- `pnpm e2e` 3 次重跑稳定（13/13，无 flaky）。
+- `apps/web/e2e/m1-schedule-conflict.spec.ts` **E2E-01** 2 条（M2-M2-01）：冲突 409 → 提示 → 改术间成功；只读权限不显示操作按钮。
+- `apps/web/e2e/m2-record-lock.spec.ts` **E2E-03** 1 条（M3-M2-03）：锁单前置 → 锁单 → 编辑被拒 → 带原因修订 → 新版本可见且原版本不变。
+- `apps/web/e2e/m2-device-ingest.spec.ts` **E2E-02** 2 条（M3-QA-01）：
+  1. 登记设备 → 无网关令牌 401 → 断网缓冲 2 帧上传 → 同 batchKey 重放 `duplicateBatch=true` 且
+     `acceptedRows=0` → 记录页体征 2 条（非 4 条）→ 新 batchKey 补 1 帧 → 3 条（非 6 条）；
+  2. 无 `m2:device:read` 用户设备查询 403、记录页被路由守卫拦到 `/403`，不渲染患者上下文。
+- `pnpm e2e` 实测 **34/34 通过**（2026-11-14，Chromium，无 flaky）。
 
-> **E2E-04 口径说明**：当前为 **UI 级越权（路由守卫 + 菜单权限过滤）+ `/api/v1/auth/*` 合成响应拦截**，
-> 没有真实后端参与，因此**不得宣称已覆盖真实越权 API**。真实后端全栈越权
-> （403 + 审计留痕 + 数据范围）由 M2-M1-01/M2-M2-01 的 `scripts/e2e-full.sh` 承接
-> （登录真实账号 → 直连受限 API → 断言 403 与 `sys_audit_log`），脚本落地前本表保持此声明。
+> **E2E-02/E2E-04 口径说明**：当前为 **UI 级（路由守卫 + 菜单权限过滤）+ 平台 API 契约拦截**，
+> Playwright 不启动 Spring Boot/PG，因此**不得宣称 E2E 已覆盖真实 ingest 幂等或真实越权 API**。
+> 真实 HTTP + PostgreSQL 的补传幂等、质量标记、409/55000、403 与审计由 §9 的集成测试承接：
+> `DeviceAcquisitionApiIntegrationTest`、`ClinicalRecordAcceptanceTest`。真实全栈 E2E
+> （启动 API + 嵌入式 PG）仍由后续 `scripts/e2e-full.sh` 承接，脚本落地前本表保持此声明。
+> 记录页体征条数依赖 M3-M8-01 的 `vitalSigns` 映射（T-4 登记，M4 权限细化时收口）；当前 E2E
+> 只验证“平台数据不重复 → 记录页条数正确”的 UI 契约，不宣称真实映射已上线。
 E2E-01–05 每条落地时必须在 PR 附带失败截图/trace，并接入 CI 的 e2e job。
 
 ## 7. Testcontainers 基座（Docker 不可用 EXT-08）
@@ -205,7 +214,41 @@ E2E-01–05 每条落地时必须在 PR 附带失败截图/trace，并接入 CI 
   `TcpDeviceServerTest`、`SimulatedDeviceTest` 的真实 socket/调度边界保留显式条件等待，
   超时统一加大并注释（E2E 180s/120s/60s，回环 socket 10s，模拟设备 join 10s）。
 
-## 9. CI 对应关系（S0-04 落地）
+## 9. 临床记录专项（发布准入矩阵，M3-QA-01）
+
+依据 `AGENTS.md`「临床记录专项（时间轴、断网采集、并发修改、签名锁定）为发布准入项，任一不通过
+不得发布」。专项不只跑 E2E：**真实 HTTP + 嵌入式 PostgreSQL 16** 的聚合用例为
+`apps/api/api-bootstrap/src/test/java/com/anesop/api/ClinicalRecordAcceptanceTest.java`，
+它把四类准入不变量收敛为两条跨域流程，失败即阻断发布。
+
+| 准入项 | 关键断言（可失败） | 真实 API+PG 用例 | E2E / 说明 |
+|---|---|---|---|
+| 时间轴一致性 | `seq` 连续 1..N、`occurredAt` 非降序、事件/记录单 UPDATE/DELETE 55000 | `ClinicalRecordAcceptanceTest#timelineIngestReplayAndConcurrentMutationsStayConsistent`；边界枚举见 `AnesthesiaRecordApiIntegrationTest#recordTimelineDrugsFluidsAndAuditFollowClinicalRules` | `m2-record.spec.ts`（UI 追加事件/排序） |
+| 断网采集补传幂等 | 同 `batchKey` 重放 `acceptedRows=0`/`duplicateBatch=true`、行数不变、`quality_flags` 保留；新 batchKey 补齐 | `ClinicalRecordAcceptanceTest#timelineIngestReplayAndConcurrentMutationsStayConsistent`；行级/批次双层判重见 `DeviceAcquisitionApiIntegrationTest#ingestIsIdempotentAcrossBatchAndRowKeys` | `m2-device-ingest.spec.ts` **E2E-02**（UI 可见性 + 403） |
+| 并发修改 | 并发事件 `seq` 不重不丢；同 version 并发 PUT 恰一个 200、一个 409；并发修订 `revision_no` 连续 | `ClinicalRecordAcceptanceTest`（并发事件/并发 PUT/并发修订）；`AnesthesiaRecordApiIntegrationTest#concurrentEventAppendsSerializeSequenceUnderRowLock`；`RecordLockRevisionApiIntegrationTest#concurrentRevisionsSerializeRevisionNumbersUnderRowLock` | — |
+| 签名锁定 | 锁后事件/用药/出入量/PUT 409，数据库直写 55000；锁单摘要 64 位 hex 且稳定；修订链 `previousSignatureHash` 逐版衔接 | `ClinicalRecordAcceptanceTest#lockFreezesWritesAndConcurrentRevisionsKeepSignatureChain`；快照/差异/伪造链见 `RecordLockRevisionApiIntegrationTest` | `m2-record-lock.spec.ts` **E2E-03**（UI 锁单/修订） |
+
+运行与阻断：
+
+```bash
+source scripts/env.sh
+# 专项聚合（真实嵌入式 PG，约 33s）
+./scripts/mvn.sh -B -pl apps/api/api-bootstrap -am \
+  -Dtest=ClinicalRecordAcceptanceTest -Dsurefire.failIfNoSpecifiedTests=false test
+# 全量后端门禁（含专项与既有边界用例）
+./scripts/mvn.sh -B -f apps/api/pom.xml clean verify
+# E2E（含 E2E-01/02/03/04）
+pnpm e2e
+```
+
+- 四类准入项任一失败（含 flaky）→ **阻断发布**，按 P0/P1 缺陷分级处理；不得 `@Disabled` 或放宽断言。
+- `scripts/ci-local.sh --job e2e-smoke` 已包含 `pnpm e2e`（E2E-02 随之纳入本地门禁），无需改脚本；
+  `--fast` 按设计跳过 e2e-smoke，发布前必须单独跑 `pnpm e2e`。
+- E2E-02 为 UI+契约层（见 §6 口径说明）；真实 ingest 幂等以集成测试为准，二者同时通过才算准入。
+- E2E-05（麻精双人核对）依赖 M5，尚未实现；记录单内麻精核对入口已由集成测试与 `m2-record.spec.ts`
+  覆盖，但**不能替代** M5 双人核对准入。
+
+## 10. CI 对应关系（S0-04 落地）
 
 | 本地步骤 | CI job（实际名） | 产物/缓存 |
 |---|---|---|
@@ -224,8 +267,11 @@ E2E-01–05 每条落地时必须在 PR 附带失败截图/trace，并接入 CI 
 CI 建议把后端、前端、E2E 拆 job 并行（本地 `check.sh` 仍串行全量），总时长目标 ≤10 分钟；
 覆盖率报告作为 artifact 上传，JaCoCo 门禁失败即阻断合并。
 
-## 10. 变更记录
+## 11. 变更记录
 
+- 2026-11-14（M3-QA-01）：新增 `ClinicalRecordAcceptanceTest`（时间轴/补传幂等/并发 PUT/签名锁定
+  聚合，2 条）；新增 **E2E-02** `m2-device-ingest.spec.ts`（2 条）；新增 §9 临床记录专项发布准入矩阵；
+  E2E 总数 34；`pnpm e2e` 34/34、专项 2/2 通过。
 - 2026-11-13（gateway flaky 修复）：`VitalUploader` 支持注入时钟；重写
   `VitalUploaderRetryTest` 去除真实时间窗依赖；E2E/回环 socket 用例加大条件等待余量；
   新增 §8.1 禁止依赖真实时间窗约定与 §8.2 根因记录。
