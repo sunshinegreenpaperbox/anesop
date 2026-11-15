@@ -1,11 +1,11 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M1–M7 达成；M8 迭代完成（P1 主要遗留收口）**；自动施工结束，待人工验收
-- 当前 Round：41（2026-11-15，M8 收口）
-- 最近提交：`test(web)` E2E-05 + FINAL-REPORT 终稿
-- 已完成任务：**M1–M7；M8 迭代（M0 补全/耗材预警/报表锁定/E2E-05）完成**
+- 当前里程碑：**M1–M7 达成；M8/M9 迭代完成（P1 遗留收口）**；自动施工结束，待人工验收
+- 当前 Round：42（2026-11-16，M9 收口）
+- 最近提交：`feat(m2)` M9-01 消息投递/体征映射/抢救麻精 + FINAL-REPORT 终稿
+- 已完成任务：**M1–M7；M8（M0 补全/耗材预警/报表锁定/E2E-05）；M9（消息投递/体征映射/抢救麻精）完成**
 - 进行中：**自动施工结束**；待人工验收与 EXT 解除（生产上线/真实联调/口径签字）
-- 阻塞：上线前阻断——nginx `/api` 路径、实时演练、EXT-08 镜像扫描；GitHub 远端未建，CI/CODEOWNERS 未实跑
+- 阻塞：上线前阻断——实时演练（需预发环境）、EXT-08 镜像扫描；nginx `/api` 路径已修复并加回归；GitHub 远端未建，CI/CODEOWNERS 未实跑
 - 下一步：按 `docs/acceptance/FINAL-REPORT.md` §7 与 `docs/deploy/GO-LIVE-CHECKLIST.md` 执行人工验收
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
