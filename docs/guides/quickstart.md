@@ -14,6 +14,9 @@
 | 20–25 min | 只跑前端 / 只跑后端，确认开发方式 | 2 min |
 | 25–30 min | 阅读演示入口，按需准备 PG | — |
 
+> 跨平台（Linux/macOS/Windows-WSL2）工具链差异与协作约定见
+> [`docs/guides/cross-platform.md`](cross-platform.md)。
+
 ## 1. 前置条件
 
 | 依赖 | 要求 | 说明 |
