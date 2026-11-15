@@ -5,6 +5,23 @@
 > 上线闸门：生产发布须 `release.yml` 变更单审批 + 院方信息科人工签字（AGENTS「上线闸门」），
 > 自动化施工不执行生产部署，也不替代签字。
 
+## 0. M6 上线准备文档索引
+
+| 文档 | 用途 |
+|---|---|
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | 上线部署手册：环境前置、配置项、本地构建/tar 打包（无 Docker）、发布步骤、验证 |
+| [`ROLLBACK.md`](ROLLBACK.md) | 应用/数据库回滚、10 分钟目标、回滚后验证 |
+| [`GO-LIVE-CHECKLIST.md`](GO-LIVE-CHECKLIST.md) | Go/No-Go 可勾选清单（功能/权限/审计/PHI/性能/备份/监控/时钟/证书/演练/培训） |
+| [`DATA-INIT.md`](DATA-INIT.md) | 生产基线与演示数据初始化、组织/首个管理员导入 |
+| [`backup-restore.md`](backup-restore.md) | 备份策略、PITR、对象存储恢复、季度演练 |
+| [`DRILL-RECORD-TEMPLATE.md`](DRILL-RECORD-TEMPLATE.md) | 演练记录模板（记录归档在 [`drills/`](drills/README.md)） |
+| [`../training/README.md`](../training/README.md) | 管理员/医师/护士/质控/大屏培训与速查卡 |
+| [`../runbook/README.md`](../runbook/README.md) | 应急预案、故障处置、联系人/升级路径 |
+
+> 本文件仍是 Compose 拓扑与运维细节的权威说明；`DEPLOYMENT.md` 负责把"发布当天怎么执行"
+> 串起来，两者冲突时以本文件的拓扑/端口/卷为准并回改 `DEPLOYMENT.md`。
+
+
 ## 1. 组成与目录
 
 | 路径 | 内容 |
@@ -63,6 +80,8 @@
 | `ANESOP_FIELD_KEY` | 是 | Base64，解码后恰好 32 字节；`openssl rand -base64 32` | 手机号 AES-256-GCM 字段密钥 |
 | `ANESOP_PHONE_PEPPER` | 是 | Base64，解码后 ≥32 字节；`openssl rand -base64 48` | 手机号 HMAC pepper，与字段密钥分离 |
 | `ANESOP_INPATIENT_PEPPER` | 是 | Base64，解码后 ≥32 字节；`openssl rand -base64 48` | M1 住院号 HMAC pepper；缺失/非法 Base64/<32 字节拒绝启动，丢失将无法匹配历史住院号哈希 |
+| `ANESOP_FIELD_KEY_ID` | 是 | `v1`，轮换递增 | 字段密钥版本标识，写入 `sys_user.phone_key_id`；与 `ANESOP_FIELD_KEY` 配套 |
+| `ANESOP_M2_ACQUISITION_GATEWAY_TOKEN` | 采集必填 | Base64；`openssl rand -base64 32` | 采集网关内部令牌，与用户 JWT 分离；未配置时 ingest 一律 401（fail-closed） |
 | `SPRING_PROFILES_ACTIVE` | 是 | `prod` | 生产 profile；禁止 `dev`/`test` |
 | `SPRING_FLYWAY_LOCATIONS` | 是 | `filesystem:/opt/anesop/db/migration` | 生产只加载迁移，不含演示种子 |
 
@@ -187,7 +206,7 @@ $C down                     # 移除容器与网络，保留命名卷
 5. 观察 30 分钟（错误率、P95、队列深度），保留旧镜像与旧 env 备份；
 6. 通过后再清理旧镜像（保留最近 2 个发布版本）。
 
-回滚（目标 ≤10 分钟，§3.8.4）：
+回滚（目标 ≤10 分钟，§3.8.4；完整决策树/验证/时间盒见 [`ROLLBACK.md`](ROLLBACK.md)）：
 
 ```bash
 # 应用回滚：把 tag 指回上一发布版本，重建对应容器
@@ -277,6 +296,8 @@ docker inspect --format='{{index .RepoDigests 0}}' postgres:16.4
 | 备份与恢复演练 | 待签字 | 演练记录 | |
 
 > 以上任一项未完成，不得进入生产发布；生产发布仍须 `release.yml` 与院方书面确认。
+> M6 逐项可勾选清单见 [`GO-LIVE-CHECKLIST.md`](GO-LIVE-CHECKLIST.md)，本地构建/tar 打包见
+> [`DEPLOYMENT.md`](DEPLOYMENT.md) §4。
 
 ## 13. 已知安全发现（Semgrep，2026-11-12）
 

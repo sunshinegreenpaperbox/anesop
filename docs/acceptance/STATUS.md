@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M2/M3/M4 达成**；M5 进行中（5/5 完成，待收口 tag m5）
-- 当前 Round：37（2026-11-15，M5 收口）
-- 最近提交：`test(m5)` M5-QA-01 性能/并发/稳定性专项
-- 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6；M5 5/5**
-- 进行中：M6 上线准备（部署清单/数据初始化/培训/演练）
-- 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M6 上线准备 → M7 验收与 FINAL-REPORT
+- 当前里程碑：**M2/M3/M4/M5 达成**；M6 上线准备完成（6/6，2026-11-15）
+- 当前 Round：38（2026-11-15，M6 上线准备）
+- 最近提交：`docs(docs)` M5 达成收口（tag m5）；M6 变更本轮未提交
+- 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6；M5 5/5；M6 6/6**
+- 进行中：—（M6 完成，待人工上线签字与实时演练；M7 验收准备）
+- 阻塞：上线前阻断——nginx `/api` 路径、实时演练、EXT-08 镜像扫描；GitHub 远端未建，CI/CODEOWNERS 未实跑
+- 下一步：M7 验收与 FINAL-REPORT（实时演练/镜像扫描/nginx 路径为上线前阻断项）
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
@@ -70,6 +70,19 @@
 | 门禁实跑 | 后端 `./scripts/mvn.sh -B -f apps/api/pom.xml clean verify` **BUILD SUCCESS（1172 用例，14m24s；api-bootstrap 296 含专项 15）**；前端 `pnpm test:unit` 179/179、`pnpm build`/`pnpm lint`/`vue-tsc`/`pnpm e2e` 45/45；`security-check.sh` 21/21、`contract-check.sh`/`check-rules.sh` 通过（未重复跑全量 `check.sh`，单项已分别实跑） |
 | 遗留 | EXT-05 密钥托管、EXT-08 Docker/Trivy 与镜像内 jar CVE、EXT-01…04 真实外部接口、E2E-05（依赖 M5 双人核对页面）、本机基线需 CI/压测环境复核 |
 
+## M6 试点上线准备（E-M20，2026-11-15）
+
+| 任务 | 结论 | 证据 |
+|---|---|---|
+| M6-M20-01 部署清单与手册 | 完成：环境前置/配置项/本地构建+tar 打包（Docker 不可用）/发布步骤/验证；回滚 ≤10 分钟手册 | `docs/deploy/DEPLOYMENT.md`、`ROLLBACK.md`、`README.md` §0；compose env 补密钥 |
+| M6-M20-02 数据初始化 | 完成：`init-data.sh` prod/demo 模式、`--dry-run`、基线核对、`demo_* = 0` 闸门 | `scripts/init-data.sh`、`docs/deploy/DATA-INIT.md`；`--dry-run` PASS |
+| M6-M20-03 培训材料 | 完成：管理员/麻醉医师/护士/质控/大屏 5 份 + 速查卡 + 课程/考核 | `docs/training/`（7 文件） |
+| M6-M20-04 应急预案 | 完成：DB/应用/采集/CA/网络分区/疑似泄露 6 类六段式；故障速查/联系人/升级 | `docs/runbook/`（4 文件） |
+| M6-M20-05 检查清单与演练 | 完成：A–M Go/No-Go 清单；健康/备份恢复/断网补传脚本（`--help`/`--dry-run`） | `docs/deploy/GO-LIVE-CHECKLIST.md`、`scripts/drill-*.sh`、`docs/deploy/drills/` |
+| M6-QA-01 自检 | 完成：compose-check 35 PASS；链接 97/0；后端 `verify` **BUILD SUCCESS（1172 用例，0 failure/0 error）** | `M6-backlog.md`；`./scripts/mvn.sh -B -f apps/api/pom.xml verify` exit 0 |
+| 实时演练 | 环境受限：应用回滚/PITR/补传/健康实时项未执行 | 需预发/演练环境，按 `DRILL-RECORD-TEMPLATE.md` 签字 |
+| 上线前阻断 | **nginx `/api/` 前缀与后端 `/v1` 不一致（静态分析 404 风险）**；EXT-08 镜像扫描；实时演练 | 修复/验证后关闭；见 `ACCEPTANCE.md` §I |
+
 ## 近期提交
 
 | 提交 | 任务 | 说明 |
@@ -86,13 +99,14 @@
 | 7f72bf0 | S0-08 | 前端登录/布局/权限菜单/401 刷新 |
 | bad4204 | S0-04 | 10 项 CI 流水线 + ci-local 本地等价 |
 | （本提交） | S0-12 | README/guides/seed-demo/dev-check/链接校验 |
-| （本轮，未提交） | M4-QA-01 | `M4AcceptanceTest` 8 条 + E2E 2 条 + 管理域专项矩阵与文档 |
-| （本轮，未提交） | M5-QA-01 | `PerformanceBenchmarkTest` 9 + `ConcurrencyRegressionTest` 4 + `DashboardPollingStabilityTest` 2 + OWASP 逐项 + 发布准入矩阵 + `performance-smoke.sh` |
+| （历史，未提交） | M4-QA-01 | `M4AcceptanceTest` 8 条 + E2E 2 条 + 管理域专项矩阵与文档 |
+| （历史，未提交） | M5-QA-01 | `PerformanceBenchmarkTest` 9 + `ConcurrencyRegressionTest` 4 + `DashboardPollingStabilityTest` 2 + OWASP 逐项 + 发布准入矩阵 + `performance-smoke.sh` |
+| （本轮，未提交） | M6-M20 | 部署/回滚/数据初始化/培训/应急预案/演练脚本/Go-Live 清单 |
 
-## 下一里程碑 M2（2027-01-29）任务候选
+## 下一里程碑 M7（验收）任务候选
 
-1. E-M1 手术申请接收与校验：patient/scheduling 契约实现 + HIS 适配器（模拟）+ 列表/详情页。
-2. E-M2 排程工作台与冲突检测：术间/台次/优先级/资质规则、冲突算法 + 单测、甘特/看板。
-3. E-M4 术前访视与评估：访视单、ASA/气道、RCRI/Apfel/STOP-BANG、麻醉计划。
-4. M1 前必须清理：覆盖率 ratchet、devDeps 漏洞例外、data_scope 绑定表、phone 写路径、
-   E2E-01/04 登录与越权用例、springdoc 全量 drift。
+1. 上线前收口：修复并实测 nginx `/api` 路径；预发环境跑应用回滚、PITR、断网补传、健康检查实时演练；
+   具备 Docker 的宿主机补镜像 digest/Trivy 与 `docker compose config`。
+2. 验收：按 `docs/acceptance/ACCEPTANCE.md` 逐项给出 A/B/I 结论，更新 `TRACEABILITY.md`；
+3. 收口：生成 `FINAL-REPORT.md`、移交文档（部署/运维/用户/培训/演练），遗留项登记责任人与期限；
+4. 闸门：生产发布/真实数据迁移仍须 `release.yml` + 院方人工签字，自动化不执行。

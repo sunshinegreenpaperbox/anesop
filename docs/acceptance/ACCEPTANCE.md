@@ -28,7 +28,7 @@
 | E2E | 登录、排程冲突、采集断网补传、锁单修订、权限越权、麻精双人核对 | **部分通过**：E2E-01/02/03/04 + 登录/权限/管理域共 **45 条**通过（2026-11-15，`pnpm e2e`）；E2E-05 麻精药品双人核对的“双人登录→核对→签字”页面流程仍为遗留（记录单内麻精核对入口已由 `AnesthesiaRecordApiIntegrationTest` 与 `m2-record.spec.ts` 覆盖） | `apps/web/e2e/**`（21 个 spec）、`docs/testing/README.md` §6 |
 | 性能 | 排程页 1000 条 <2s、报表 <10s（本地基准） | **通过（本机基线，2026-11-15）**：申请列表 5000 台次 page=1&size=100 中位 **52ms**；报表 workload 5000 台次/366 天 **180ms**；质控指标 **126ms**；时间轴 300 事件 **46ms**；锁单 **38ms**；看板 realtime **9ms**；登录 **123ms**；SQL 聚合 **68ms**（9 项上限 2000–5000ms，全部中位数 ≤ 上限的 4%）。并发 4 组、看板 20 并发轮询 **216ms**（<2s）。见 `docs/testing/README.md` §15 |
 | 安全 | 依赖漏洞无 HIGH/CRITICAL；密钥不入库；审计可用 | **通过（本地可执行项）**：`pnpm audit --prod` 0 HIGH/CRITICAL；`security-check.sh` 21 项（密钥占位/默认与 prod fail-closed/日志无 PHI）；安全头与限流专项 12 例；扫描摘要见 `docs/security/README.md`。镜像 Trivy 与 Maven jar CVE 为 EXT-08 |
-| 部署 | `docker compose config` 校验通过；一键起文档完整（Docker 不可用时标环境受限） | |
+| 部署 | `docker compose config` 校验通过；一键起文档完整（Docker 不可用时标环境受限） | **静态通过（2026-11-15，EXT-08）**：`bash scripts/compose-check.sh` 35 PASS/0 FAIL/1 SKIP（Docker 运行时）；上线手册/回滚/检查清单/数据初始化/培训/应急预案齐备（见 §I）；`docker compose config` 与实跑待具备 Docker 的宿主机补 |
 | 集成联调 | 模拟器启动/停止、HIS/药房/SPD 字段映射契约测试、错误/超时/重试/降级、冒烟脚本可重复运行 | 环境受限（EXT-01/02/03/04）：模拟器可联调，真实接口待接入 |
 
 ## C. 演示脚本（合成数据）
@@ -102,3 +102,26 @@
 
 > 结论：性能与安全专项“通过（本地可执行项）”；上述遗留不构成代码验收阻断，
 > 但真实接口/镜像扫描/容量复核必须在生产发布前按 EXT 逐项解除。
+
+## I. 试点上线准备（M6 / E-M20）
+
+> 依据：`docs/ai/tasks/M6-backlog.md`、`docs/deploy/`、`docs/training/`、`docs/runbook/`。
+> 全部为文档/脚本与静态校验；**生产部署与真实数据迁移不在自动验收范围**（上线/数据闸门需人工签字）。
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 部署清单与手册 | 通过：两种形态、环境前置、配置项/secrets 来源、本地构建+tar 打包（无 Docker）、发布步骤、验证 | `docs/deploy/DEPLOYMENT.md`、`docs/deploy/README.md`、`deploy/compose/*` |
+| 回滚 | 通过（文档+时间盒）：应用 ≤10 分钟、数据库 expand-contract/PITR、回滚后验证 | `docs/deploy/ROLLBACK.md` |
+| 数据初始化 | 通过（干跑）：生产 `db/migration` 与演示 `db/seed/demo` 隔离；prod 闸门/基线核对；demo 委托 seed-demo | `scripts/init-data.sh`、`docs/deploy/DATA-INIT.md`；`--dry-run` PASS |
+| 培训材料 | 通过（材料齐备）：管理员/麻醉医师/护士/质控/大屏 + 速查卡，含截图占位与常见错误 | `docs/training/README.md` 及 5 份角色材料、`quick-reference.md` |
+| 应急预案 | 通过（材料齐备）：6 类场景六段式；故障速查；联系人/升级路径（占位） | `docs/runbook/EMERGENCY-PLAYBOOK.md`、`FAULT-PLAYBOOK.md`、`CONTACTS.md` |
+| 上线检查清单 | 通过（可勾选）：A–M，关联 §A/§B/§I 与 STATUS；阻断项明确 | `docs/deploy/GO-LIVE-CHECKLIST.md` |
+| 演练脚本 | 通过（脚本可用/干跑）：健康检查、备份恢复、断网补传；`--help`/`--dry-run` 正常 | `scripts/drill-health.sh`、`drill-backup-restore.sh`、`drill-offline-replay.sh`；`docs/deploy/drills/2026-11-15-local-static.md` |
+| 实时演练 | 环境受限：应用回滚/PITR/补传/健康实时项未在本机执行 | 需预发/演练环境；按 `DRILL-RECORD-TEMPLATE.md` 记录签字 |
+| Docker/镜像 | 环境受限（EXT-08）：镜像 build/scan、Compose 实跑未执行 | 解除条件见 `docs/deploy/README.md` §9、`docs/security/README.md` §8 |
+| nginx `/api` 前缀 | **待修复/实测**：nginx 保留 `/api` 前缀，后端映射为 `/v1`（无 context-path），静态分析有 404 风险 | 上线前二选一：`proxy_pass http://anesop_api/;` 或后端 `context-path=/api`；`nginx -t` + 真实登录验证 |
+
+> 本地门禁：`./scripts/mvn.sh -B -f apps/api/pom.xml verify` **BUILD SUCCESS（1172 用例，0 failure/0 error，2026-11-15）**；
+> `bash scripts/compose-check.sh` 35 PASS；`init-data.sh --dry-run` 与三演练脚本 dry-run/`--help` 通过。
+> 结论：M6“试点上线准备”文档/脚本**通过（本地可执行项）**；实时演练、镜像扫描、nginx 路径
+> 实测为上线前阻断项，未关闭不得发布。上线与数据闸门仍须 `release.yml` + 院方书面签字。

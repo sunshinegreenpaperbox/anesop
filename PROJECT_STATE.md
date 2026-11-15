@@ -1,6 +1,6 @@
 # PROJECT_STATE — ANESOP 施工状态
 
-> 跨会话唯一状态文件。**每个会话开始先读，结束必须更新。** 最后更新：2026-11-15（**M5 达成**；进入 M6 上线准备）
+> 跨会话唯一状态文件。**每个会话开始先读，结束必须更新。** 最后更新：2026-11-15（**M6 上线准备完成**；进入 M7 验收）
 > 事实源：`docs/plan/手术麻醉信息系统_施工前方案书_V0.9.docx`（V0.9 讨论稿，未冻结）
 
 ## 1. 当前阶段
@@ -8,9 +8,9 @@
 | 项 | 状态 |
 |---|---|
 | 方案书 | **V1.0 基线已冻结（2026-11-12）**，见 `docs/plan/BASELINE.md` |
-| 施工 | **M5 达成（2026-11-15）**；S0 12/12、M2 9/9、M3 7/7、M4 6/6、M5 5/5；进入 M6 |
-| 目标里程碑 | ~~M1–M5 均达成（2026-11-12…15）~~；M6 上线准备：2027-06-07；验收：2027-07-02 |
-| 当前焦点 | M6 上线准备（部署清单/数据初始化/培训/应急预案/演练）→ M7 验收/FINAL-REPORT |
+| 施工 | **M6 上线准备完成（2026-11-15）**；S0 12/12、M2 9/9、M3 7/7、M4 6/6、M5 5/5、M6 6/6；进入 M7 |
+| 目标里程碑 | ~~M1–M6 均达成（2026-11-12…15）~~；M6 上线准备完成；验收：2027-07-02 |
+| 当前焦点 | M7 验收/FINAL-REPORT；上线前阻断：实时演练、镜像扫描（EXT-08）、nginx `/api` 路径 |
 | 自动化规则 | `AUTONOMY.md`：不提问、默认决策、阻塞挂号、最终一次性验收 |
 | 环境 | JDK 21（`.toolchain/jdk21`）、Maven 本地仓库 `.m2repo`、Node 26/pnpm 11；**Docker 不可用**（EXT-08） |
 
@@ -53,6 +53,21 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 采集网关 POC（断网补传幂等）；前端登录/布局/权限菜单/401 刷新；JaCoCo/Vitest/Playwright
 测试基座；10 项 CI + 本地等价脚本；README/guides/一键起。ADR-0001…0010。
 
+## 4.1 M6 试点上线准备（E-M20，2026-11-15）
+
+| 任务 | 产出 |
+|---|---|
+| M6-M20-01 部署清单与手册 | `docs/deploy/DEPLOYMENT.md`（环境/配置/本地构建+tar/发布/验证）、`ROLLBACK.md`（≤10 分钟）、`README.md` §0 索引；compose 补 `ANESOP_FIELD_KEY/PHONE_PEPPER/INPATIENT_PEPPER/网关令牌` |
+| M6-M20-02 数据初始化 | `scripts/init-data.sh`（prod/demo、`--dry-run`、基线核对、`demo_* = 0`）、`docs/deploy/DATA-INIT.md` |
+| M6-M20-03 培训材料 | `docs/training/`：管理员/麻醉医师/护士/质控/大屏 + 速查卡（截图占位/常见错误） |
+| M6-M20-04 应急预案 | `docs/runbook/`：6 类场景六段式、故障速查、联系人/升级路径 |
+| M6-M20-05 清单与演练 | `docs/deploy/GO-LIVE-CHECKLIST.md`、`DRILL-RECORD-TEMPLATE.md`、`scripts/drill-health.sh`/`drill-backup-restore.sh`/`drill-offline-replay.sh` |
+| 验证 | `compose-check` 35 PASS；`init-data.sh --dry-run` PASS；三演练脚本 `--help`/`--dry-run` PASS；后端 verify 见 `STATUS.md` |
+
+**上线前阻断/遗留**：实时演练（回滚/PITR/补传/健康）待预发环境；EXT-08 镜像 build/scan 与
+`docker compose config` 未实跑；**nginx `/api/` 保留前缀而后端映射 `/v1`（无 context-path），
+静态分析有 404 风险，需修复并实测**；生产发布/数据迁移仍须人工签字。
+
 ## 5. 进行中 / 阻塞
 
 | 项 | 状态 | 需要谁 |
@@ -67,20 +82,19 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 | ~~施工暂停（第三次）~~ | 2026-11-13 已恢复；M2-M5-01 验证通过 | — |
 | ~~devDependencies 漏洞例外~~ | 已清理（vitest 4.1.12 + glob/minimatch override，audit 0 high） | — |
 | 真实 HIS/EMR/设备/CA 联调（EXT-01/02/04/05） | 适配器 + 模拟实现，待院方环境 | 信息科牵头 |
+| 上线前实时演练（回滚/PITR/补传/健康） | 脚本/模板就绪，本机无 PG/Docker 未实跑 | 发布负责人 + DBA |
+| nginx `/api/` 路径 | 保留 `/api` 前缀，后端为 `/v1`，上线前须修复并实测 | 部署/后端 |
 | 多院区 site_id、审计分区、phone 写路径 | M1/M2 评估或实施 | 架构师 |
 
 ## 6. 下一步（暂停恢复点）
 
-0. ~~恢复点：验证 M2-M0-01 WIP~~ **已完成（2026-11-13）**：`check.sh` 全绿、独立 review PASS、
-   122 测试、contract-check 通过，WIP 已转正式提交。
-0. 下一步：M4-QA-01 管理域专项（权限矩阵/导出脱敏/五专对账/UDI 追溯/报表手算）→ tag m4
-   → M5 驾驶舱与联调。任务卡见 `docs/ai/tasks/M4-backlog.md`。
-2. M2 关键路径：E-M1 申请接收（patient/scheduling 契约实现 + HIS 模拟适配器 + 列表/详情页）
-   → E-M2 排程工作台与冲突检测（规则引擎 + 冲突算法 + 甘特/看板 + E2E-01）
-   → E-M4 术前访视与评估（访视单/ASA/气道/RCRI/Apfel/STOP-BANG/麻醉计划）。
-3. 每个里程碑结束更新 `docs/acceptance/STATUS.md` 与交接单；M7 结束生成 `FINAL-REPORT.md`
-   等人工验收。
-4. 新会话启动：读本文件 + `docs/ai/handoffs/` 最新交接单 + `docs/ai/tasks/BACKLOG.md`。
+0. M6 已完成（2026-11-15）；任务卡与证据见 `docs/ai/tasks/M6-backlog.md`。
+1. 上线前收口：修复/实测 nginx `/api` 路径；预发环境跑应用回滚/PITR/补传/健康实时演练；
+   具备 Docker 的宿主机补镜像 digest/Trivy 与 `docker compose config`。
+2. M7 验收：按 `docs/acceptance/ACCEPTANCE.md` 逐项结论（A/B/I）、更新 TRACEABILITY、
+   生成 `FINAL-REPORT.md`，移交文档；生产发布/数据迁移仍须人工签字。
+3. 每个里程碑结束更新 `docs/acceptance/STATUS.md` 与交接单；
+   新会话启动：读本文件 + `docs/ai/handoffs/` 最新交接单 + `docs/ai/tasks/BACKLOG.md`。
 
 ## 7. 会话记录
 
@@ -105,6 +119,7 @@ V1–V4 迁移（M0 平台、认证令牌、采集明细）+ 演示种子隔离�
 | 2026-11-14 | M4 第三批 | M4-M14-01 耗材/UDI/SPD（追溯链、批次效期、EXT-03 模拟） | M4 收口时汇总 |
 | 2026-11-15 | M4 第四批 | M4-M16-01 工作量/多维报表/导出（口径/防注入/DataScope） | M4 收口时汇总 |
 | 2026-11-15 | M4 第五批 | M4-M17-01 质控/RCA/病历质量（指标版本/状态机/导出脱敏） | M4 收口时汇总 |
+| 2026-11-15 | M6 上线准备 | 部署/回滚/数据初始化/培训/应急预案/演练脚本/检查清单；M6 6/6 | 本文件 §4.1、`docs/ai/tasks/M6-backlog.md` |
 
 ## 8. 更新规则
 

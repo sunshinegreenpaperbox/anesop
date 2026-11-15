@@ -209,6 +209,14 @@ services:
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASSWORD}
       ANESOP_JWT_SECRET: ${ANESOP_JWT_SECRET}
+      # 数据加密与哈希密钥（M6 补全）：均按 prod fail-closed，缺失/占位/低熵拒绝启动。
+      # 由院方密钥托管注入 .env，禁止入库；生成方式见 docs/deploy/DEPLOYMENT.md §3。
+      ANESOP_FIELD_KEY: ${ANESOP_FIELD_KEY}
+      ANESOP_FIELD_KEY_ID: ${ANESOP_FIELD_KEY_ID:-v1}
+      ANESOP_PHONE_PEPPER: ${ANESOP_PHONE_PEPPER}
+      ANESOP_INPATIENT_PEPPER: ${ANESOP_INPATIENT_PEPPER}
+      # 采集网关内部令牌（与用户 JWT 分离）：未配置时 ingest 一律 401（fail-closed）。
+      ANESOP_M2_ACQUISITION_GATEWAY_TOKEN: ${ANESOP_M2_ACQUISITION_GATEWAY_TOKEN:-}
       TZ: ${TZ}
     expose:
       - "8080"
