@@ -197,6 +197,11 @@ DEMO_ADMIN_NEW_PASSWORD='Anesop@2026#Demo' \
 bash scripts/seed-demo-data.sh
 ```
 
+> **口令状态注意**：`seed-demo-data.sh` 运行时若 `demo_admin` 处于首次登录（`mustChangePassword=true`），
+> 会自动把口令改为 `DEMO_ADMIN_NEW_PASSWORD`（默认 `Anesop@2026#Demo`），并同步处理 `demo_self`；
+> 因此**跑过该脚本后**不能再使用初始口令 `Anesop@2026`，请用新口令登录。若需恢复初始口令，
+> 删除 `.cache/demo-pg/data` 后用 `bash scripts/demo-local.sh start` 重建演示库并重新灌数即可。
+
 脚本先 `curl /actuator/health`，再以 `demo_admin` 登录；若 `mustChangePassword=true` 自动改密
 并重新登录（旧/新口令可用环境变量覆盖）。`demo_self` 仅用于消息中心未读校验，同样支持
 `DEMO_SELF_PASSWORD` / `DEMO_SELF_NEW_PASSWORD`。数量可用 `SEED_HIS_IMPORT_COUNT`、
