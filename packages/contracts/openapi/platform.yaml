@@ -1,0 +1,1150 @@
+openapi: 3.1.0
+info:
+  title: ANESOP 公共支撑契约（platform）
+  summary: 字典查询与维护、站内消息中心、文件上传下载（存储适配器）三类 M0 公共能力
+  description: |
+    ANESOP 公共支撑契约（第 12 域），收口 FINAL-REPORT §6.2「M0 字典 API/消息中心/文件管理」
+    遗留；对应方案书 §2.4.1（M0 公共支撑：字典、消息通知、文件与附件）、§3.9.2（RBAC 与权限
+    点三段式 `<模块>:<资源>:<动作>`）、§3.9.3（敏感字段与 PHI 禁令）、§2.4.10（文件/影像
+    存储边界）。契约版本 **0.2.0**（首个版本 0.1.0；0.2.0 增补「我的文件」分页查询、
+    文件名服务端生成口径与业务对象数据范围校验，均为 additive）。
+
+    硬规则：
+    1) **字典全院读、管理仅管理员**：`GET /v1/dicts`、`GET /v1/dicts/{type}` 需要权限点
+       `m0:dict:read`（V27 授予全部 6 个平台角色）；写操作（新增/更新/停用字典项）需要
+       `m0:dict:write`（V27 **仅**授予 `SYS_ADMIN`），服务层再校验 `SYS_ADMIN` 角色做纵深防御。
+       字典是全院共享的**参考数据**（性别、ASA 分级、手术紧急度等），不按数据范围裁剪；
+       但字典中**禁止写入患者标识**（姓名/住院号/证件号/手机号），字典项 remark 只放口径说明。
+    2) **字典项编码不可变**：`code` 是历史记录解释字典语义的稳定标识，创建后不得修改；
+       停用（`DELETE`）为**逻辑停用**（`enabled=false`），不物理删除，保证历史记录按当时版本
+       可解释（V1 `uk_sys_dict_item_type_code` 保证同类型内 `code` 唯一）。
+       维护端可用 `includeDisabled=true` 查看停用项，该参数**仅对持 `m0:dict:write` 者生效**，
+       其他调用方传 true 返回 403（避免普通用户看到已停用语义）。
+    3) **消息仅本人**：`GET /v1/messages`、`POST /v1/messages/{messageId}/read`、
+       `POST /v1/messages/read-all` 需要 `m0:message:read`，服务层强制
+       `recipient_user_id = 当前用户`，不存在/非本人一律 **404**（不暴露他人消息是否存在）。
+       消息由**领域事件/系统广播写入**（内部 `MessagePublisher`，不暴露任意发送的 HTTP 端点），
+       模板编码 + 参数白名单渲染；参数**禁止**患者姓名、住院号、证件号、手机号与临床自由文本，
+       只允许术间号/科室名/时间/计数/任务链接等非 PHI 字段。
+    4) **文件不得存 PHI**：上传类型白名单为 `application/pdf`、`text/csv`、`text/plain`、
+       `image/png`、`image/jpeg`，大小上限 **20 MiB（20971520 字节）**，内容 SHA-256 由服务端
+       计算并按内容寻址落盘（同内容只存一份）。业务类型限定 `TEMPLATE`/`REPORT`/`ATTACHMENT`/
+       `SCHEDULE`/`RECORD`；**禁止**上传临床影像（DICOM/视频）、身份证明（身份证/护照扫描）、
+       含患者标识的表格与截图。病毒扫描为**占位**（`scanStatus=NOT_SCANNED`，真实引擎 EXT-07）。
+       存储适配器：本地文件系统实现（默认目录 `<repo>/.cache/files`，生产挂载盘）；MinIO 适配器
+       仅保留接口占位（**EXT-06**，Docker/MinIO 当前不可用），切换只改配置不改契约。
+    5) **下载鉴权**：`GET /v1/files/{fileId}` 与 `GET /v1/files/{fileId}/meta` 需要
+       `m0:file:read`，并满足可见性：上传者本人；`SYS_ADMIN`；或按业务关联所需的模块只读权限
+       （`SCHEDULE`→`m1:schedule:read`、`RECORD`→`m2:record:read`、`REPORT`→`m4:report:read`）。
+       `TEMPLATE` 对持 `m0:file:read` 者公开；`ATTACHMENT` 仅上传者与 `SYS_ADMIN` 可见。
+       不满足可见性返回 **403**（不区分“不存在”与“不可见”的响应体文案差异）。
+    6) **审计**：字典维护 `DICT_ITEM_CREATE`/`DICT_ITEM_UPDATE`/`DICT_ITEM_DISABLE`、消息已读
+       `MESSAGE_READ`/`MESSAGE_READ_ALL`、文件 `FILE_UPLOAD`/`FILE_DOWNLOAD`；detail 只记录
+       字典类型/编码/业务类型/大小/摘要前 12 位等非 PHI 字段，**不记录**文件内容、患者标识与
+       任何临床自由文本。审计写 `m0_platform.sys_audit_log`（append-only）。
+    7) **错误码**：`AUTH_UNAUTHORIZED`(401)、`AUTH_FORBIDDEN`(403)、`PARAM_INVALID`(400)、
+       `RESOURCE_NOT_FOUND`(404)、`STATE_CONFLICT`(409，字典项编码重复/并发更新)、
+       `BUSINESS_RULE_VIOLATION`(422，文件类型/大小/内容被拒绝)、`RATE_LIMITED`(429)。
+       错误体不暴露堆栈、SQL 实参、真实文件名以外的内容或文件内容片段。
+    所有示例均为 SYNTHETIC 合成数据（无真实患者、人员、文件名与文件内容）。
+  version: 0.2.0
+  contact:
+    name: ANESOP 项目组
+  license:
+    name: 内部交付（非开源）
+servers:
+  - url: https://anesop.local/api
+    description: 院内单院部署统一入口（生产网无互联网出口）
+security:
+  - bearerAuth: []
+tags:
+  - name: 字典
+    description: 字典类型/字典项查询（全院读）与字典项维护（仅管理员、逻辑停用、编码不可变）。
+  - name: 消息中心
+    description: 当前用户站内消息分页、单条已读与全部已读（仅本人可见；由领域事件/系统广播写入）。
+  - name: 文件管理
+    description: 非 PHI 文件上传（类型/大小白名单、SHA-256 内容寻址）、元数据查询与鉴权下载。
+paths:
+  /v1/dicts:
+    get:
+      operationId: listDictTypes
+      tags:
+        - 字典
+      summary: 查询字典类型列表
+      description: |
+        返回全部启用字典类型及其启用项数量，供前端字典下拉与管理页初始化。
+        权限 `m0:dict:read`（V27 授予全部 6 个平台角色）；字典为全院参考数据，不按数据范围裁剪。
+        空数据返回空数组（不返回 404）；`itemCount` 只统计启用项。
+      responses:
+        '200':
+          description: 字典类型列表（按类型编码升序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictTypeList'
+              example:
+                items:
+                  - type: ASA
+                    name: ASA 分级
+                    description: 美国麻醉医师协会体格状态分级 I–VI
+                    itemCount: 6
+                    updatedAt: '2026-11-15T09:00:00+08:00'
+                  - type: SEX
+                    name: 性别
+                    description: 患者/人员性别
+                    itemCount: 3
+                    updatedAt: '2026-11-15T09:00:00+08:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/dicts/{type}:
+    get:
+      operationId: listDictItems
+      tags:
+        - 字典
+      summary: 查询字典项（默认只返回启用项）
+      description: |
+        按字典类型编码查询字典项，按 `sort` 升序、同序号按 `code` 升序。
+
+        - 默认 `includeDisabled=false`：只返回启用项，供业务下拉使用；
+        - `includeDisabled=true`：同时返回停用项，**仅**持 `m0:dict:write` 的管理员可用，
+          其他调用方返回 403（停用语义不对普通用户暴露）；
+        - 类型不存在或已停用返回 404（不区分“不存在”与“已停用”的文案差异）。
+
+        权限 `m0:dict:read`；字典全院可读，不做数据范围过滤。
+      parameters:
+        - $ref: '#/components/parameters/DictType'
+        - name: includeDisabled
+          in: query
+          required: false
+          description: 是否包含停用项（默认 false；true 需要 `m0:dict:write`）。
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: 字典项列表（启用项在前按 sort 排序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictItemList'
+              example:
+                type: ASA
+                name: ASA 分级
+                items:
+                  - itemId: 'd0000000-0000-4000-8000-000000000001'
+                    type: ASA
+                    code: I
+                    name: ASA I 级
+                    sort: 10
+                    enabled: true
+                    remark: 健康患者
+                    updatedAt: '2026-11-15T09:00:00+08:00'
+                  - itemId: 'd0000000-0000-4000-8000-000000000002'
+                    type: ASA
+                    code: II
+                    name: ASA II 级
+                    sort: 20
+                    enabled: true
+                    remark: 轻度系统性疾病
+                    updatedAt: '2026-11-15T09:00:00+08:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/dicts/{type}/items:
+    post:
+      operationId: createDictItem
+      tags:
+        - 字典
+      summary: 新增字典项（仅管理员）
+      description: |
+        权限 `m0:dict:write`（V27 仅授予 `SYS_ADMIN`），服务层再校验 `SYS_ADMIN` 角色。
+        同一字典类型内 `code` 重复返回 409（不改写既有项）；`code` 创建后不可修改
+        （编码是历史记录解释字典语义的稳定标识）。字典项 `remark` 只放口径说明，
+        **禁止**写入患者姓名、住院号、证件号、手机号与临床自由文本。
+      parameters:
+        - $ref: '#/components/parameters/DictType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDictItemRequest'
+            example:
+              code: IV
+              name: ASA IV 级
+              sort: 40
+              enabled: true
+              remark: 重度系统性疾病，持续威胁生命
+      responses:
+        '201':
+          description: 已创建的字典项。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictItem'
+              example:
+                itemId: 'd0000000-0000-4000-8000-000000000004'
+                type: ASA
+                code: IV
+                name: ASA IV 级
+                sort: 40
+                enabled: true
+                remark: 重度系统性疾病，持续威胁生命
+                updatedAt: '2026-11-15T10:00:00+08:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/dicts/{type}/items/{itemId}:
+    put:
+      operationId: updateDictItem
+      tags:
+        - 字典
+      summary: 更新字典项（仅管理员，编码不可改）
+      description: |
+        权限 `m0:dict:write`（仅 `SYS_ADMIN`）。可更新 `name`/`sort`/`enabled`/`remark`，
+        **不可**更新 `code`（请求体不含 code 字段；传了也忽略，避免历史记录语义漂移）。
+        类型不存在、字典项不存在或不属于该类型均返回 404；并发更新以 `updatedAt` 为准返回最新值。
+      parameters:
+        - $ref: '#/components/parameters/DictType'
+        - $ref: '#/components/parameters/DictItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDictItemRequest'
+            example:
+              name: ASA IV 级（修订）
+              sort: 45
+              enabled: true
+              remark: 口径修订（合成示例）
+      responses:
+        '200':
+          description: 更新后的字典项。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DictItem'
+              example:
+                itemId: 'd0000000-0000-4000-8000-000000000004'
+                type: ASA
+                code: IV
+                name: ASA IV 级（修订）
+                sort: 45
+                enabled: true
+                remark: 口径修订（合成示例）
+                updatedAt: '2026-11-15T10:05:00+08:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      operationId: disableDictItem
+      tags:
+        - 字典
+      summary: 停用字典项（逻辑停用，仅管理员）
+      description: |
+        权限 `m0:dict:write`（仅 `SYS_ADMIN`）。**逻辑停用**（`enabled=false`），不物理删除：
+        历史记录仍按当时编码解释语义；重复停用幂等返回 204。类型/字典项不存在返回 404。
+      parameters:
+        - $ref: '#/components/parameters/DictType'
+        - $ref: '#/components/parameters/DictItemId'
+      responses:
+        '204':
+          description: 已停用（幂等，无响应体）。
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/messages:
+    get:
+      operationId: listMessages
+      tags:
+        - 消息中心
+      summary: 查询当前用户消息（分页、可按未读过滤）
+      description: |
+        仅返回 `recipient_user_id = 当前用户` 的消息，按创建时间倒序、同时间按 id 倒序。
+        权限 `m0:message:read`。`unreadOnly=true` 只返回未读；`unreadCount` 始终是当前用户
+        全部未读数（不受 unreadOnly/分页影响），供菜单角标展示。空数据返回空数组与 0。
+
+        消息体只含模板编码与参数白名单字段（术间号/科室名/时间/计数等），**无 PHI**。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: unreadOnly
+          in: query
+          required: false
+          description: 是否只返回未读消息（默认 false）。
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: 当前用户消息分页与未读总数。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagePage'
+              example:
+                items:
+                  - messageId: '9a000000-0000-4000-8000-000000000001'
+                    type: SCHEDULE
+                    templateCode: SCHEDULE_CHANGED
+                    title: 台次时间已调整
+                    params:
+                      roomNo: OR-01
+                      startAt: '2026-11-16T08:30:00+08:00'
+                    read: false
+                    createdAt: '2026-11-15T18:20:00+08:00'
+                    readAt: null
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+                unreadCount: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/messages/{messageId}/read:
+    post:
+      operationId: markMessageRead
+      tags:
+        - 消息中心
+      summary: 标记单条消息已读（幂等）
+      description: |
+        权限 `m0:message:read`；仅本人消息可标记，非本人或不存在统一返回 404（不暴露他人
+        消息是否存在）。已读消息重复标记幂等，返回当前消息与首次 `readAt`。写审计
+        `MESSAGE_READ`（detail 只含消息类型与模板编码，不含参数值）。
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: 标记后的消息（已读）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+              example:
+                messageId: '9a000000-0000-4000-8000-000000000001'
+                type: SCHEDULE
+                templateCode: SCHEDULE_CHANGED
+                title: 台次时间已调整
+                params:
+                  roomNo: OR-01
+                  startAt: '2026-11-16T08:30:00+08:00'
+                read: true
+                createdAt: '2026-11-15T18:20:00+08:00'
+                readAt: '2026-11-15T18:25:00+08:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/messages/read-all:
+    post:
+      operationId: markAllMessagesRead
+      tags:
+        - 消息中心
+      summary: 标记当前用户全部消息已读
+      description: |
+        权限 `m0:message:read`；只更新 `recipient_user_id = 当前用户` 且 `read_at IS NULL`
+        的消息，返回本次更新条数（0 表示本来就没有未读，幂等）。写审计
+        `MESSAGE_READ_ALL`（detail 只含更新条数，不含消息内容）。
+      responses:
+        '200':
+          description: 本次标记已读的条数。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageReadAllResponse'
+              example:
+                updatedCount: 3
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/files:
+    get:
+      operationId: listMyFiles
+      tags:
+        - 文件管理
+      summary: 查询我上传的文件（分页）
+      description: |
+        权限 `m0:file:read`。只返回 `uploader_id = 当前用户` 且 `deleted=false` 的元数据，
+        按上传时间倒序、同时间按 fileId 倒序；不返回文件内容与 `storageKey`，也不支持跨用户枚举。
+        `fileName` 为服务端生成的 `file-<fileId>.<ext>`（不返回客户端原始文件名）。
+        空数据返回空数组与 0。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 当前用户上传的文件分页（无内容、无存储路径）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FilePage'
+              example:
+                items:
+                  - fileId: '8b000000-0000-4000-8000-000000000001'
+                    fileName: file-8b000000-0000-4000-8000-000000000001.csv
+                    contentType: text/csv
+                    sizeBytes: 43
+                    sha256: 1f2e3d4c5b6a798807162534435261708f9e0d1c2b3a49586776859403a2b1c0
+                    businessType: TEMPLATE
+                    businessId: null
+                    uploaderId: 'e0000000-0000-4000-8000-000000000001'
+                    scanStatus: NOT_SCANNED
+                    createdAt: '2026-11-15T18:30:00+08:00'
+                meta:
+                  page: 1
+                  size: 20
+                  total: 1
+                  totalPages: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: uploadFile
+      tags:
+        - 文件管理
+      summary: 上传文件（非 PHI，JSON + Base64）
+      description: |
+        权限 `m0:file:write`。请求体为 JSON + Base64（`contentBase64`）：**不引入 multipart
+        新依赖**，20 MiB 以内由服务端解码校验；更大文件与流式上传留待 MinIO 适配器（EXT-06）。
+
+        校验顺序与错误码（schema 失败 400 / 语义拒绝 422）：
+        1. 请求体 schema：必填字段缺失、`fileName` 长度 1–255 或含路径分隔符/控制字符、
+           `contentType` 不在白名单枚举、`sizeBytes` 不在 1–20971520、`businessId` 不符合
+           UUID/大写业务号模式、`contentBase64` 语法非法或解码后为空 → **400** `PARAM_INVALID`
+           （details.field 固定为字段名）；
+        2. 通过 schema 后：解码后大小 &gt; 20 MiB 或 `sizeBytes` 与实际解码长度不一致 → **422**
+           `BUSINESS_RULE_VIOLATION`（details.field=sizeBytes，文案“文件大小超出上限（20MB）”/
+           “大小与实际内容不一致”）；
+        3. `businessType` 缺失 → 400；未知枚举值由 schema 拒绝 → 400。
+
+        通过后：服务端计算 SHA-256，按内容寻址存储（同内容只落盘一份，元数据每次上传独立），
+        **展示名由服务端生成 `file-<fileId>.<ext>`，客户端原始文件名不落库**；写审计
+        `FILE_UPLOAD`（detail 只含业务类型/大小/摘要前 12 位，**不含 fileName/businessId/文件内容**）。
+        病毒扫描为**占位**（`scanStatus=NOT_SCANNED`，EXT-07），扫描接入前不得上传外部来源文件。
+
+        **PHI 禁令**：禁止上传临床影像（DICOM/术中照片/视频）、身份证明（身份证/护照/驾驶证
+        扫描）、含患者姓名/住院号/证件号/手机号的表格与截图。上传方为 PHI 合规第一责任人；
+        违规内容按安全事件流程处置（AGENTS 患者数据与安全红线）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileUploadRequest'
+            example:
+              fileName: 科室排班模板（合成）.csv
+              contentType: text/csv
+              sizeBytes: 43
+              contentBase64: b3BlcmF0aW5nX3Jvb20sc2hpZnQKUk9NLTAxLERBWQpST00tMDIsTklHSFQK
+              businessType: TEMPLATE
+              businessId: null
+      responses:
+        '201':
+          description: 文件元数据（不含文件内容）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMeta'
+              example:
+                fileId: '8b000000-0000-4000-8000-000000000001'
+                fileName: file-8b000000-0000-4000-8000-000000000001.csv
+                contentType: text/csv
+                sizeBytes: 43
+                sha256: 1f2e3d4c5b6a798807162534435261708f9e0d1c2b3a49586776859403a2b1c0
+                businessType: TEMPLATE
+                businessId: null
+                uploaderId: 'e0000000-0000-4000-8000-000000000001'
+                scanStatus: NOT_SCANNED
+                createdAt: '2026-11-15T18:30:00+08:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/files/{fileId}:
+    get:
+      operationId: downloadFile
+      tags:
+        - 文件管理
+      summary: 下载文件（鉴权 + 内容寻址读取）
+      description: |
+        权限 `m0:file:read`，并满足：上传者本人 / `SYS_ADMIN` / 业务关联所需的模块只读权限
+        （`SCHEDULE`→`m1:schedule:read`、`RECORD`→`m2:record:read`、`REPORT`→`m4:report:read`）；
+        `TEMPLATE` 对持 `m0:file:read` 者公开，`ATTACHMENT` 仅上传者与 `SYS_ADMIN`。
+        在功能权限之外，`SCHEDULE`/`RECORD`/`REPORT` 还要求业务对象落在调用方数据范围内：
+        缺模块只读权限返回 **403**；业务对象不存在/超出数据范围、文件不存在/已删除返回 **404**
+        （不区分“不存在”与“不可见”）。下载写审计 `FILE_DOWNLOAD`，detail 不含 fileName/businessId。
+
+        响应为二进制流，`Content-Disposition: attachment; filename*=UTF-8''<RFC 5987 编码>`；
+        响应中的文件名是服务端生成的 `file-<fileId>.<ext>`（不返回客户端原始文件名），
+        响应头 `X-Content-Sha256` 为内容摘要。`Content-Type` 使用上传时的白名单类型，
+        避免浏览器按内容嗅探执行脚本。
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: 文件二进制内容（防嗅探头 + 摘要头）。
+          headers:
+            Content-Disposition:
+              description: 附件下载头（filename* RFC 5987 编码；已过滤 CR/LF/引号/路径分隔符）。
+              schema:
+                type: string
+            X-Content-Sha256:
+              description: 文件内容 SHA-256（十六进制，64 字符），供下载方校验完整性。
+              schema:
+                type: string
+                pattern: '^[0-9a-f]{64}$'
+            X-Content-Type-Options:
+              description: 固定 nosniff，禁止浏览器按内容嗅探执行。
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/files/{fileId}/meta:
+    get:
+      operationId: getFileMeta
+      tags:
+        - 文件管理
+      summary: 查询文件元数据（不含内容）
+      description: |
+        权限与可见性规则同 `GET /v1/files/{fileId}`（`m0:file:read` + 上传者/业务权限）。
+        不存在/已删除返回 404，可见性不足返回 403。返回体不含文件内容与存储路径
+        （`storageKey` 不出接口，防止绕过鉴权直接读盘）。
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: 文件元数据（无内容、无存储路径）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMeta'
+              example:
+                fileId: '8b000000-0000-4000-8000-000000000001'
+                fileName: file-8b000000-0000-4000-8000-000000000001.csv
+                contentType: text/csv
+                sizeBytes: 43
+                sha256: 1f2e3d4c5b6a798807162534435261708f9e0d1c2b3a49586776859403a2b1c0
+                businessType: TEMPLATE
+                businessId: null
+                uploaderId: 'e0000000-0000-4000-8000-000000000001'
+                scanStatus: NOT_SCANNED
+                createdAt: '2026-11-15T18:30:00+08:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 统一 OAuth2/JWT 访问令牌，放在 Authorization 请求头中（Bearer 方案）。
+  parameters:
+    DictType:
+      name: type
+      in: path
+      required: true
+      description: 字典类型编码（如 `ASA`、`SEX`；大小写敏感的稳定编码）。
+      schema:
+        type: string
+        pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
+    DictItemId:
+      name: itemId
+      in: path
+      required: true
+      description: 字典项标识（UUID）。
+      schema:
+        type: string
+        format: uuid
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      description: 消息标识（UUID；仅本人消息可操作）。
+      schema:
+        type: string
+        format: uuid
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      description: 文件标识（UUID）。
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 页码（从 1 开始；缺省 1）。
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 每页条数（1–100；缺省 20，超出夹紧）。
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  responses:
+    BadRequest:
+      description: |
+        请求参数校验失败（路径/查询参数格式非法、Base64 非法、字段缺失或超长、
+        `contentType` 不在白名单枚举、`sizeBytes` 超出 1–20971520、`businessId` 不符合模式）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PARAM_INVALID
+            message: 请求参数校验失败
+            traceId: SYNTH-TRACE-1001
+            details:
+              - field: contentBase64
+                reason: 内容不是合法的 Base64 编码
+    Unauthorized:
+      description: 未认证或令牌已失效（fail-closed）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_UNAUTHORIZED
+            message: 未认证或令牌已失效
+            traceId: SYNTH-TRACE-1002
+            details: []
+    Forbidden:
+      description: 已认证但缺权限（m0:dict:read|write、m0:message:read、m0:file:read|write）或缺少文件业务类型对应的模块只读权限。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: AUTH_FORBIDDEN
+            message: 无权访问该资源
+            traceId: SYNTH-TRACE-1003
+            details: []
+    NotFound:
+      description: |
+        资源不存在或不可见（字典类型/字典项/消息/文件；非本人消息按 404）。文件不存在/已删除，
+        或附件关联的业务对象不存在/超出调用方数据范围（DEPT/SELF/ROOM/SITE）按 404 处理。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RESOURCE_NOT_FOUND
+            message: 资源不存在或不可见
+            traceId: SYNTH-TRACE-1004
+            details: []
+    Conflict:
+      description: 字典项编码在同一类型内重复，或并发更新冲突。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: STATE_CONFLICT
+            message: 字典项编码已存在或数据已被修改
+            traceId: SYNTH-TRACE-1005
+            details: []
+    UnprocessableEntity:
+      description: 业务规则拒绝（文件解码后超 20 MiB，或声明大小与实际内容不一致）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BUSINESS_RULE_VIOLATION
+            message: 文件类型或大小不符合上传规则
+            traceId: SYNTH-TRACE-1006
+            details:
+              - field: contentType
+                reason: 文件类型不在允许范围（报表/模板/附件：PDF、CSV、TXT、PNG、JPEG）
+  schemas:
+    Error:
+      type: object
+      description: 统一错误响应（与其余 11 份契约一致）。
+      required:
+        - code
+        - message
+        - traceId
+        - details
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，供前端分支与告警规则使用。
+        message:
+          type: string
+          description: 面向用户的中文提示，可安全展示（不含 PHI、SQL 实参与内部堆栈）。
+        traceId:
+          type: string
+          description: 链路追踪标识，与响应头 X-Trace-Id 一致。
+        details:
+          type: array
+          description: 字段级错误明细；无明细时为空数组。
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+    ErrorDetail:
+      type: object
+      description: 字段级错误明细。
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+          description: 出错字段名。
+        reason:
+          type: string
+          description: 中文原因（服务端固定文案，不回显原始入参）。
+    PageMeta:
+      type: object
+      description: 分页元数据（与其余契约一致）。
+      required:
+        - page
+        - size
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          description: 当前页码（从 1 开始）。
+          minimum: 1
+        size:
+          type: integer
+          description: 每页条数。
+          minimum: 1
+        total:
+          type: integer
+          description: 命中总条数。
+          minimum: 0
+        totalPages:
+          type: integer
+          description: 总页数（total=0 时为 0）。
+          minimum: 0
+    DictType:
+      type: object
+      description: 字典类型摘要（全院参考数据，无 PHI）。
+      required:
+        - type
+        - name
+        - itemCount
+      properties:
+        type:
+          type: string
+          description: 字典类型编码（稳定标识，如 ASA/SEX）。
+        name:
+          type: string
+          description: 字典类型中文名称。
+        description:
+          type: [string, 'null']
+          description: 类型说明（口径/来源）；未设置为 null。
+        itemCount:
+          type: integer
+          description: 该类型下启用项数量。
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+          description: 类型最后更新时间（RFC 3339）。
+    DictTypeList:
+      type: object
+      description: 字典类型列表（按类型编码升序；空数据为空数组）。
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: 字典类型数组。
+          items:
+            $ref: '#/components/schemas/DictType'
+    DictItem:
+      type: object
+      description: 字典项（编码不可变；停用不删除，历史记录按当时编码解释）。
+      required:
+        - itemId
+        - type
+        - code
+        - name
+        - sort
+        - enabled
+        - updatedAt
+      properties:
+        itemId:
+          type: string
+          format: uuid
+          description: 字典项标识。
+        type:
+          type: string
+          description: 所属字典类型编码。
+        code:
+          type: string
+          description: 字典项编码（同类型内唯一，创建后不可修改）。
+        name:
+          type: string
+          description: 字典项显示名称（中文）。
+        sort:
+          type: integer
+          description: 同类型内排序号（升序展示）。
+          minimum: 0
+          maximum: 9999
+        enabled:
+          type: boolean
+          description: 是否启用（false=已停用；不物理删除，保证历史可解释）。
+        remark:
+          type: [string, 'null']
+          description: 备注/口径说明（禁止患者标识与临床自由文本）；未设置为 null。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后更新时间（RFC 3339）。
+    DictItemList:
+      type: object
+      description: 某字典类型的字典项列表（按 sort、code 升序）。
+      required:
+        - type
+        - name
+        - items
+      properties:
+        type:
+          type: string
+          description: 字典类型编码。
+        name:
+          type: string
+          description: 字典类型中文名称。
+        items:
+          type: array
+          description: 字典项数组（默认只含启用项；includeDisabled=true 时含停用项）。
+          items:
+            $ref: '#/components/schemas/DictItem'
+    CreateDictItemRequest:
+      type: object
+      description: 新增字典项请求（编码创建后不可修改）。
+      required:
+        - code
+        - name
+        - sort
+      properties:
+        code:
+          type: string
+          description: 字典项编码（同类型内唯一；大写字母/数字/下划线/点/短横线）。
+          pattern: '^[A-Za-z0-9_.-]{1,64}$'
+        name:
+          type: string
+          description: 显示名称（中文，1–100 字符）。
+          minLength: 1
+          maxLength: 100
+        sort:
+          type: integer
+          description: 排序号（0–9999，升序展示）。
+          minimum: 0
+          maximum: 9999
+        enabled:
+          type: boolean
+          description: 是否启用（缺省 true）。
+          default: true
+        remark:
+          type: [string, 'null']
+          description: 备注/口径说明（≤255 字符；禁止患者标识）；未设置为 null。
+          maxLength: 255
+    UpdateDictItemRequest:
+      type: object
+      description: 更新字典项请求（不含 code：编码不可变）。
+      required:
+        - name
+        - sort
+      properties:
+        name:
+          type: string
+          description: 显示名称（中文，1–100 字符）。
+          minLength: 1
+          maxLength: 100
+        sort:
+          type: integer
+          description: 排序号（0–9999）。
+          minimum: 0
+          maximum: 9999
+        enabled:
+          type: boolean
+          description: 是否启用（false=停用）。
+        remark:
+          type: [string, 'null']
+          description: 备注/口径说明（≤255 字符；禁止患者标识）；未设置为 null。
+          maxLength: 255
+    MessageType:
+      type: string
+      description: |
+        消息类型（模板分组）：`SYSTEM`=系统广播/维护通知、`SCHEDULE`=排程变更通知、
+        `ALERT`=预警提醒、`QC`=质控任务提醒、`TASK`=待办任务提醒。
+      enum:
+        - SYSTEM
+        - SCHEDULE
+        - ALERT
+        - QC
+        - TASK
+    Message:
+      type: object
+      description: 站内消息（模板编码 + 参数白名单；无 PHI、无临床自由文本）。
+      required:
+        - messageId
+        - type
+        - templateCode
+        - title
+        - params
+        - read
+        - createdAt
+      properties:
+        messageId:
+          type: string
+          format: uuid
+          description: 消息标识。
+        type:
+          $ref: '#/components/schemas/MessageType'
+        templateCode:
+          type: string
+          description: 模板编码（如 SCHEDULE_CHANGED；前端按编码本地化文案）。
+        title:
+          type: string
+          description: 消息标题（由服务端 MessageTemplates 注册表按模板编码渲染，调用方不可提交任意标题；不含 PHI）。
+        params:
+          type: object
+          description: |
+            模板参数（键值均为字符串，白名单：roomNo/deptName/startAt/endAt/count/url 等；
+            **禁止**患者姓名、住院号、证件号、手机号、诊断与临床自由文本）。
+          additionalProperties:
+            type: string
+        read:
+          type: boolean
+          description: 是否已读。
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间（RFC 3339）。
+        readAt:
+          type: [string, 'null']
+          format: date-time
+          description: 已读时间；未读为 null。
+    MessagePage:
+      type: object
+      description: 当前用户消息分页（unreadCount 恒为全部未读数，不受过滤/分页影响）。
+      required:
+        - items
+        - meta
+        - unreadCount
+      properties:
+        items:
+          type: array
+          description: 消息数组（创建时间倒序）。
+          items:
+            $ref: '#/components/schemas/Message'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+        unreadCount:
+          type: integer
+          description: 当前用户全部未读消息数（菜单角标）。
+          minimum: 0
+    MessageReadAllResponse:
+      type: object
+      description: 全部已读结果。
+      required:
+        - updatedCount
+      properties:
+        updatedCount:
+          type: integer
+          description: 本次标记为已读的消息条数（0 表示本来就没有未读）。
+          minimum: 0
+    FileBusinessType:
+      type: string
+      description: |
+        文件业务类型（决定可见性与审计口径）：`TEMPLATE`=模板（持 m0:file:read 可见）、
+        `REPORT`=报表（需 m4:report:read）、`ATTACHMENT`=附件（仅上传者与 SYS_ADMIN）、
+        `SCHEDULE`=排程附件（需 m1:schedule:read）、`RECORD`=记录附件（需 m2:record:read）。
+      enum:
+        - TEMPLATE
+        - REPORT
+        - ATTACHMENT
+        - SCHEDULE
+        - RECORD
+    FileScanStatus:
+      type: string
+      description: |
+        病毒扫描状态：`NOT_SCANNED`=未扫描（当前占位，真实引擎 EXT-07）、`CLEAN`=无威胁、
+        `INFECTED`=发现威胁（拒绝下载，返回 403）。
+      enum:
+        - NOT_SCANNED
+        - CLEAN
+        - INFECTED
+    FileMeta:
+      type: object
+      description: 文件元数据（不含内容与存储路径；storageKey 不出接口）。
+      required:
+        - fileId
+        - fileName
+        - contentType
+        - sizeBytes
+        - sha256
+        - businessType
+        - uploaderId
+        - scanStatus
+        - createdAt
+      properties:
+        fileId:
+          type: string
+          format: uuid
+          description: 文件标识。
+        fileName:
+          type: string
+          description: 服务端生成的展示名 `file-<fileId>.<ext>`（不返回/不持久化客户端原始文件名）。
+        contentType:
+          type: string
+          description: 内容类型（白名单：application/pdf、text/csv、text/plain、image/png、image/jpeg）。
+          enum:
+            - application/pdf
+            - text/csv
+            - text/plain
+            - image/png
+            - image/jpeg
+        sizeBytes:
+          type: integer
+          description: 文件字节数（1–20971520）。
+          minimum: 1
+          maximum: 20971520
+        sha256:
+          type: string
+          description: 文件内容 SHA-256（十六进制，64 字符）。
+          pattern: '^[0-9a-f]{64}$'
+        businessType:
+          $ref: '#/components/schemas/FileBusinessType'
+        businessId:
+          type: [string, 'null']
+          description: 业务关联标识（UUID 或大写业务号，如台次/记录/报表标识）；无关联为 null。
+        uploaderId:
+          type: string
+          format: uuid
+          description: 上传者用户标识。
+        scanStatus:
+          $ref: '#/components/schemas/FileScanStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: 上传时间（RFC 3339）。
+    FilePage:
+      type: object
+      description: 当前用户上传文件分页（只含元数据；无内容、无存储路径）。
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          description: 文件元数据数组（上传时间倒序）。
+          items:
+            $ref: '#/components/schemas/FileMeta'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    FileUploadRequest:
+      type: object
+      description: |
+        文件上传请求（JSON + Base64；非 PHI）。`sizeBytes` 必须与解码后长度一致，
+        `contentType` 必须在白名单内且 ≤ 20 MiB。
+      required:
+        - fileName
+        - contentType
+        - sizeBytes
+        - contentBase64
+        - businessType
+      properties:
+        fileName:
+          type: string
+          description: |
+            客户端原始文件名（1–255 字符；不含路径分隔符/控制字符）。**仅用于请求内存中的
+            语法校验/扩展名提示，不落库、不入审计**；响应 `fileName` 为服务端生成的
+            `file-<fileId>.<ext>`。
+          minLength: 1
+          maxLength: 255
+        contentType:
+          type: string
+          description: 内容类型（白名单；不在白名单返回 422）。
+          enum:
+            - application/pdf
+            - text/csv
+            - text/plain
+            - image/png
+            - image/jpeg
+        sizeBytes:
+          type: integer
+          description: 文件字节数（1–20971520）；必须与解码后长度一致。
+          minimum: 1
+          maximum: 20971520
+        contentBase64:
+          type: string
+          description: Base64（标准字母表）编码的文件内容；≤ 20 MiB 原文。
+          minLength: 4
+        businessType:
+          $ref: '#/components/schemas/FileBusinessType'
+        businessId:
+          type: [string, 'null']
+          description: |
+            业务关联标识（≤64 字符，如台次/记录/报表标识）；无关联不传或 null。
+            只接受 UUID 或大写业务号（如 `CASE-2026-0001`），**拒绝自由文本/中文/空格**，
+            避免把患者标识写入业务关联列。
+          maxLength: 64
+          pattern: '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[A-Z][A-Z0-9]{1,15}(-[A-Z0-9]{1,16}){0,3})?$'

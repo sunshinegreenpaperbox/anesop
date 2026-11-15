@@ -689,6 +689,74 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 `DashboardAlertSourceAdapter`/`DashboardDeviceSourceAdapter`/`DashboardRiskSourceAdapter`/
 `DashboardStaffSourceAdapter` 的单条只读 SELECT 中发生，不复制其他模块 Mapper/实体。
 
+### 3.17 字典、消息与文件（V27 已实现，M8-M0-04，ADR-0024）
+
+字典表 `sys_dict_type`/`sys_dict_item` 自 V1 已存在（本节补口径），V27 只补读索引；
+消息与文件元数据为 V27 新增。字段以 `db/migration/V27__m0_dict_message_file.sql` 为准。
+
+#### `m0_platform.sys_dict_type`（V1）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | 主键 |
+| `code` | varchar(64) | 类型编码，全局唯一（如 `ASA`/`SEX`） |
+| `name` | varchar(100) | 类型中文名 |
+| `description` | varchar(500) | 说明（口径/来源） |
+| `status` | smallint | 1=启用，0=停用 |
+| `created_at/created_by/updated_at/updated_by` | timestamptz/uuid | 审计字段 |
+
+#### `m0_platform.sys_dict_item`（V1；V27 补 `idx_sys_dict_item_type_sort`）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | 主键（接口 `itemId`） |
+| `dict_type_id` | uuid | FK → `sys_dict_type.id`（级联删除） |
+| `code` | varchar(64) | 项编码，**同类型内唯一**（`uk_sys_dict_item_type_code`），创建后不可改 |
+| `label` | varchar(100) | 显示名称（接口 `name`） |
+| `sort` | integer | 同类型内排序号（0–9999） |
+| `status` | smallint | 1=启用，0=停用（接口 `enabled`；**逻辑停用，不物理删除**） |
+| `remark` | varchar(255) | 备注/口径说明（禁止患者标识与临床自由文本） |
+| `created_at/created_by/updated_at/updated_by` | timestamptz/uuid | 审计字段 |
+
+#### `m0_platform.sys_message`（V27）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | 主键（接口 `messageId`） |
+| `recipient_user_id` | uuid | 收件人，FK → `sys_user.id`；查询强制 = 当前用户 |
+| `message_type` | varchar(16) | SYSTEM/SCHEDULE/ALERT/QC/TASK（CHECK） |
+| `template_code` | varchar(64) | 模板编码（前端本地化） |
+| `title` | varchar(200) | 标题（模板 + 参数白名单渲染，禁止 PHI） |
+| `params` | jsonb | 模板参数，必须是对象；键白名单 roomNo/deptName/startAt/endAt/count/url |
+| `read_at` | timestamptz | 已读时间（NULL=未读；幂等更新，不删除消息） |
+| `created_at` | timestamptz | 创建时间 |
+| `created_by` | uuid | 写入方（系统广播为用户；领域事件可为 NULL） |
+
+索引：`(recipient_user_id, created_at DESC, id DESC)` + 未读部分索引
+`(recipient_user_id) WHERE read_at IS NULL`。
+
+#### `m0_platform.sys_file`（V27）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid | 主键（接口 `fileId`） |
+| `storage_key` | varchar(255) | 存储适配器相对键（内容寻址），**不出接口** |
+| `content_type` | varchar(128) | 白名单 CHECK：application/pdf、text/csv、text/plain、image/png、image/jpeg |
+| `size_bytes` | bigint | 1–20971520（20 MiB，CHECK） |
+| `sha256` | char(64) | 内容 SHA-256（服务端计算、索引，用于完整性校验与内容去重） |
+| `business_type` | varchar(16) | TEMPLATE/REPORT/ATTACHMENT/SCHEDULE/RECORD（CHECK，决定可见性） |
+| `business_id` | varchar(64) | 业务关联标识（UUID/大写业务号；逻辑关联，不建跨 schema 外键） |
+| `uploader_id` | uuid | 上传者，FK → `sys_user.id`；上传者始终可下载 |
+| `scan_status` | varchar(16) | NOT_SCANNED（当前占位 EXT-07）/CLEAN/INFECTED（拒绝下载） |
+| `deleted` | boolean | 逻辑删除（接口 404；保留审计可追溯性） |
+| `created_at` | timestamptz | 上传时间 |
+
+索引：`sha256`、`(uploader_id, created_at DESC)`、`(business_type, business_id)`。
+**文件内容不入库**（`.cache/files` 本地 FS；生产 compose 持久卷 `m0filedata`；MinIO 占位
+EXT-06）；**不保存客户端原始文件名**（展示名服务端生成 `file-<id>.<ext>`）；**不得存 PHI**
+（禁 DICOM/视频/身份证明/含患者标识表格）。权限点与可见性规则见 `docs/modules/m0/README.md`
+§10 与 ADR-0024。
+
 ## 4. 与契约的对应
 
 | 契约 Schema | 数据库实体 | 说明 |

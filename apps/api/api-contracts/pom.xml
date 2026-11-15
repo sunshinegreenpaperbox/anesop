@@ -420,6 +420,32 @@
               </configOptions>
             </configuration>
           </execution>
+          <execution>
+            <id>generate-platform-models</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <configuration>
+              <inputSpec>${project.basedir}/../../../packages/contracts/openapi/platform.yaml</inputSpec>
+              <generatorName>spring</generatorName>
+              <output>${project.build.directory}/generated-sources/openapi/platform</output>
+              <modelPackage>com.anesop.contracts.platform.model</modelPackage>
+              <generateModels>true</generateModels>
+              <generateApis>false</generateApis>
+              <generateSupportingFiles>false</generateSupportingFiles>
+              <generateModelTests>false</generateModelTests>
+              <generateModelDocumentation>false</generateModelDocumentation>
+              <skipValidateSpec>true</skipValidateSpec>
+              <configOptions>
+                <useJakartaEe>true</useJakartaEe>
+                <useBeanValidation>true</useBeanValidation>
+                <openApiNullable>false</openApiNullable>
+                <dateLibrary>java8</dateLibrary>
+                <annotationLibrary>none</annotationLibrary>
+                <documentationProvider>none</documentationProvider>
+              </configOptions>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
 

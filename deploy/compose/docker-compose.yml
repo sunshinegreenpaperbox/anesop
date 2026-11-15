@@ -217,9 +217,14 @@ services:
       ANESOP_INPATIENT_PEPPER: ${ANESOP_INPATIENT_PEPPER}
       # 采集网关内部令牌（与用户 JWT 分离）：未配置时 ingest 一律 401（fail-closed）。
       ANESOP_M2_ACQUISITION_GATEWAY_TOKEN: ${ANESOP_M2_ACQUISITION_GATEWAY_TOKEN:-}
+      # M0 文件存储（M8-M0-04）：本地 FS 根目录必须落在持久卷内，容器重建不丢附件。
+      # 与 FileProperties（anesop.m0.file.root-dir）同名；MinIO 适配器为 EXT-06 占位。
+      ANESOP_M0_FILE_ROOT_DIR: ${ANESOP_M0_FILE_ROOT_DIR:-/var/lib/anesop/files}
       TZ: ${TZ}
     expose:
       - "8080"
+    volumes:
+      - m0filedata:/var/lib/anesop/files
     depends_on:
       postgres:
         condition: service_healthy
@@ -442,6 +447,8 @@ volumes:
     name: anesop-rabbitmqdata
   miniodata:
     name: anesop-miniodata
+  m0filedata:
+    name: anesop-m0filedata
   promdata:
     name: anesop-promdata
   grafanadata:

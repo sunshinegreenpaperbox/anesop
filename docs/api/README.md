@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD + M4-M16-01 工作量/多维报表/导出 + M4-M17-01 质控指标/不良事件 RCA/病历抽查/上报导出 + M5-M18-01 实时态势与 KPI 看板 + M5-M18-02 风险与资源大屏
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`、`report 0.1.0`、`qc 0.1.0`、`dashboard 0.2.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD + M4-M16-01 工作量/多维报表/导出 + M4-M17-01 质控指标/不良事件 RCA/病历抽查/上报导出 + M5-M18-01 实时态势与 KPI 看板 + M5-M18-02 风险与资源大屏 + M8-M0-04 字典/消息/文件（platform 0.2.0）
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`、`report 0.1.0`、`qc 0.1.0`、`dashboard 0.2.0`、`platform 0.2.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -21,7 +21,8 @@ packages/contracts/
 │   ├── report.yaml        # 工作量统计、多维报表与脱敏 CSV 导出（口径 report-1.0.0）
 │   ├── qc.yaml            # 质控指标、不良事件 RCA、病历抽查与上报导出（口径 qc-1.0.0）
 │   ├── dashboard.yaml     # 实时态势/KPI/风险分层/资源/趋势（口径 dashboard-1.1.0，只读、无 PHI）
-│   └── baseline/          # 当前已发布兼容基线（11 份快照）
+│   ├── platform.yaml      # M0 公共支撑：字典、消息中心、文件上传下载（0.2.0，无 PHI）
+│   └── baseline/          # 当前已发布兼容基线（12 份快照）
 ├── rules/error-responses.js
 ├── generated/typescript/  # openapi-typescript 生成物（禁止手改）
 ├── .spectral.yaml
@@ -41,7 +42,8 @@ packages/contracts/
 | `report.yaml` | 3 | 3 | 工作量统计（台次/麻醉时长/加权台次/术式分布）、多维报表（组合维度 + 指标 + 分页 + 全量合计）、报表 CSV 导出（BOM/脱敏/防公式注入） | §2.4.7、§2.7.2、§3.8.1 |
 | `qc.yaml` | 9 | 11 | 质控指标定义/周期结果（分子/分母/达标/版本）、不良事件登记与 RCA 分阶段闭环、病历质量抽查评分与整改闭环、上报脱敏 CSV 导出 | §2.9、§2.9.2、§2.5.3 I-10 |
 | `dashboard.yaml` | 5 | 5 | 实时态势（术间状态/台次进度/未确认与严重告警/设备在线/数据延迟）、当日运营 KPI（台次/准点/取消/利用率/告警/平均麻醉时长；口径复用 M2-M6-01 与 M4 report）、风险分层（0.2.0：ASA/术前评分风险等级/未确认严重告警/超时台次，仅计数）、资源态势（0.2.0：术间利用率与状态、设备在线率、当班人员（班组）、缺口提示）、按小时趋势（0.2.0：告警/台次/利用率，30–1440 分钟窗口） | §2.4.9、E-M18 |
-| **合计** | **122** | **160** | 11 个限界上下文骨架 | — |
+| `platform.yaml` | 10 | 11 | 字典类型/字典项查询与维护（全院读、管理员写、逻辑停用）、站内消息（仅本人、内部发布器写入）、文件上传/下载/元数据（类型/大小白名单、无 PHI、本地 FS 适配器 + MinIO 占位 EXT-06） | §2.4.1、§3.9.2、§3.9.3 |
+| **合计** | **132** | **171** | 12 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -726,6 +728,39 @@ packages/contracts/
   数据范围与 0.1.0 一致且 fail-closed；查询写审计 `DASHBOARD_VIEW`
   （`resource_id=risk|resources|trends`，采样）；空数据返回 0/空数组/NO_DATA，不返回 404；
   `hours` 超范围 400（`details[0].field=hours`）。示例全部为 SYNTHETIC。
+
+### 3.19 字典、消息与文件（M8-M0-04，platform 0.2.0）
+
+- 新增第 12 域 `platform.yaml` 0.2.0（0.1.0 首版；0.2.0 additive：新增「我的文件」分页、
+  文件名服务端生成、业务对象数据范围校验与错误码边界），覆盖 FINAL-REPORT §6.2 遗留：
+  - 字典：`GET /v1/dicts`、`GET /v1/dicts/{type}`（`m0:dict:read`，全院读）、
+    `POST/PUT/DELETE /v1/dicts/{type}/items`（`m0:dict:write`，V27 仅 `SYS_ADMIN`）。
+    字典项 `code` 创建后不可改；`DELETE` 为逻辑停用（`enabled=false`），不物理删除；
+    `includeDisabled=true` 仅对持写权限者生效，否则 403；同类型编码重复 409。
+  - 消息：`GET /v1/messages`（分页 + `unreadOnly` + `unreadCount`）、
+    `POST /v1/messages/{messageId}/read`（幂等）、`POST /v1/messages/read-all`（返回条数）；
+    仅本人可见（非本人/不存在统一 404）。**不暴露任意发送端点**：消息由领域事件/系统广播经
+    内部 `MessagePublisher` 写入；标题与参数白名单由服务端 `MessageTemplates` 注册表决定
+    （调用方不提交标题），参数值 ≤200 字符且不含控制字符，禁止 PHI。
+  - 文件：`POST /v1/files`（JSON + Base64，类型白名单 PDF/CSV/TXT/PNG/JPEG、≤20 MiB）、
+    `GET /v1/files`（我的文件分页，只返回当前用户上传）、
+    `GET /v1/files/{fileId}`（鉴权下载，`X-Content-Sha256` + `nosniff` + RFC 5987 文件名）、
+    `GET /v1/files/{fileId}/meta`（不含内容与 `storageKey`）。**不持久化客户端原始文件名**，
+    响应 `fileName` 为服务端生成的 `file-<fileId>.<ext>`；`businessId` 只接受 UUID/大写业务号。
+    下载可见性 = 功能权限 + 业务对象数据范围：上传者 / `SYS_ADMIN` / 业务类型对应模块只读权限，
+    且 `SCHEDULE`/`RECORD` 需 m1/m2 DataScope 可见（超范围 404，缺模块权限 403）；
+    `TEMPLATE` 对 `m0:file:read` 公开、`ATTACHMENT` 仅上传者与管理员；`REPORT` 当前 fail-closed。
+    **不得存 PHI**（禁 DICOM/视频/身份证明/含患者标识表格）；病毒扫描占位 EXT-07。
+    审计 `FILE_UPLOAD`/`FILE_DOWNLOAD` detail 不含 fileName/businessId。
+- 错误码：`PARAM_INVALID`(400，schema/枚举/`sizeBytes` 范围/`businessId` 模式/Base64)、
+  `AUTH_FORBIDDEN`(403，缺权限点)、`RESOURCE_NOT_FOUND`(404，不存在/业务对象超范围)、
+  `STATE_CONFLICT`(409)、`BUSINESS_RULE_VIOLATION`(422，解码后超 20 MiB/声明大小不一致)。
+- 迁移：V27（`sys_message`/`sys_file` + 字典读索引 + 5 个权限点与最小授予），回滚见
+  [docs/db/README.md](../db/README.md) §4.22；口径与存储适配器见
+  [ADR-0024](../adr/0024-字典消息文件口径.md)。
+- 存储：`FileStorage` 接口 + 本地 FS（默认 `.cache/files`；compose 注入
+  `ANESOP_M0_FILE_ROOT_DIR=/var/lib/anesop/files` 并挂载 `m0filedata` 持久卷）；MinIO 适配器仅
+  接口占位（**EXT-06**），compose 的 minio 服务为未来切换预留（Q-23），接入时切实现不改契约/业务代码。
 
 ## 4. 错误模型
 

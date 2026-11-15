@@ -46,6 +46,8 @@ db/
 │   ├── V20__m4_drug_dictionary.sql         # m4_drug 药品目录/五专/基数/日结/适配器 + m4:*（M4-M15-01）
 │   ├── V21__m4_staff_authorization.sql     # m4_staff 人员档案/资质/分级授权/排班/培训 + m4:staff/schedule/training（M4-M13-01）
 │   ├── V22__m4_staff_authorization_governance.sql  # 授权双人审批/撤销时点 + SYS_AUTH_MANAGER（M4-M13-01 评审）
+│   ├── …（V23–V26：M4 耗材/报表/质控与 M5 看板权限点，回滚见 §4.18–§4.21）
+│   ├── V27__m0_dict_message_file.sql       # m0_platform 消息/文件元数据 + 字典读索引 + m0 字典/消息/文件权限点（M8-M0-04）
 │   └── ../seed/demo/V101__demo_drug_synthetic.sql # 演示药品 3 条（仅 dev/test/uat）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
@@ -66,7 +68,7 @@ db/
 
 | schema | 模块 | 内容 |
 |---|---|---|
-| `m0_platform` | M0 公共支撑 | 用户、角色、权限、审计、字典（本基线） |
+| `m0_platform` | M0 公共支撑 | 用户、角色、权限、审计、字典、站内消息、文件元数据（V1/V27） |
 | `m1_sched` | M1 手术排程 | 手术申请、排程/台次、术间 |
 | `m2_anes` | M2 麻醉记录 | 术前访视（V10）、知情同意/三方核查（V11）、记录单/事件/用药/出入量（V13）、设备登记与体征（V4/V14）、预警/抢救（V15/V16）、锁单/修订（V17）、复苏记录/Aldrete/转出（V18）、术后随访/镇痛（V19） |
 | `m4_staff` | M4 人员档案与分级授权（方案书 M3 人员管理，一期由 M4-M13-01 落地） | 人员档案/执业资质、分级授权（append-only 历史 + 当前视图）、排班、培训（V21）；授权治理列/角色（V22） |
@@ -750,6 +752,53 @@ SYS_QC_MANAGER），并带 `DO $$` 自检（权限点数量 ≠ 1 或授权缺�
 - **后续**：看板历史回放/结果固化（方案书 §2.4.9 后续需求）如确认，按 expand 新增
   V27+ 读模型与快照表，不在 V26 预置。
 
+
+### 4.22 V27（M0 字典读索引 / 消息 / 文件元数据与权限点）回滚说明
+
+V27 是 **DDL + data-only 混合**迁移：新增 2 张表（`sys_message`、`sys_file`）、1 个字典读路径
+索引、5 个权限点与最小授权；不改写 V1–V26 既有表结构、列、权限与角色。字典唯一约束沿用
+V1 `uk_sys_dict_item_type_code (dict_type_id, code)`（同类型内编码唯一），V27 **不重复建**，
+只补 `idx_sys_dict_item_type_sort (dict_type_id, sort, code)` 供 `GET /v1/dicts/{type}` 有序
+返回启用项。口径见 [ADR-0024](../adr/0024-字典消息文件口径.md)。
+
+- **表与约束**：
+  - `sys_message`：`recipient_user_id`（FK `sys_user.id`）、`message_type`（SYSTEM/SCHEDULE/
+    ALERT/QC/TASK）、`template_code`、`title`、`params jsonb`（必须对象）、`read_at`、
+    `created_at`、`created_by`；索引 `(recipient_user_id, created_at DESC, id DESC)` 与未读
+    部分索引 `(recipient_user_id) WHERE read_at IS NULL`；消息不物理删除（已读幂等）。
+  - `sys_file`：`storage_key`（内容寻址相对键，不出接口）、`content_type`（白名单 CHECK）、
+    `size_bytes`（1–20971520 CHECK）、`sha256`（64 位小写十六进制 CHECK）、`business_type`
+    （TEMPLATE/REPORT/ATTACHMENT/SCHEDULE/RECORD CHECK）、`business_id`
+    （CHECK 仅长度；应用层再校验 UUID/大写业务号模式）、`uploader_id`（FK `sys_user.id`）、
+    `scan_status`（NOT_SCANNED/CLEAN/INFECTED）、`deleted`、`created_at`；索引 `sha256`、
+    `(uploader_id, created_at DESC)`、`(business_type, business_id)`。
+    **不保存客户端原始文件名**（评审 B-2）：展示名由服务端按 `file-<id>.<ext>` 生成，避免
+    姓名/住院号/身份证明文件名入库。
+  - **文件内容不入库**：本地 FS 适配器目录 `anesop.m0.file.root-dir`（默认 `.cache/files`，
+    生产由 compose `api` 注入 `ANESOP_M0_FILE_ROOT_DIR=/var/lib/anesop/files` 并挂载
+    `m0filedata` 持久卷）；MinIO 适配器仅接口占位（EXT-06），接入时切实现不改表。
+- **权限点**（最小授予，三段式）：
+  - `m0:dict:read`、`m0:message:read`、`m0:file:read`、`m0:file:write` → 6 个平台基线角色；
+  - `m0:dict:write` → **仅 `SYS_ADMIN`**（字典维护属平台管理员，服务层另有角色校验）。
+  V2 遗留两段式 `dict:read`/`dict:write` 保留不动（ADR-0011 在 1.0.0 大版本清理）。
+- **应用回滚**：下线 `/v1/dicts/*`（写）、`/v1/messages/*`、`/v1/files/*` 与前端
+  「字典管理/消息中心/文件管理」菜单；字典读（`GET /v1/dicts*`）与既有业务不受影响；文件
+  下载下线后已上传内容需按运维流程保留或清理。
+- **库层回滚**（需 DBA 审批 + 备份，顺序不可颠倒）：
+  1. `DELETE FROM m0_platform.sys_role_permission WHERE permission_id IN
+     ('b0000000-0000-4000-8000-000000000086', …087, …088, …089, …08a)`；
+  2. `DELETE FROM m0_platform.sys_permission WHERE code IN
+     ('m0:dict:read','m0:dict:write','m0:message:read','m0:file:read','m0:file:write')`；
+  3. `DROP TABLE m0_platform.sys_message;`、`DROP TABLE m0_platform.sys_file;`、
+     `DROP INDEX m0_platform.idx_sys_dict_item_type_sort;`
+- **文件内容备份**：DROP `sys_file` 前如需保留已上传文件，先备份 root-dir 目录并登记台账
+  （文件数、SHA-256 清单、操作人、时间）；否则内容成为无元数据的孤儿文件，恢复后无法
+  关联上传者与业务。
+- **令牌影响**：权限点写入 JWT claim，回滚后需重新登录（或等令牌过期）使新端点真正不可达。
+- **为什么不在 V27 加 m1/m2/m4 业务表**：消息与文件是 M0 公共能力；`sys_file` 与业务的关联
+  只存 `business_type` + `business_id`（逻辑关联），不建跨 schema 外键，避免模块间数据库耦合。
+- **已知边界**：V27 权限点 UUID 使用 `b...86–b...8a`（`b...80–b...85` 已被 V21/V22 占用）；
+  权限点插入**不使用** `ON CONFLICT DO NOTHING`，ID/编码冲突会让迁移 fail-fast，避免“静默少授权”。
 
 ## 5. 运行方式
 

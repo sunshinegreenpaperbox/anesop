@@ -67,7 +67,7 @@ REQUIRED_SERVICES = [
 ]
 MONITORING_SERVICES = ["prometheus", "grafana", "loki"]
 REQUIRED_VOLUMES = [
-    "pgdata", "redisdata", "rabbitmqdata", "miniodata",
+    "pgdata", "redisdata", "rabbitmqdata", "miniodata", "m0filedata",
     "promdata", "grafanadata", "lokidata",
 ]
 
@@ -182,8 +182,24 @@ for svc, cfg in services.items():
         used_named.append((svc, src))
 undeclared = sorted({src for _, src in used_named if src not in declared})
 emit(not missing_declared and not undeclared,
-     "命名卷均已声明（pgdata/redisdata/rabbitmqdata/miniodata/promdata/grafanadata/lokidata）"
+     "命名卷均已声明（pgdata/redisdata/rabbitmqdata/miniodata/m0filedata/promdata/grafanadata/lokidata）"
      + (f"；未声明：{', '.join(missing_declared + undeclared)}" if (missing_declared or undeclared) else ""))
+
+# --- 5a. M0 文件存储：环境变量 + 持久卷（M8-M0-04 S-1） -------------------
+api_cfg = services.get("api") or {}
+api_env = api_cfg.get("environment") or {}
+if isinstance(api_env, list):
+    api_env = dict(str(item).split("=", 1) for item in api_env if "=" in str(item))
+api_volumes = [str(v) for v in (api_cfg.get("volumes") or [])]
+m0_issues = []
+if "ANESOP_M0_FILE_ROOT_DIR" not in api_env:
+    m0_issues.append("api 缺 ANESOP_M0_FILE_ROOT_DIR")
+if not any(v.startswith("m0filedata:") for v in api_volumes):
+    m0_issues.append("api 未挂载 m0filedata 持久卷")
+if "m0filedata" not in declared:
+    m0_issues.append("m0filedata 未在顶层 volumes 声明")
+emit(not m0_issues, "M0 文件存储：api 注入 ANESOP_M0_FILE_ROOT_DIR 且挂载 m0filedata 持久卷"
+     + (f"；问题：{', '.join(m0_issues)}" if m0_issues else ""))
 
 # --- 5b. 构建上下文/绑定挂载源存在 ------------------------------------------
 compose_dir = compose_path.parent

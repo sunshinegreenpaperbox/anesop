@@ -1,13 +1,16 @@
 # M0 公共支撑 — 认证、权限与用户管理（S0-07 / M2-M0-02）
 
 > 状态：S0-07 完成（安全评审 B-1/B-2/B-3 与 S-1…S-11 已修）+ M2-M0-01 数据范围绑定（V5）
-> + M2-M0-02 手机号加解密与用户管理（V6，契约 0.5.0）。
+> + M2-M0-02 手机号加解密与用户管理（V6，契约 0.5.0）
+> + **M8-M0-04 字典 API / 消息中心 / 文件管理（V27，契约 platform.yaml 0.2.0）**。
 > 依据：`packages/contracts/openapi/auth.yaml` 0.5.0、方案书 §2.1.2（角色 R1–R11）、
 > §2.4.1（M0 公共支撑）、§3.9.1（等保身份鉴别/审计）、§3.9.2（RBAC 与数据权限）、
 > §3.9.3（字段加密与脱敏）、§3.9.5（OAuth2/JWT）。
 > 迁移：`db/migration/V1`（结构）、`V2`（平台预置）、`V3__m0_auth_token.sql`（刷新令牌 + `m0:auth:read`/`m0:auth:write` + `phone_hash`）、
 > `V5__m0_data_scope.sql`（`sys_org`/`sys_user_org`/`sys_user_room` + `m0:org:read`/`m0:org:write`，M2-M0-01）、
-> `V6__m0_user_phone_crypto.sql`（`phone_key_id`/`phone_updated_at` + 四列一致性约束 + `m0:user:read`/`m0:user:write`，M2-M0-02）。
+> `V6__m0_user_phone_crypto.sql`（`phone_key_id`/`phone_updated_at` + 四列一致性约束 + `m0:user:read`/`m0:user:write`，M2-M0-02）、
+> `V27__m0_dict_message_file.sql`（`sys_message`/`sys_file` + 字典读索引 +
+> `m0:dict:read|write`/`m0:message:read`/`m0:file:read|write`，M8-M0-04）。
 
 ## 0. 使用方式（本文档怎么用）
 
@@ -285,6 +288,87 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 > `phone_enc`（密文，供展示前解密）与 `phone_hash`（HMAC-SHA-256，供精确检索/去重）
 > 的字段名与口径已在本文件、`docs/db/README.md`、`docs/data-dictionary/core-entities.md` 统一；
 > V3 只做 expand 加列，写路径由 M2-M0-02（V6）落地；密钥轮换仍待 M1 离线工具，见第 5 节。
+
+## 10. 字典、消息与文件（M8-M0-04，V27，契约 platform.yaml 0.2.0）
+
+> 本文件第 1–9 节描述认证/权限/用户管理；本节描述 M0 公共支撑补全的三类能力。
+> 口径与取舍见 [ADR-0024](../../adr/0024-字典消息文件口径.md)；表结构见
+> [docs/db/README.md](../../db/README.md) §4.22；人工核对入口 `apps/api/modules/m0/README.md`。
+
+### 10.1 接口与权限
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/v1/dicts` | `m0:dict:read` | 字典类型列表 + 启用项数量（全院可读） |
+| GET | `/v1/dicts/{type}` | `m0:dict:read` | 字典项（默认只返回启用项、按 sort/code 排序）；`includeDisabled=true` 需 `m0:dict:write`，否则 403 |
+| POST | `/v1/dicts/{type}/items` | `m0:dict:write` + `SYS_ADMIN` | 新增字典项；同类型编码重复 409 |
+| PUT | `/v1/dicts/{type}/items/{itemId}` | `m0:dict:write` + `SYS_ADMIN` | 更新名称/排序/启停/备注；**编码不可改** |
+| DELETE | `/v1/dicts/{type}/items/{itemId}` | `m0:dict:write` + `SYS_ADMIN` | 逻辑停用（幂等，204），不物理删除 |
+| GET | `/v1/messages` | `m0:message:read` | 当前用户消息分页（`page/size/unreadOnly`）+ 未读总数 |
+| POST | `/v1/messages/{messageId}/read` | `m0:message:read` | 标记单条已读（幂等）；非本人 404 |
+| POST | `/v1/messages/read-all` | `m0:message:read` | 标记本人全部未读，返回更新条数 |
+| POST | `/v1/files` | `m0:file:write` | JSON + Base64 上传（类型/大小白名单；不持久化原始文件名） |
+| GET | `/v1/files` | `m0:file:read` | 我的文件分页（只返回当前用户上传） |
+| GET | `/v1/files/{fileId}` | `m0:file:read` + 可见性 | 鉴权下载（`X-Content-Sha256`/`nosniff`） |
+| GET | `/v1/files/{fileId}/meta` | `m0:file:read` + 可见性 | 元数据（不含内容与存储路径） |
+
+错误码：`PARAM_INVALID`(400，schema/字段/BusinessId 模式/Base64)、`AUTH_UNAUTHORIZED`(401)、
+`AUTH_FORBIDDEN`(403，缺权限点)、`RESOURCE_NOT_FOUND`(404，不存在/已删除/业务对象超范围)、
+`STATE_CONFLICT`(409，字典编码重复/并发更新)、`BUSINESS_RULE_VIOLATION`(422，解码后超
+20 MiB/声明大小不一致)。
+
+### 10.2 口径
+
+- **字典**：全院参考数据，读不按数据范围裁剪；维护仅 `SYS_ADMIN`（V27 仅授予该角色，服务层
+  再校验角色）。`code` 创建后不可改；停用为 `status=0`（接口 `enabled=false`），历史记录按当时
+  编码解释。`remark` 只放口径说明，禁止患者标识与临床自由文本。
+- **消息**：`recipient_user_id = 当前用户` 强制隔离；非本人与不存在统一 404。**没有**任意发送
+  端点，消息只能由领域事件/系统广播经 `MessagePublisher` 写入；`MessageTemplates` 注册表决定
+  `code → 类型/固定标题/允许参数键`，**调用方不提交标题**，未登记编码/类型不匹配/参数越界一律
+  拒绝（S-4）。参数值 ≤200 字符且不含控制字符，**禁止 PHI**。已读幂等，未读角标 `unreadCount`
+  恒为全部未读数；侧边菜单角标与消息中心共享 `useMessageStore`。
+- **文件**：白名单 `application/pdf`、`text/csv`、`text/plain`、`image/png`、`image/jpeg`，
+  ≤20 MiB；服务端计算 SHA-256 并按内容寻址落盘（同内容只存一份，元数据每次上传独立）。
+  **不持久化客户端原始文件名**：`sys_file` 无文件名列，展示名服务端生成
+  `file-<fileId>.<ext>`；审计 detail 不含 fileName/businessId（B-2）。`businessId` 只接受 UUID
+  或大写业务号，拒绝自由文本。
+  下载可见性 = 功能权限 + 业务对象数据范围：上传者 / `SYS_ADMIN` / 业务类型对应模块只读权限
+  （`REPORT`→`m4:report:read`、`SCHEDULE`→`m1:schedule:read`、`RECORD`→`m2:record:read`），
+  且 `SCHEDULE`/`RECORD` 还需 m1/m2 的 DataScope 可见；`TEMPLATE` 对持 `m0:file:read` 者公开，
+  `ATTACHMENT` 仅上传者与 `SYS_ADMIN`。缺模块权限 403；业务对象不存在/超出数据范围、文件
+  不存在 404（防存在性泄露）；感染 403。`REPORT` 当前 fail-closed（Q-24）。
+
+### 10.3 存储适配器与 PHI 禁令（EXT-06 / EXT-07）
+
+- `FileStorage` 接口 + `LocalFileStorage` 本地 FS 实现：目录 `anesop.m0.file.root-dir`
+  （默认仓库内 `.cache/files`，已 gitignore；生产挂载盘），大小上限 `anesop.m0.file.max-size-bytes`
+  （默认且最大 20 MiB，配置更大时夹紧）。
+- **MinIO 适配器仅为接口占位**：`MinioFileStorage` 全部方法抛 `UnsupportedOperationException`，
+  **EXT-06**（Docker/MinIO 当前不可用）。compose 中的 `minio` 服务与 `miniodata` 卷是未来切换
+  预留，不得据此宣称已接入（Q-23）。接入时用 `@ConditionalOnProperty` 选择实现，`FileService`
+  不改；分片/预签名下载需先升契约版本。
+- **部署（S-1）**：compose `api` 注入 `ANESOP_M0_FILE_ROOT_DIR=/var/lib/anesop/files` 并挂载
+  `m0filedata` 持久卷；`scripts/compose-check.sh` 静态断言两者。
+- **病毒扫描占位**：`scan_status` 当前固定 `NOT_SCANNED`（**EXT-07**）；接入前不得上传外部
+  来源文件，`INFECTED` 一律拒绝下载。
+- **不得存 PHI**：禁止临床影像（DICOM/视频）、身份证明（身份证/护照/驾驶证扫描）、含患者
+  标识的表格与截图。上传方为 PHI 合规第一责任人；违规按安全事件流程处置。
+
+### 10.4 审计与前端
+
+- 审计动作：`DICT_ITEM_CREATE`/`DICT_ITEM_UPDATE`/`DICT_ITEM_DISABLE`、
+  `MESSAGE_READ`/`MESSAGE_READ_ALL`、`FILE_UPLOAD`/`FILE_DOWNLOAD`；detail 只含字典类型/编码、
+  消息类型/模板编码、文件业务类型/大小/摘要前 12 位，**不含 fileName/businessId、文件内容与
+  患者标识**。
+- 前端：`/m0/dicts`（字典管理，`m0:dict:write`）、`/m0/messages`（消息中心 + 侧边菜单未读角标）、
+  `/m0/files`（我的文件列表 + 上传/下载示例页）；上传组件 `FileUploadPanel` 以
+  `business-type`/`business-id` 在排程/记录页复用（示例见 `FileCenterView`）。
+- 测试：`PlatformDictServiceTest`/`PlatformMessageServiceTest`/`PlatformFileServiceTest`/
+  `PlatformStorageTest`（m0-impl，嵌入式 PG + 本地 FS 临时目录）、
+  `FileBusinessVisibilityAdapterTest`（m1/m2 可见性 fail-closed）、`M0PlatformApiIntegrationTest`
+  （MockMvc 全端点、权限 403、跨范围/不存在附件 404、审计 detail 无 fileName/businessId、
+  schema 400、语义 422）、前端 Vitest（字典/消息/上传/客户端/我的文件/导航角标）、
+  E2E `apps/web/e2e/m0-messages.spec.ts`。
 
 ## 附：`@SuppressFBWarnings` 的来源说明
 
