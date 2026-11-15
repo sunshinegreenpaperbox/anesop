@@ -1,6 +1,8 @@
 package com.anesop.m5.impl.dashboard;
 
 import com.anesop.contracts.dashboard.model.AlertSummary;
+import com.anesop.contracts.dashboard.model.AsaClass;
+import com.anesop.contracts.dashboard.model.AsaClassCount;
 import com.anesop.contracts.dashboard.model.CaseProgress;
 import com.anesop.contracts.dashboard.model.CaseStatus;
 import com.anesop.contracts.dashboard.model.CaseStatusCount;
@@ -9,9 +11,22 @@ import com.anesop.contracts.dashboard.model.DataQuality;
 import com.anesop.contracts.dashboard.model.DataScopeType;
 import com.anesop.contracts.dashboard.model.DeviceSummary;
 import com.anesop.contracts.dashboard.model.RealtimeDashboard;
+import com.anesop.contracts.dashboard.model.ResourceDashboard;
+import com.anesop.contracts.dashboard.model.ResourceGap;
+import com.anesop.contracts.dashboard.model.ResourceGapCode;
+import com.anesop.contracts.dashboard.model.ResourceGapSeverity;
+import com.anesop.contracts.dashboard.model.RiskDashboard;
+import com.anesop.contracts.dashboard.model.RiskLevel;
+import com.anesop.contracts.dashboard.model.RiskLevelCount;
 import com.anesop.contracts.dashboard.model.RoomSituation;
 import com.anesop.contracts.dashboard.model.RoomStatus;
 import com.anesop.contracts.dashboard.model.RoomStatusCounts;
+import com.anesop.contracts.dashboard.model.RoomUtilization;
+import com.anesop.contracts.dashboard.model.Shift;
+import com.anesop.contracts.dashboard.model.StaffOnDuty;
+import com.anesop.contracts.dashboard.model.StaffShiftCount;
+import com.anesop.contracts.dashboard.model.TrendDashboard;
+import com.anesop.contracts.dashboard.model.TrendPoint;
 import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m0.api.security.AuthPrincipal;
 import com.anesop.m0.api.security.AuthRequestContext;
@@ -19,16 +34,22 @@ import com.anesop.m0.api.security.DataScope;
 import com.anesop.m0.api.security.DataScopeAssignment;
 import com.anesop.m0.api.security.DataScopeAssignments;
 import com.anesop.m0.api.security.DataScopeResolver;
+import com.anesop.m5.api.dashboard.DashboardAlertBucket;
 import com.anesop.m5.api.dashboard.DashboardAlertSource;
 import com.anesop.m5.api.dashboard.DashboardAlertStats;
 import com.anesop.m5.api.dashboard.DashboardCaseFact;
 import com.anesop.m5.api.dashboard.DashboardCaseSource;
 import com.anesop.m5.api.dashboard.DashboardDeviceSource;
 import com.anesop.m5.api.dashboard.DashboardDeviceStats;
+import com.anesop.m5.api.dashboard.DashboardRiskBucket;
+import com.anesop.m5.api.dashboard.DashboardRiskSource;
 import com.anesop.m5.api.dashboard.DashboardRoomFact;
 import com.anesop.m5.api.dashboard.DashboardRoomSource;
 import com.anesop.m5.api.dashboard.DashboardScope;
 import com.anesop.m5.api.dashboard.DashboardService;
+import com.anesop.m5.api.dashboard.DashboardStaffShift;
+import com.anesop.m5.api.dashboard.DashboardStaffSource;
+import com.anesop.m5.api.dashboard.DashboardStaffStats;
 import com.anesop.m5.api.error.M5ValidationException;
 import com.anesop.m5.impl.config.DashboardProperties;
 import com.anesop.m5.impl.support.DashboardAuditSampler;
@@ -45,15 +66,18 @@ import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 /**
- * 实时态势与 KPI 看板实现（M5-M18-01，契约 dashboard.yaml 0.1.0，口径 dashboard-1.0.0）。
+ * 实时态势与 KPI 看板实现（M5-M18-01/M5-M18-02，契约 dashboard.yaml 0.2.0，
+ * 口径 dashboard-1.1.0）。
  *
  * <p>口径（与 ADR-0023 一致，上游复用 M2-M6-01 analytics-1.0.0 与 M4 report-1.0.0）：
  * <ul>
@@ -73,9 +97,13 @@ import org.springframework.stereotype.Service;
  *   <li>比率一律 0–1 小数（4 位小数），分母为 0 返回 0，不做除零。</li>
  * </ul>
  *
+ * <p>0.2.0 新增（M5-M18-02）：风险分层（ASA/术前评分风险等级/未确认严重告警/超时台次）、
+ * 资源态势（术间利用率与状态分布、设备在线率、当班人员、确定性缺口提示）与按小时趋势
+ * （告警/台次/利用率）。三者仍为只读聚合，**只返回计数与比率，不含患者标识**。
+ *
  * <p>数据范围 fail-closed（与 M4 报表一致）：ALL 全院；SITE/DEPT 按术间院区/科室（台次另按
- * 申请科室/院区）；ROOM 按术间；SELF 按本人创建麻醉记录单的当日台次所涉术间。
- * 无可用范围、SELF 缺用户标识 → 403，绝不退化为全院查询。
+ * 申请科室/院区）；ROOM 按术间；SELF 按本人创建麻醉记录单的当日台次所涉术间（人员排班按
+ * 所涉科室，【待确认】）。无可用范围、SELF 缺用户标识 → 403，绝不退化为全院查询。
  *
  * <p>审计：{@code DASHBOARD_VIEW} 按用户采样（默认 300s 一次），detail 仅看板类型/日期/
  * 数据范围/计数/延迟，不含患者标识与告警处置原因。
@@ -89,6 +117,9 @@ public class DashboardServiceImpl implements DashboardService {
     private static final String RESOURCE_TYPE = "DASHBOARD";
     private static final String KIND_REALTIME = "realtime";
     private static final String KIND_KPI = "kpi";
+    private static final String KIND_RISK = "risk";
+    private static final String KIND_RESOURCES = "resources";
+    private static final String KIND_TRENDS = "trends";
 
     private static final String STATUS_CANCELLED = "CANCELLED";
     private static final String STATUS_IN_PROGRESS = "IN_PROGRESS";
@@ -104,6 +135,18 @@ public class DashboardServiceImpl implements DashboardService {
     /** KPI 允许预看的天数（未来多为计划台次，避免把远期排程当作当日态势）。 */
     public static final int MAX_FUTURE_DAYS = 31;
 
+    /** 趋势窗口下限（分钟）：契约固定 30 分钟（0.5 小时）。 */
+    public static final int MIN_TREND_WINDOW_MINUTES = 30;
+
+    /** 趋势窗口上限（分钟）：契约固定 1440 分钟（24 小时）。 */
+    public static final int MAX_TREND_WINDOW_MINUTES = 1440;
+
+    /** 趋势桶长度（分钟）：契约固定整小时分桶。 */
+    public static final int TREND_BUCKET_MINUTES = 60;
+
+    /** 趋势窗口缺省值（分钟）= 24 小时。 */
+    public static final int DEFAULT_TREND_WINDOW_MINUTES = 1440;
+
     /** 数据时效阈值的硬上限（方案书 §2.4.9：延迟超过 2 分钟须标注）。 */
     private static final int MAX_STALE_THRESHOLD_SECONDS = 120;
 
@@ -118,10 +161,54 @@ public class DashboardServiceImpl implements DashboardService {
             "停用术间语义：M1 无独立停用状态，暂以软删除表示【待确认】",
             "SELF 数据范围按“本人台次所涉术间”裁剪是否满足麻醉医师个人看板需求【待确认】");
 
+    /** ASA 分级展示顺序（只输出计数 &gt; 0 的分级）。 */
+    private static final List<String> ASA_ORDER = List.of("I", "II", "III", "IV", "V", "VI");
+
+    /** 术前评分风险等级展示顺序（只输出计数 &gt; 0 的等级）。 */
+    private static final List<String> RISK_ORDER = List.of("LOW", "MODERATE", "HIGH");
+
+    /** 班次展示顺序（只输出人数 &gt; 0 的班次）。 */
+    private static final List<String> SHIFT_ORDER = List.of("DAY", "NIGHT", "ON_CALL");
+
+    /** 高危 ASA 分级：III 及以上（与 M2 术前评估的 ASA 语义一致）。 */
+    private static final Set<String> HIGH_ASA = Set.of("III", "IV", "V", "VI");
+
+    /** 高危术前评分风险等级。 */
+    private static final String HIGH_RISK_LEVEL = "HIGH";
+
+    private static final String RISK_FORMULA = "风险分层 = 当日非取消台次按 ASA 分级与术前评估风险等级计数；"
+            + "高危 = ASA ≥ III 或风险等级 HIGH；"
+            + "超时 = 计划开始/结束超过宽限仍未开始/未完成（并集去重）";
+
+    private static final List<String> RISK_PENDING_CONFIRMATIONS = List.of(
+            "超时台次的宽限分钟数与“延迟开始/超时结束”是否分开考核【待确认】",
+            "高危台次定义为 ASA ≥ III 或风险等级 HIGH，是否再加未确认严重告警【待确认】",
+            "术前评分风险等级取 M2 评估单最新最终化版本，草稿是否参与分层【待确认】");
+
+    private static final String RESOURCE_FORMULA = "利用率 = 当日重叠手术分钟 / (可见术间数 × 每术间每日可用分钟)；"
+            + "设备在线率 = 在线 / 设备总数；"
+            + "当班人数 = 当日 PLANNED 排班人数（按人员去重，按班次分组）";
+
+    private static final List<String> RESOURCE_PENDING_CONFIRMATIONS = List.of(
+            "利用率为“计划手术时长 / 可用时长”，是否改为实际占用【待确认】",
+            "备班（ON_CALL）是否计入“当班人员”【待确认】",
+            "人员排班无用户标识，SELF 范围按“本人台次所涉科室”裁剪【待确认】",
+            "资源缺口规则（设备离线/停用术间/排程超载）的阈值与是否分科室展示【待确认】");
+
+    private static final String TREND_FORMULA = "告警 = 桶内触发告警数；"
+            + "台次 = 桶内计划开始的非取消台次；"
+            + "利用率 = 桶内重叠手术分钟 / (可见术间数 × 桶与窗口交集分钟)";
+
+    private static final List<String> TREND_PENDING_CONFIRMATIONS = List.of(
+            "利用率为“计划手术时长 / 可用时长”，是否改为实际占用【待确认】",
+            "台次趋势按“计划开始”归桶，是否需要同时提供“实际开始”口径【待确认】");
+
     private final DashboardCaseSource caseSource;
     private final DashboardRoomSource roomSource;
     private final DashboardAlertSource alertSource;
     private final DashboardDeviceSource deviceSource;
+    private final DashboardRiskSource riskSource;
+    private final DashboardStaffSource staffSource;
     private final DataScopeResolver dataScopeResolver;
     private final AuditWriter auditWriter;
     private final DashboardProperties properties;
@@ -134,6 +221,8 @@ public class DashboardServiceImpl implements DashboardService {
             DashboardRoomSource roomSource,
             DashboardAlertSource alertSource,
             DashboardDeviceSource deviceSource,
+            DashboardRiskSource riskSource,
+            DashboardStaffSource staffSource,
             DataScopeResolver dataScopeResolver,
             AuditWriter auditWriter,
             DashboardProperties properties,
@@ -143,6 +232,8 @@ public class DashboardServiceImpl implements DashboardService {
         this.roomSource = roomSource;
         this.alertSource = alertSource;
         this.deviceSource = deviceSource;
+        this.riskSource = riskSource;
+        this.staffSource = staffSource;
         this.dataScopeResolver = dataScopeResolver;
         this.auditWriter = auditWriter;
         this.properties = properties;
@@ -162,6 +253,7 @@ public class DashboardServiceImpl implements DashboardService {
         requireRange("on-time-threshold-minutes", properties.getOnTimeThresholdMinutes(), 0, 1440);
         requireRange("room-daily-available-minutes",
                 properties.getRoomDailyAvailableMinutes(), 1, 1440);
+        requireRange("overdue-grace-minutes", properties.getOverdueGraceMinutes(), 0, 120);
         if (properties.getAuditSampleSeconds() < 0) {
             throw new IllegalArgumentException("anesop.m5.dashboard.audit-sample-seconds 不能为负");
         }
@@ -301,6 +393,440 @@ public class DashboardServiceImpl implements DashboardService {
         audit(KIND_KPI, day.toString(), view, roomCount, caseCount, alerts.triggered(),
                 delaySeconds, caller, context);
         return model;
+    }
+
+    // ---------------------------------------------------------------------
+    // 风险分层（M5-M18-02，契约 0.2.0）
+    // ---------------------------------------------------------------------
+
+    @Override
+    public RiskDashboard risk(AuthPrincipal caller, AuthRequestContext context) {
+        Instant now = clock.instant();
+        LocalDate day = now.atZone(ZONE).toLocalDate();
+        DayWindow window = dayWindow(day);
+        ScopeView view = resolveScope(caller);
+        List<DashboardCaseFact> cases = safeCases(window, view);
+        Instant alertEnd = now.isBefore(window.toExclusive()) ? now : window.toExclusive();
+        DashboardAlertStats alerts = alertSource.countAlerts(window.from(), alertEnd, view.scope());
+        List<DashboardRiskBucket> buckets = safeRiskBuckets(window, view);
+
+        int totalCaseCount = 0;
+        for (DashboardCaseFact fact : cases) {
+            if (!STATUS_CANCELLED.equals(fact.status())) {
+                totalCaseCount++;
+            }
+        }
+        Map<String, Integer> asaCounts = new LinkedHashMap<>();
+        Map<String, Integer> riskCounts = new LinkedHashMap<>();
+        int assessed = 0;
+        int highRisk = 0;
+        for (DashboardRiskBucket bucket : buckets) {
+            if (bucket == null || bucket.count() <= 0) {
+                continue;
+            }
+            // 两个维度同时为空 = 未评估桶（未访视/仅草稿）：不进入分布，也不计入已评估。
+            if (bucket.asaClass() == null && bucket.riskLevel() == null) {
+                continue;
+            }
+            if (bucket.asaClass() != null) {
+                assessed += bucket.count();
+                asaCounts.merge(bucket.asaClass(), bucket.count(), Integer::sum);
+            }
+            if (bucket.riskLevel() != null) {
+                riskCounts.merge(bucket.riskLevel(), bucket.count(), Integer::sum);
+            }
+            if (highRisk(bucket)) {
+                highRisk += bucket.count();
+            }
+        }
+        Overdue overdue = overdue(cases, now);
+
+        RiskDashboard model = new RiskDashboard();
+        model.setUpdatedAt(OffsetDateTime.ofInstant(now, ZONE));
+        model.setTimezone(TIMEZONE);
+        model.setDate(day);
+        model.setDataScope(view.type());
+        model.setTotalCaseCount(totalCaseCount);
+        model.setAssessedCaseCount(assessed);
+        model.setUnassessedCaseCount(Math.max(0, totalCaseCount - assessed));
+        model.setHighRiskCaseCount(highRisk);
+        model.setAsaClassCounts(asaCounts(asaCounts));
+        model.setRiskLevelCounts(riskLevelCounts(riskCounts));
+        model.setSevereAlertCount(alerts.critical());
+        model.setOverdueCaseCount(overdue.total());
+        model.setDelayedStartCount(overdue.delayedStart());
+        model.setOverrunCaseCount(overdue.overrun());
+        model.setOverdueThresholdMinutes(properties.getOverdueGraceMinutes());
+        model.setFormula(RISK_FORMULA);
+        model.setPendingConfirmations(new ArrayList<>(RISK_PENDING_CONFIRMATIONS));
+
+        Instant latest = latestOf(cases, alerts, null);
+        int delaySeconds = delaySeconds(now, latest);
+        model.setDataDelaySeconds(delaySeconds);
+        model.setDataQuality(dataQuality(latest, delaySeconds));
+
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("kind", KIND_RISK);
+        detail.put("date", day.toString());
+        detail.put("timezone", TIMEZONE);
+        detail.put("dataScope", view.type().getValue());
+        detail.put("caseCount", totalCaseCount);
+        detail.put("assessedCaseCount", assessed);
+        detail.put("highRiskCaseCount", highRisk);
+        detail.put("alertCount", alerts.critical());
+        detail.put("overdueCaseCount", overdue.total());
+        detail.put("dataDelaySeconds", delaySeconds);
+        audit(KIND_RISK, view, detail, caller, context);
+        return model;
+    }
+
+    // ---------------------------------------------------------------------
+    // 资源态势（M5-M18-02，契约 0.2.0）
+    // ---------------------------------------------------------------------
+
+    @Override
+    public ResourceDashboard resources(AuthPrincipal caller, AuthRequestContext context) {
+        Instant now = clock.instant();
+        LocalDate day = now.atZone(ZONE).toLocalDate();
+        DayWindow window = dayWindow(day);
+        ScopeView view = resolveScope(caller);
+        List<DashboardRoomFact> rooms = safeRooms(window, view);
+        List<DashboardCaseFact> cases = safeCases(window, view);
+        DashboardDeviceStats devices = deviceSource.countDevices(now, window.from(),
+                window.toExclusive(), view.scope(), properties.getDeviceOfflineTimeoutSeconds());
+        DashboardStaffStats staff = safeStaff(window, view);
+
+        int roomCount = (int) rooms.stream().filter(room -> !room.deleted()).count();
+        long surgerySeconds = 0L;
+        for (DashboardCaseFact fact : cases) {
+            if (STATUS_CANCELLED.equals(fact.status())) {
+                continue;
+            }
+            surgerySeconds += overlapSeconds(fact, window);
+        }
+        int surgeryMinutes = (int) Math.min(Integer.MAX_VALUE, surgerySeconds / 60);
+        long availableMinutes = (long) roomCount * properties.getRoomDailyAvailableMinutes();
+        Double utilizationRate = ratio(surgeryMinutes, availableMinutes);
+        RoomStatusCounts statusCounts = roomStatusCounts(rooms);
+
+        ResourceDashboard model = new ResourceDashboard();
+        model.setUpdatedAt(OffsetDateTime.ofInstant(now, ZONE));
+        model.setTimezone(TIMEZONE);
+        model.setDate(day);
+        model.setDataScope(view.type());
+
+        RoomUtilization utilization = new RoomUtilization();
+        utilization.setRoomCount(roomCount);
+        utilization.setSurgeryMinutes(surgeryMinutes);
+        utilization.setAvailableMinutes((int) Math.min(Integer.MAX_VALUE, availableMinutes));
+        utilization.setUtilizationRate(utilizationRate);
+        model.setRoomUtilization(utilization);
+        model.setRoomStatusCounts(statusCounts);
+
+        DeviceSummary deviceSummary = new DeviceSummary();
+        deviceSummary.setTotal(devices.total());
+        deviceSummary.setOnline(devices.online());
+        deviceSummary.setOffline(devices.offline());
+        deviceSummary.setMaintenance(devices.maintenance());
+        deviceSummary.setOfflineTimeoutSeconds(properties.getDeviceOfflineTimeoutSeconds());
+        model.setDevices(deviceSummary);
+        model.setDeviceOnlineRate(ratio(devices.online(), devices.total()));
+
+        StaffOnDuty onDuty = new StaffOnDuty();
+        onDuty.setTotal(staff.total());
+        onDuty.setByShift(staffShifts(staff.byShift()));
+        model.setStaffOnDuty(onDuty);
+
+        model.setResourceGaps(resourceGaps(devices, statusCounts, utilizationRate, surgeryMinutes,
+                availableMinutes, roomCount, staff));
+        model.setFormula(RESOURCE_FORMULA);
+        model.setPendingConfirmations(new ArrayList<>(RESOURCE_PENDING_CONFIRMATIONS));
+
+        Instant latest = latestOf(cases, null, devices);
+        int delaySeconds = delaySeconds(now, latest);
+        model.setDataDelaySeconds(delaySeconds);
+        model.setDataQuality(dataQuality(latest, delaySeconds));
+
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("kind", KIND_RESOURCES);
+        detail.put("date", day.toString());
+        detail.put("timezone", TIMEZONE);
+        detail.put("dataScope", view.type().getValue());
+        detail.put("roomCount", roomCount);
+        detail.put("caseCount", cases.size());
+        detail.put("staffOnDutyTotal", staff.total());
+        detail.put("deviceOffline", devices.offline());
+        detail.put("dataDelaySeconds", delaySeconds);
+        audit(KIND_RESOURCES, view, detail, caller, context);
+        return model;
+    }
+
+    // ---------------------------------------------------------------------
+    // 按小时趋势（M5-M18-02，契约 0.2.0）
+    // ---------------------------------------------------------------------
+
+    @Override
+    public TrendDashboard trends(Double hours, AuthPrincipal caller, AuthRequestContext context) {
+        Instant now = clock.instant();
+        int windowMinutes = trendWindowMinutes(hours);
+        Instant from = now.minusSeconds(windowMinutes * 60L);
+        ScopeView view = resolveScope(caller);
+        List<DashboardCaseFact> cases = safeCases(from, now, view);
+        List<DashboardRoomFact> rooms = safeRooms(from, now, view);
+        Map<Instant, DashboardAlertBucket> alertBuckets = alertBuckets(from, now, view);
+        int roomCount = (int) rooms.stream().filter(room -> !room.deleted()).count();
+
+        List<TrendPoint> points = new ArrayList<>();
+        int totalCases = 0;
+        int totalAlerts = 0;
+        long bucketSeconds = TREND_BUCKET_MINUTES * 60L;
+        for (Instant bucketStart = floorHour(from); bucketStart.isBefore(now);
+                bucketStart = bucketStart.plusSeconds(bucketSeconds)) {
+            Instant bucketEnd = bucketStart.plusSeconds(bucketSeconds);
+            if (bucketEnd.isAfter(now)) {
+                bucketEnd = now;
+            }
+            Instant start = bucketStart.isBefore(from) ? from : bucketStart;
+            if (!bucketEnd.isAfter(start)) {
+                continue;
+            }
+            int bucketMinutes = (int) Duration.between(start, bucketEnd).toMinutes();
+            int caseCount = 0;
+            long surgerySeconds = 0L;
+            for (DashboardCaseFact fact : cases) {
+                if (STATUS_CANCELLED.equals(fact.status())) {
+                    continue;
+                }
+                if (fact.startAt() != null && !fact.startAt().isBefore(start)
+                        && fact.startAt().isBefore(bucketEnd)) {
+                    caseCount++;
+                }
+                surgerySeconds += overlapSeconds(fact, start, bucketEnd);
+            }
+            int surgeryMinutes = (int) Math.min(Integer.MAX_VALUE, surgerySeconds / 60);
+            DashboardAlertBucket alertBucket = alertBuckets.get(bucketStart);
+            TrendPoint point = new TrendPoint();
+            point.setStartsAt(OffsetDateTime.ofInstant(bucketStart, ZONE));
+            point.setAlertCount(alertBucket == null ? 0 : alertBucket.triggered());
+            point.setCriticalAlertCount(alertBucket == null ? 0 : alertBucket.critical());
+            point.setCaseCount(caseCount);
+            point.setSurgeryMinutes(surgeryMinutes);
+            point.setUtilizationRate(ratio(surgeryMinutes, (long) roomCount * bucketMinutes));
+            points.add(point);
+            totalCases += caseCount;
+            totalAlerts += point.getAlertCount();
+        }
+
+        TrendDashboard model = new TrendDashboard();
+        model.setUpdatedAt(OffsetDateTime.ofInstant(now, ZONE));
+        model.setTimezone(TIMEZONE);
+        model.setDataScope(view.type());
+        model.setWindowMinutes(windowMinutes);
+        model.setBucketMinutes(TREND_BUCKET_MINUTES);
+        model.setFrom(OffsetDateTime.ofInstant(from, ZONE));
+        model.setTo(OffsetDateTime.ofInstant(now, ZONE));
+        model.setRoomCount(roomCount);
+        model.setPoints(points);
+        model.setFormula(TREND_FORMULA);
+        model.setPendingConfirmations(new ArrayList<>(TREND_PENDING_CONFIRMATIONS));
+
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("kind", KIND_TRENDS);
+        detail.put("timezone", TIMEZONE);
+        detail.put("dataScope", view.type().getValue());
+        detail.put("windowMinutes", windowMinutes);
+        detail.put("roomCount", roomCount);
+        detail.put("pointCount", points.size());
+        detail.put("caseCount", totalCases);
+        detail.put("alertCount", totalAlerts);
+        audit(KIND_TRENDS, view, detail, caller, context);
+        return model;
+    }
+
+    // ---------------------------------------------------------------------
+    // 风险/资源/趋势聚合辅助
+    // ---------------------------------------------------------------------
+
+    /** 高危判定：ASA ≥ III 或术前评分风险等级 HIGH（同一台次只有一个组合，天然去重）。 */
+    private static boolean highRisk(DashboardRiskBucket bucket) {
+        return (bucket.asaClass() != null && HIGH_ASA.contains(bucket.asaClass()))
+                || HIGH_RISK_LEVEL.equals(bucket.riskLevel());
+    }
+
+    /** ASA 计数 → 契约数组（按 I→VI 顺序，只输出已知且计数 &gt; 0 的分级）。 */
+    private static List<AsaClassCount> asaCounts(Map<String, Integer> counts) {
+        List<AsaClassCount> items = new ArrayList<>();
+        for (String code : ASA_ORDER) {
+            Integer count = counts.get(code);
+            if (count == null || count <= 0) {
+                continue;
+            }
+            AsaClassCount item = new AsaClassCount();
+            item.setAsaClass(AsaClass.valueOf(code));
+            item.setCount(count);
+            items.add(item);
+        }
+        return items;
+    }
+
+    /** 风险等级计数 → 契约数组（按 LOW→MODERATE→HIGH 顺序，只输出已知且计数 &gt; 0 的等级）。 */
+    private static List<RiskLevelCount> riskLevelCounts(Map<String, Integer> counts) {
+        List<RiskLevelCount> items = new ArrayList<>();
+        for (String code : RISK_ORDER) {
+            Integer count = counts.get(code);
+            if (count == null || count <= 0) {
+                continue;
+            }
+            RiskLevelCount item = new RiskLevelCount();
+            item.setRiskLevel(RiskLevel.valueOf(code));
+            item.setCount(count);
+            items.add(item);
+        }
+        return items;
+    }
+
+    /** 班组计数 → 契约数组（按 DAY→NIGHT→ON_CALL 顺序，只输出已知且人数 &gt; 0 的班次）。 */
+    private static List<StaffShiftCount> staffShifts(List<DashboardStaffShift> shifts) {
+        List<StaffShiftCount> items = new ArrayList<>();
+        for (String code : SHIFT_ORDER) {
+            int count = 0;
+            for (DashboardStaffShift shift : shifts) {
+                if (shift != null && code.equals(shift.shift())) {
+                    count += shift.count();
+                }
+            }
+            if (count <= 0) {
+                continue;
+            }
+            StaffShiftCount item = new StaffShiftCount();
+            item.setShift(Shift.valueOf(code));
+            item.setCount(count);
+            items.add(item);
+        }
+        return items;
+    }
+
+    /**
+     * 超时台次：延迟开始（计划开始已过宽限且未开始）与超时未结束（计划结束已过宽限且未完成）
+     * 两类并集去重；取消台次不参与。
+     */
+    private Overdue overdue(List<DashboardCaseFact> cases, Instant now) {
+        long graceSeconds = properties.getOverdueGraceMinutes() * 60L;
+        int delayedStart = 0;
+        int overrun = 0;
+        Set<Object> overdueKeys = new HashSet<>();
+        for (int index = 0; index < cases.size(); index++) {
+            DashboardCaseFact fact = cases.get(index);
+            if (STATUS_CANCELLED.equals(fact.status())) {
+                continue;
+            }
+            boolean lateStart = fact.startAt() != null
+                    && fact.startAt().plusSeconds(graceSeconds).isBefore(now)
+                    && !started(fact);
+            boolean lateEnd = fact.endAt() != null
+                    && fact.endAt().plusSeconds(graceSeconds).isBefore(now)
+                    && !completed(fact);
+            if (lateStart) {
+                delayedStart++;
+            }
+            if (lateEnd) {
+                overrun++;
+            }
+            if (lateStart || lateEnd) {
+                overdueKeys.add(fact.scheduleId() == null ? Integer.valueOf(index)
+                        : fact.scheduleId());
+            }
+        }
+        return new Overdue(overdueKeys.size(), delayedStart, overrun);
+    }
+
+    /**
+     * 资源缺口提示（确定性规则，固定顺序；只含计数与中文提示，不含任何标识）。
+     *
+     * <p>规则是展示辅助，不构成临床/管理决策；阈值与是否需要分科室细化【待确认】。
+     */
+    private List<ResourceGap> resourceGaps(DashboardDeviceStats devices,
+            RoomStatusCounts statusCounts, Double utilizationRate, int surgeryMinutes,
+            long availableMinutes, int roomCount, DashboardStaffStats staff) {
+        List<ResourceGap> gaps = new ArrayList<>();
+        if (devices.offline() > 0) {
+            gaps.add(gap(ResourceGapCode.DEVICE_OFFLINE, ResourceGapSeverity.WARN,
+                    devices.offline(), devices.offline()
+                            + " 台设备离线（超时未上报），请检查采集网关与设备电源"));
+        }
+        if (devices.maintenance() > 0) {
+            gaps.add(gap(ResourceGapCode.DEVICE_MAINTENANCE, ResourceGapSeverity.INFO,
+                    devices.maintenance(), devices.maintenance()
+                            + " 台设备维护中，不在线属预期（不参与离线判定）"));
+        }
+        if (statusCounts.getOutOfService() > 0) {
+            gaps.add(gap(ResourceGapCode.ROOM_OUT_OF_SERVICE, ResourceGapSeverity.INFO,
+                    statusCounts.getOutOfService(), statusCounts.getOutOfService()
+                            + " 间术间停用（软删除或状态未知），排程能力相应减少"));
+        }
+        if (availableMinutes > 0 && utilizationRate != null && utilizationRate > 1.0D) {
+            long excessMinutes = Math.max(0L, surgeryMinutes - availableMinutes);
+            long perRoom = properties.getRoomDailyAvailableMinutes();
+            int equivalentRooms = (int) Math.max(1L, (excessMinutes + perRoom - 1) / perRoom);
+            gaps.add(gap(ResourceGapCode.ROOM_OVERLOADED, ResourceGapSeverity.WARN,
+                    equivalentRooms, "当日排程超出可用时长约 " + excessMinutes
+                            + " 分钟（等效 " + equivalentRooms + " 间术间），请复核台次安排"));
+        }
+        if (staff.total() == 0) {
+            gaps.add(gap(ResourceGapCode.STAFF_NOT_SCHEDULED, ResourceGapSeverity.WARN, 0,
+                    "今日无当班排班（M4 排班未录入），请核对班组安排"));
+        }
+        if (roomCount == 0) {
+            gaps.add(gap(ResourceGapCode.NO_VISIBLE_ROOM, ResourceGapSeverity.WARN, 0,
+                    "当前数据范围内无可见术间，利用率与状态分布不可用"));
+        }
+        return gaps;
+    }
+
+    private static ResourceGap gap(ResourceGapCode code, ResourceGapSeverity severity, int count,
+            String message) {
+        ResourceGap item = new ResourceGap();
+        item.setCode(code);
+        item.setSeverity(severity);
+        item.setCount(count);
+        item.setMessage(message);
+        return item;
+    }
+
+    /** 趋势窗口长度（分钟）：缺省 24h；超出 30–1440 分钟或非有限数 → 400。 */
+    static int trendWindowMinutes(Double hours) {
+        if (hours == null) {
+            return DEFAULT_TREND_WINDOW_MINUTES;
+        }
+        if (hours.isNaN() || hours.isInfinite() || hours < 0.5D || hours > 24D) {
+            throw new M5ValidationException("hours", "hours 必须在 0.5–24 之间（30–1440 分钟）");
+        }
+        long minutes = Math.round(hours * 60D);
+        if (minutes < MIN_TREND_WINDOW_MINUTES || minutes > MAX_TREND_WINDOW_MINUTES) {
+            throw new M5ValidationException("hours", "hours 必须在 0.5–24 之间（30–1440 分钟）");
+        }
+        return (int) minutes;
+    }
+
+    /** 本地整点（UTC 整点与 Asia/Shanghai 整点一一对应，上海无夏令时）。 */
+    private static Instant floorHour(Instant instant) {
+        return instant.atZone(ZONE).truncatedTo(java.time.temporal.ChronoUnit.HOURS).toInstant();
+    }
+
+    private Map<Instant, DashboardAlertBucket> alertBuckets(Instant from, Instant toExclusive,
+            ScopeView view) {
+        List<DashboardAlertBucket> buckets = alertSource.countAlertsByHour(from, toExclusive,
+                view.scope());
+        Map<Instant, DashboardAlertBucket> map = new LinkedHashMap<>();
+        if (buckets == null) {
+            return map;
+        }
+        for (DashboardAlertBucket bucket : buckets) {
+            if (bucket != null && bucket.hourStart() != null) {
+                map.put(bucket.hourStart(), bucket);
+            }
+        }
+        return map;
     }
 
     // ---------------------------------------------------------------------
@@ -446,12 +972,16 @@ public class DashboardServiceImpl implements DashboardService {
 
     /** 台次计划区间与当日窗口的重叠秒数；缺起止时间返回 0。 */
     static long overlapSeconds(DashboardCaseFact fact, DayWindow window) {
+        return overlapSeconds(fact, window.from(), window.toExclusive());
+    }
+
+    /** 台次计划区间与任意半开窗口的重叠秒数（趋势小时桶复用）；缺起止时间返回 0。 */
+    static long overlapSeconds(DashboardCaseFact fact, Instant from, Instant toExclusive) {
         if (fact.startAt() == null || fact.endAt() == null) {
             return 0L;
         }
-        Instant start = fact.startAt().isAfter(window.from()) ? fact.startAt() : window.from();
-        Instant end = fact.endAt().isBefore(window.toExclusive())
-                ? fact.endAt() : window.toExclusive();
+        Instant start = fact.startAt().isAfter(from) ? fact.startAt() : from;
+        Instant end = fact.endAt().isBefore(toExclusive) ? fact.endAt() : toExclusive;
         if (!end.isAfter(start)) {
             return 0L;
         }
@@ -548,15 +1078,33 @@ public class DashboardServiceImpl implements DashboardService {
     // ---------------------------------------------------------------------
 
     private List<DashboardRoomFact> safeRooms(DayWindow window, ScopeView view) {
-        List<DashboardRoomFact> rooms = roomSource.findRooms(window.from(), window.toExclusive(),
-                view.scope());
+        return safeRooms(window.from(), window.toExclusive(), view);
+    }
+
+    private List<DashboardRoomFact> safeRooms(Instant from, Instant toExclusive, ScopeView view) {
+        List<DashboardRoomFact> rooms = roomSource.findRooms(from, toExclusive, view.scope());
         return rooms == null ? List.of() : rooms;
     }
 
     private List<DashboardCaseFact> safeCases(DayWindow window, ScopeView view) {
-        List<DashboardCaseFact> cases = caseSource.findCases(window.from(), window.toExclusive(),
-                view.scope());
+        return safeCases(window.from(), window.toExclusive(), view);
+    }
+
+    private List<DashboardCaseFact> safeCases(Instant from, Instant toExclusive, ScopeView view) {
+        List<DashboardCaseFact> cases = caseSource.findCases(from, toExclusive, view.scope());
         return cases == null ? List.of() : cases;
+    }
+
+    private List<DashboardRiskBucket> safeRiskBuckets(DayWindow window, ScopeView view) {
+        List<DashboardRiskBucket> buckets = riskSource.findRiskBuckets(window.from(),
+                window.toExclusive(), view.scope());
+        return buckets == null ? List.of() : buckets;
+    }
+
+    private DashboardStaffStats safeStaff(DayWindow window, ScopeView view) {
+        DashboardStaffStats stats = staffSource.countOnDuty(window.date(), window.from(),
+                window.toExclusive(), view.scope());
+        return stats == null ? DashboardStaffStats.empty() : stats;
     }
 
     /**
@@ -660,12 +1208,6 @@ public class DashboardServiceImpl implements DashboardService {
 
     private void audit(String kind, String date, ScopeView view, int roomCount, int caseCount,
             int alertCount, int delaySeconds, AuthPrincipal caller, AuthRequestContext context) {
-        Duration window = Duration.ofSeconds(properties.getAuditSampleSeconds());
-        String key = (caller == null || caller.userId() == null ? "anonymous" : caller.userId())
-                + "|" + kind;
-        if (!auditSampler.shouldRecord(key, clock.instant(), window)) {
-            return;
-        }
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("kind", kind);
         if (date != null) {
@@ -677,7 +1219,24 @@ public class DashboardServiceImpl implements DashboardService {
         detail.put("caseCount", caseCount);
         detail.put("alertCount", alertCount);
         detail.put("dataDelaySeconds", delaySeconds);
-        auditWriter.record(ACTION, RESOURCE_TYPE, kind, true, detail,
+        audit(kind, view, detail, caller, context);
+    }
+
+    /**
+     * 写看板读审计（采样）：同一用户 + 同一看板类型在采样窗口内只落一条，
+     * detail 由调用方构造（只允许计数/范围/延迟，禁止患者标识与自由文本）。
+     */
+    private void audit(String kind, ScopeView view, Map<String, Object> detail,
+            AuthPrincipal caller, AuthRequestContext context) {
+        Duration window = Duration.ofSeconds(properties.getAuditSampleSeconds());
+        String key = (caller == null || caller.userId() == null ? "anonymous" : caller.userId())
+                + "|" + kind;
+        if (!auditSampler.shouldRecord(key, clock.instant(), window)) {
+            return;
+        }
+        Map<String, Object> safeDetail = new LinkedHashMap<>(detail);
+        safeDetail.put("dataScope", view.type().getValue());
+        auditWriter.record(ACTION, RESOURCE_TYPE, kind, true, safeDetail,
                 caller == null ? null : caller.userId(),
                 caller == null ? null : caller.username(), context);
     }
@@ -757,5 +1316,9 @@ public class DashboardServiceImpl implements DashboardService {
 
     /** 准点统计中间值。 */
     record OnTime(int onTime, int evaluated) {
+    }
+
+    /** 超时台次中间值（并集去重计数 + 两类分列计数）。 */
+    record Overdue(int total, int delayedStart, int overrun) {
     }
 }

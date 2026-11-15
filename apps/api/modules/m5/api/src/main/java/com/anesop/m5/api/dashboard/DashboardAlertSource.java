@@ -1,6 +1,7 @@
 package com.anesop.m5.api.dashboard;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 看板告警只读端口：由装配层适配器用**单条只读 SELECT**聚合 M2 术中告警。
@@ -19,4 +20,18 @@ public interface DashboardAlertSource {
      * @return 告警统计；无数据返回 {@link DashboardAlertStats#empty()}
      */
     DashboardAlertStats countAlerts(Instant from, Instant toExclusive, DashboardScope scope);
+
+    /**
+     * 统计窗口内按小时分桶的告警计数（趋势端点用，M5-M18-02）。
+     *
+     * <p>单条 {@code GROUP BY date_trunc('hour')} 聚合；桶起点为 UTC 整点，与
+     * `Asia/Shanghai` 整点一一对应（上海无夏令时）。只返回桶起点与计数，不返回告警明细。
+     *
+     * @param from        窗口起点（含）
+     * @param toExclusive 窗口终点（不含）
+     * @param scope       数据范围断言（与 {@link #countAlerts} 同一裁剪规则）
+     * @return 小时桶列表（按桶起点升序）；窗口内无告警返回空列表，不返回 null
+     */
+    List<DashboardAlertBucket> countAlertsByHour(Instant from, Instant toExclusive,
+            DashboardScope scope);
 }

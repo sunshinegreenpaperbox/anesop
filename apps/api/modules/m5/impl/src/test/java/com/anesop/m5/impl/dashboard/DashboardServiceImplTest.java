@@ -29,8 +29,10 @@ import com.anesop.m5.api.dashboard.DashboardCaseSource;
 import com.anesop.m5.api.dashboard.DashboardDeviceSource;
 import com.anesop.m5.api.dashboard.DashboardDeviceStats;
 import com.anesop.m5.api.dashboard.DashboardRoomFact;
+import com.anesop.m5.api.dashboard.DashboardRiskSource;
 import com.anesop.m5.api.dashboard.DashboardRoomSource;
 import com.anesop.m5.api.dashboard.DashboardScope;
+import com.anesop.m5.api.dashboard.DashboardStaffSource;
 import com.anesop.m5.impl.config.DashboardProperties;
 import com.anesop.m5.impl.support.DashboardAuditSampler;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -74,6 +76,8 @@ class DashboardServiceImplTest {
     private DashboardRoomSource roomSource;
     private DashboardAlertSource alertSource;
     private DashboardDeviceSource deviceSource;
+    private DashboardRiskSource riskSource;
+    private DashboardStaffSource staffSource;
     private DataScopeResolver dataScopeResolver;
     private AuditWriter auditWriter;
     private DashboardProperties properties;
@@ -84,6 +88,8 @@ class DashboardServiceImplTest {
         roomSource = mock(DashboardRoomSource.class);
         alertSource = mock(DashboardAlertSource.class);
         deviceSource = mock(DashboardDeviceSource.class);
+        riskSource = mock(DashboardRiskSource.class);
+        staffSource = mock(DashboardStaffSource.class);
         dataScopeResolver = mock(DataScopeResolver.class);
         auditWriter = mock(AuditWriter.class);
         properties = new DashboardProperties();
@@ -401,7 +407,7 @@ class DashboardServiceImplTest {
 
     private DashboardServiceImpl service() {
         DashboardServiceImpl service = new DashboardServiceImpl(caseSource, roomSource, alertSource,
-                deviceSource, dataScopeResolver, auditWriter, properties,
+                deviceSource, riskSource, staffSource, dataScopeResolver, auditWriter, properties,
                 new DashboardAuditSampler(), CLOCK);
         service.validateConfiguration();
         return service;

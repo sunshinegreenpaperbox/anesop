@@ -13,13 +13,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *       device-offline-timeout-seconds: 120
  *       on-time-threshold-minutes: 15
  *       room-daily-available-minutes: 600
+ *       overdue-grace-minutes: 0
  *       audit-sample-seconds: 300
  * </pre>
  *
  * <p>所有阈值只允许**收紧**而不允许放宽到已确认/上游口径之外（启动校验 + 夹紧）：
  * 数据时效阈值最大 120s（方案书 §2.4.9“延迟超过 2 分钟须标注”）；准点阈值与
  * 设备离线阈值沿用 M2 的 15 分钟 / 120 秒默认值；术间每日可用分钟沿用 M1 排程分析的
- * 600 分钟默认值（【待确认】Q-3）。审计采样间隔 &gt; 0 时同一用户在该间隔内只写一条
+ * 600 分钟默认值（【待确认】Q-2）；超时宽限默认 0（计划时间一过即计入，可收紧到 0–120
+ * 分钟，【待确认】Q-5）。审计采样间隔 &gt; 0 时同一用户在该间隔内只写一条
  * {@code DASHBOARD_VIEW}，避免 10s 轮询刷屏；0 表示每次请求都写（仅测试/排障使用）。
  */
 @ConfigurationProperties(prefix = "anesop.m5.dashboard")
@@ -36,6 +38,9 @@ public class DashboardProperties {
 
     /** 每术间每日可用分钟数（利用率分母），与 M1 排程分析一致（【待确认】）。 */
     private int roomDailyAvailableMinutes = 600;
+
+    /** 超时台次判定宽限（分钟，0–120）：计划开始/结束超过该宽限仍未开始/未完成即计入。 */
+    private int overdueGraceMinutes = 0;
 
     /** 审计采样间隔（秒）：同一用户在该间隔内只写一条看板审计。 */
     private long auditSampleSeconds = 300;
@@ -70,6 +75,14 @@ public class DashboardProperties {
 
     public void setRoomDailyAvailableMinutes(int roomDailyAvailableMinutes) {
         this.roomDailyAvailableMinutes = roomDailyAvailableMinutes;
+    }
+
+    public int getOverdueGraceMinutes() {
+        return overdueGraceMinutes;
+    }
+
+    public void setOverdueGraceMinutes(int overdueGraceMinutes) {
+        this.overdueGraceMinutes = overdueGraceMinutes;
     }
 
     public long getAuditSampleSeconds() {
