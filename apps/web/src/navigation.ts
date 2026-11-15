@@ -153,6 +153,12 @@ export const appMenu: readonly MenuEntry[] = [
     permissions: ['m5:dashboard:read'],
   },
   {
+    path: '/m5/dashboard/risk',
+    title: '风险与资源大屏',
+    icon: 'lock',
+    permissions: ['m5:dashboard:read'],
+  },
+  {
     path: '/m0/sessions',
     title: '会话管理',
     icon: 'sessions',

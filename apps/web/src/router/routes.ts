@@ -32,6 +32,7 @@ import QcIndicatorView from '../modules/m4/views/QcIndicatorView.vue'
 import AdverseEventView from '../modules/m4/views/AdverseEventView.vue'
 import ChartReviewView from '../modules/m4/views/ChartReviewView.vue'
 import DashboardView from '../modules/m5/views/DashboardView.vue'
+import RiskDashboardView from '../modules/m5/views/RiskDashboardView.vue'
 import ForbiddenView from '../views/ForbiddenView.vue'
 import HomeView from '../views/HomeView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
@@ -275,6 +276,12 @@ export const routes: RouteRecordRaw[] = [
         name: 'm5-dashboard',
         component: DashboardView,
         meta: menuMeta('/m5/dashboard'),
+      },
+      {
+        path: 'm5/dashboard/risk',
+        name: 'm5-dashboard-risk',
+        component: RiskDashboardView,
+        meta: menuMeta('/m5/dashboard/risk'),
       },
       {
         path: 'm0/sessions',

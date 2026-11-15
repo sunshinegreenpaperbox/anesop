@@ -1,9 +1,19 @@
 import type { components } from '@anesop/contracts/dashboard'
 import { request } from '../../../api/http'
 
-/** 实时态势/KPI（dashboard.yaml 0.1.0 生成类型，禁止手写重复模型）。 */
+/** 看板（dashboard.yaml 0.2.0 生成类型，禁止手写重复模型）。 */
 export type RealtimeDashboard = components['schemas']['RealtimeDashboard']
 export type DashboardKpi = components['schemas']['DashboardKpi']
+export type RiskDashboard = components['schemas']['RiskDashboard']
+export type ResourceDashboard = components['schemas']['ResourceDashboard']
+export type TrendDashboard = components['schemas']['TrendDashboard']
+export type TrendPoint = components['schemas']['TrendPoint']
+export type AsaClass = components['schemas']['AsaClass']
+export type RiskLevel = components['schemas']['RiskLevel']
+export type Shift = components['schemas']['Shift']
+export type ResourceGap = components['schemas']['ResourceGap']
+export type ResourceGapCode = components['schemas']['ResourceGapCode']
+export type ResourceGapSeverity = components['schemas']['ResourceGapSeverity']
 export type RoomSituation = components['schemas']['RoomSituation']
 export type RoomStatus = components['schemas']['RoomStatus']
 export type CaseStatus = components['schemas']['CaseStatus']
@@ -12,6 +22,9 @@ export type DataScopeType = components['schemas']['DataScopeType']
 
 /** 前端轮询间隔（契约固定 10s；后端无状态，不使用 SSE/WebSocket）。 */
 export const REFRESH_INTERVAL_MS = 10_000
+
+/** 趋势缺省窗口（小时，契约 0.5–24，即 30–1440 分钟）。 */
+export const DEFAULT_TREND_HOURS = 24
 
 export const roomStatusLabels: Record<RoomStatus, string> = {
   IN_SURGERY: '手术中',
@@ -45,6 +58,41 @@ export const dataScopeLabels: Record<DataScopeType, string> = {
   SELF: '本人',
 }
 
+export const asaClassLabels: Record<AsaClass, string> = {
+  I: 'ASA I',
+  II: 'ASA II',
+  III: 'ASA III',
+  IV: 'ASA IV',
+  V: 'ASA V',
+  VI: 'ASA VI',
+}
+
+export const riskLevelLabels: Record<RiskLevel, string> = {
+  LOW: '低危',
+  MODERATE: '中危',
+  HIGH: '高危',
+}
+
+export const shiftLabels: Record<Shift, string> = {
+  DAY: '白班',
+  NIGHT: '夜班',
+  ON_CALL: '备班',
+}
+
+export const resourceGapLabels: Record<ResourceGapCode, string> = {
+  DEVICE_OFFLINE: '设备离线',
+  DEVICE_MAINTENANCE: '设备维护',
+  ROOM_OUT_OF_SERVICE: '停用术间',
+  ROOM_OVERLOADED: '排程超载',
+  STAFF_NOT_SCHEDULED: '当班人员为 0',
+  NO_VISIBLE_ROOM: '无可见术间',
+}
+
+export const resourceGapSeverityLabels: Record<ResourceGapSeverity, string> = {
+  INFO: '提示',
+  WARN: '关注',
+}
+
 /** 实时态势（术间/台次/告警/设备 + 数据延迟）。 */
 export function getRealtimeDashboard(): Promise<RealtimeDashboard> {
   return request<RealtimeDashboard>('/v1/dashboard/realtime')
@@ -54,6 +102,22 @@ export function getRealtimeDashboard(): Promise<RealtimeDashboard> {
 export function getDashboardKpi(date?: string): Promise<DashboardKpi> {
   const query = date ? `?${new URLSearchParams({ date }).toString()}` : ''
   return request<DashboardKpi>(`/v1/dashboard/kpi${query}`)
+}
+
+/** 风险分层（ASA/术前评分风险等级/未确认严重告警/超时台次；仅聚合计数）。 */
+export function getRiskDashboard(): Promise<RiskDashboard> {
+  return request<RiskDashboard>('/v1/dashboard/risk')
+}
+
+/** 资源态势（术间利用率与状态、设备在线率、当班人员、缺口提示）。 */
+export function getResourceDashboard(): Promise<ResourceDashboard> {
+  return request<ResourceDashboard>('/v1/dashboard/resources')
+}
+
+/** 告警/台次/利用率按小时趋势；hours 允许 0.5–24（缺省 24）。 */
+export function getDashboardTrends(hours: number = DEFAULT_TREND_HOURS): Promise<TrendDashboard> {
+  const query = new URLSearchParams({ hours: String(hours) }).toString()
+  return request<TrendDashboard>(`/v1/dashboard/trends?${query}`)
 }
 
 /** 本地自然日 YYYY-MM-DD（不使用 UTC 的 toISOString，避免跨时区错日）。 */
@@ -75,6 +139,14 @@ export function formatDelay(seconds: number | undefined): string {
   const minutes = Math.floor(value / 60)
   const rest = value % 60
   return rest === 0 ? `${minutes} 分钟` : `${minutes} 分 ${rest} 秒`
+}
+
+/** 时间戳（RFC 3339）→ 本地 HH:00（小时桶标签）；无效值返回 “—”。 */
+export function formatHour(value: string | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return '—'
+  return `${String(parsed.getHours()).padStart(2, '0')}:00`
 }
 
 /** 时间戳（RFC 3339）→ 本地 HH:MM:SS；无效值返回 “—”。 */
