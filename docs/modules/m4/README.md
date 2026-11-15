@@ -435,9 +435,9 @@
 
 - 新增 schema `m4_material`（V23）：`material`（主数据）、`material_stock`（批次库存）、
   `stock_movement`（append-only 流水）、`udi_instance`（一物一码）、`spd_sync_log`（EXT-03 留痕）。
-- 契约 `packages/contracts/openapi/material.yaml` 0.1.0（12 路径 / 15 operation / 22 schema）；
-  Java/TS 由契约生成（api-contracts 第 8 个 execution、`gen-contracts.sh`/`contract-check.sh`
-  DOMAINS 第 8 域）。
+- 契约 `packages/contracts/openapi/material.yaml` **0.2.0**（14 路径 / 17 operation / 26 schema；
+  0.2.0 = M8-M4-02 库存预警/阈值维护 additive）；Java/TS 由契约生成（api-contracts 第 8 个
+  execution、`gen-contracts.sh`/`contract-check.sh` DOMAINS 第 8 域）。
 - 与其他模块：**不建跨模块外键**；UDI 使用通过 m4-api 端口 `RecordVisibilityPort`
   （装配层 `M2RecordVisibilityAdapter` 用 `m2-api` `AnesthesiaRecordService.get` 实现）
   校验记录存在/可见，只保存 `record_id/schedule_id` 逻辑关联；不访问 m2 表，避免 m4→m2
@@ -448,8 +448,8 @@
 
 | 权限点 | 能力 | 最小授予（V23） |
 |---|---|---|
-| `m4:material:read` | 目录、批次库存、流水、UDI 追溯、SPD 状态 | SYS_ADMIN、SYS_OR_MANAGER、SYS_NURSE_ANESTHETIST |
-| `m4:material:write` | 目录维护、普通出入库、触发 SPD 同步 | SYS_ADMIN、SYS_OR_MANAGER |
+| `m4:material:read` | 目录、批次库存、流水、UDI 追溯、SPD 状态、**库存预警查询（0.2.0）** | SYS_ADMIN、SYS_OR_MANAGER、SYS_NURSE_ANESTHETIST |
+| `m4:material:write` | 目录维护、普通出入库、触发 SPD 同步、**库存阈值维护（0.2.0，审计 MATERIAL_THRESHOLD_UPDATE）** | SYS_ADMIN、SYS_OR_MANAGER |
 | `m4:udi:manage` | UDI 登记（逐件入库）、UDI 使用绑定 | SYS_ADMIN、SYS_OR_MANAGER、SYS_NURSE_ANESTHETIST |
 
 - 数据范围：目录全院可读；**批次库存/流水/UDI 实例按科室** ALL/SITE/DEPT 隔离，
@@ -488,6 +488,31 @@
 - 高值耗材：禁止裸数量 IN/OUT/ADJUST（422）；入库走 UDI 登记、使用走 UDI 使用、退回带 UDI。
 - 流水 append-only：UPDATE/DELETE/TRUNCATE 一律 55000；更正走反向 ADJUST + 原因。
 
+### 26.1 库存预警口径（material 0.2.0，M8-M4-02）
+
+- **数据来源**：`m4_material.material_stock`（批次库存快照）+ `material.low_stock_threshold`
+  （V28 新增，numeric(12,2)，**可空 = 不按阈值预警**）。阈值来源（日均消耗 × 采购周期 +
+  安全库存）与是否按科室分别配置 **【待确认】**（§32 Q-8），本期不内置默认值。
+- **粒度**：材料 × 科室。只统计 `material.status=ACTIVE` 且**存在库存行**的材料；从未入库的
+  耗材 × 科室不返回（避免“全目录 × 全科室”笛卡尔积空行，是否覆盖【待确认】）。
+- **三类预警**：
+  - `LOW_STOCK`：可用量（该科室批次数量合计）**严格低于**阈值；可用量 = 阈值时不预警；
+  - `ZERO_STOCK`：可用量合计 = 0（出空后库存行仍保留，故可判定）；
+  - `NEAR_EXPIRY`：存在数量 > 0 且效期 ≤ 今天 + **90 天**的批次（含已过期，`daysToExpiry` < 0）；
+    临期天数固定 90 天、不开放配置 **【待确认】**。
+- **建议补货量** `suggestedQuantity = max(0, 阈值 − 可用量)`；阈值缺失时为 null
+  （不臆造补货量），临期预警不产生补货量。
+- **查询** `GET /v1/materials/stock-alerts?departmentId=&alertType=&limit=`（`m4:material:read`）：
+  聚合与预警条件在 SQL `HAVING` 中判定（先过滤再 LIMIT，避免先截断后漏报）；排序固定为
+  零库存优先、材料名称、科室；`departmentId` 越界 403；SELF/ROOM/无科室维度 fail-closed 403。
+- **阈值维护** `PUT /v1/materials/{materialId}/low-stock-threshold`（`m4:material:write` +
+  科室数据范围 ALL/SITE/DEPT）：必须回传 `version`（过期 409）；`threshold` 为空/省略 = 清除阈值；
+  负数、超 2 位小数、超 numeric(12,2) 范围 400；审计 `MATERIAL_THRESHOLD_UPDATE`
+  （materialId/code/previousThreshold/threshold/version，失败路径写 result=0）。阈值端点与
+  主数据更新分离，避免 `PUT /v1/materials/{id}` 覆盖阈值。
+- 前端：`MaterialStockView` 展示预警标签（低库存/零库存/临期）与建议补货量，并支持按
+  `alertType` 服务端筛选。
+
 ## 27. UDI 一物一码与追溯口径
 
 - 内部规范编码 `udi = udiDi + "^" + udiPi`；数据库 `(lower(trim(udi_di)), lower(trim(udi_pi)))`
@@ -525,6 +550,7 @@
 | `UDI_REGISTER` | UDI 逐件登记 | udiDi/materialId/batchNo/departmentId/status |
 | `UDI_USE` | UDI 使用绑定 | udiDi/materialId/recordId/scheduleId/status |
 | `SPD_SYNC` | SPD 模拟同步 | adapterCode/mode/success/degraded |
+| `MATERIAL_THRESHOLD_UPDATE` | 维护库存预警阈值（V28） | materialId/code/previousThreshold/threshold/version |
 
 审计**不含 UDI 原文全串、患者信息、供应商凭据**；失败路径（400/409/422）写 `result=0`，
 `resourceId` 用 materialId 或 UDI-DI 摘要，detail 附 materialId/batchNo/movementType/udiDi，
@@ -536,7 +562,7 @@
 - `MaterialCatalogView.vue`（`/m4/materials`）：耗材目录列表/检索/新建/编辑（高值/效期标志）、
   启停（`PATCH .../status`，停用后历史只读）。
 - `MaterialStockView.vue`（`/m4/materials/stock`）：科室选择、批次库存、出入库登记、流水、
-  SPD 状态卡（触发模拟同步）。
+  SPD 状态卡（触发模拟同步）、**库存预警卡**（低库存/零库存/临期标签、建议补货量、按类型筛选）。
 - `MaterialTraceView.vue`（`/m4/materials/trace`）：扫码式 UDI 输入占位、追溯链展示、
   UDI 登记（逐件入库）、UDI 使用（绑定记录/台次）。
 - 菜单按 `m4:material:read` 显示；写操作按 `m4:material:write` / `m4:udi:manage` 隐藏。
@@ -546,7 +572,7 @@
 - m4-impl 单测：耗材目录 13、出入库 18、UDI 追溯 14、SPD 5、数据范围守卫 6（合计 56）；
   覆盖率（JaCoCo，`clean verify` 报告实测）：m4-impl 合计行 92.66%、分支 72.53%；
   新增四个实现类行覆盖 94.17%–97.40%、分支 66.67%–87.50%。
-- 集成（`M4MaterialApiIntegrationTest` 9 例 + `M4MaterialSpdDegradedApiIntegrationTest` 1 例，
+- 集成（`M4MaterialApiIntegrationTest` 10 例 + `M4MaterialSpdDegradedApiIntegrationTest` 1 例，
   真实嵌入式 PG16）：主数据唯一/搜索/乐观锁/权限 403、启停端点与幂等；数量不足 409 + details、
   同批次效期不一致 409、过期批次 OUT 422、数量 scale 400、ADJUST 原因 400、高值裸数量 422、
   append-only 55000；UDI 重复登记/重复使用 409、UDI-DI 不一致 422、组合长度 160/161 边界、
@@ -554,10 +580,16 @@
   DEPT/ROOM 数据范围与 404、SPD 状态 ROOM 403；失败审计可定位（udiDi 摘要/批次，不含 UDI 全串）；
   SPD 成功/降级 + 审计 + 日志；V23 表/权限/最小授权/索引/触发器（material version、UDI 身份列/
   终态/非法迁移）/CHECK。
-- 前端：Vitest 13 例（目录 5 / 出入库 4 / UDI 追溯 4）；E2E `apps/web/e2e/m4-material.spec.ts`
+- 前端：Vitest 15 例（目录 5 / 出入库 6（含 0.2.0 预警 2）/ UDI 追溯 4）；E2E `apps/web/e2e/m4-material.spec.ts`
   1 条（UDI 登记入库 → 绑定记录使用 → 追溯链 → SPD 状态卡）。
+- 0.2.0 库存预警（M8-M4-02）：m4-impl 单测 `MaterialAlertServiceImplTest` 16 例（阈值严格边界
+  9.99/10、零库存、临期与已过期为负天数、建议补货量、类型过滤、limit/alertType 400、
+  DataScope 403、科室名回退、阈值维护乐观锁/校验/审计/404/403）；集成
+  `M4MaterialApiIntegrationTest#stockAlertsCoverThresholdZeroStockNearExpiryAndDataScope`
+  （真实嵌入式 PG16 + V28）：三类预警与建议补货量、阈值边界改判、负数 400、过期版本 409、
+  ROOM 403、DEPT 可维护、审计 MATERIAL_THRESHOLD_UPDATE；前端 Vitest 2 例 + 既有 4 例通过。
 - 契约：`bash scripts/gen-contracts.sh`、`--java`、`bash scripts/contract-check.sh`
-  （spectral/breaking/HEAD baseline/drift，8 域）全 PASS。
+  （spectral/breaking/HEAD baseline/drift，12 域）全 PASS。
 
 ## 32. 待确认（耗材域 Q）
 
@@ -572,11 +604,19 @@
 7. **Q-7 院内退库/复库**：本期 RETURN 只表示“退回供应商/中心库”（UDI 终态 RETURNED，单向）；
    退回二级库后复库再用、退库后重新入库是否复用原 UDI/批次/效期、是否需退库单与审批，
    待院方确认（ADR-0020 Q-6）；确认前不得用 RETURN + 重新登记绕过一物一码终态（Q-7）。
+8. **Q-8 库存预警阈值与临期天数**（M8-M4-02）：阈值来源（日均消耗 × 采购周期 + 安全库存的
+   计算规则）、是否需要**按科室**分别配置（当前为耗材主数据上的全院单值）、临期天数是否按
+   高值/普通耗材区分（当前固定 90 天）、预警渠道（页面/消息中心/短信）与提醒频率，
+   均待院方（医务/耗材管理）确认；确认前不得把阈值或临期天数写死为默认值。
 
 ## 33. 报表域数据归属与边界（E-M16）
 
-- **无独立 schema/表**：V24 是 **data-only** 迁移（只加权限点，无 DDL）；工作量与多维报表
-  都是对既有数据的**只读聚合**，不落库缓存、不建物化视图（ADR-0021）。
+- **无独立 schema/表（实时口径）**：V24 是 **data-only** 迁移（只加权限点，无 DDL）；工作量与
+  多维报表都是对既有数据的**只读聚合**，不落库缓存、不建物化视图（ADR-0021）。
+- **锁定快照（report 0.2.0，V28）**：新增 `m4_report.report_snapshot`（append-only）承载
+  “报表类型 + 期间 + 归一化参数（含数据范围指纹）”对应的聚合结果；**锁定后同参数查询/导出
+  默认读快照**（`source=SNAPSHOT`），源数据变化不影响已锁定值；未锁定参数仍实时聚合
+  （`source=LIVE`）。快照不是实时读模型，只有显式锁定才写入。
 - **统计单元**：M1 排程台次（`m1_sched.schedule` + `surgery_application`）、M2 麻醉记录单
   （`m2_anes.anesthesia_record` 的 `started_at/ended_at/created_by`）、M4 人员档案
   （`m4_staff.staff_profile` 的 `user_id/staff_no/name`，用于 STAFF 维度）。
@@ -584,16 +624,17 @@
   用**单条只读 SELECT** 投影（不依赖 m1/m2 的 Mapper/实体，不写任何表，不做时区换算）；
   m4-impl 只依赖端口，不依赖 m1/m2，避免模块环（ArchUnit 覆盖）。这是 M4-M14-01
   `RecordVisibilityPort` 之后的第二个装配层端口。
-- 契约：`packages/contracts/openapi/report.yaml` 0.1.0（3 路径 / 3 operation / 8 schema，
-  第 9 域）；Java/TS 由契约生成（api-contracts 第 9 个 execution、gen-contracts /
-  contract-check DOMAINS 第 9 域）。
+- 契约：`packages/contracts/openapi/report.yaml` **0.2.0**（5 路径 / 6 operation / 11 schema，
+  第 9 域；0.2.0 = M8-M4-02 锁定/快照 additive）；Java/TS 由契约生成（api-contracts 第 9 个
+  execution、gen-contracts / contract-check DOMAINS 第 9 域）。
 
 ## 34. 权限与数据范围
 
 | 权限点 | 能力 | 最小授予（V24） |
 |---|---|---|
-| `m4:report:read` | 工作量统计、多维报表 | SYS_ADMIN、SYS_OR_MANAGER、SYS_QC_MANAGER |
+| `m4:report:read` | 工作量统计、多维报表、锁定列表/详情（元数据） | SYS_ADMIN、SYS_OR_MANAGER、SYS_QC_MANAGER |
 | `m4:report:export` | CSV 导出（另写审计 `REPORT_EXPORT`） | SYS_ADMIN、SYS_OR_MANAGER、SYS_QC_MANAGER |
+| `m4:report:lock` | 报表数据锁定（生成 append-only 快照，V28） | SYS_ADMIN、SYS_OR_MANAGER、SYS_QC_MANAGER |
 
 - 数据范围（fail-closed）：`ALL` 全院；`SITE`/`DEPT` 按台次申请科室（或院区）；
   `ROOM` 按术间；`SELF` 只含**本人创建麻醉记录单**的台次。
@@ -644,12 +685,31 @@
 - 审计：导出 `REPORT_EXPORT`（detail：report/format/日期/维度/指标/行数），查询 `REPORT_QUERY`；
   detail 不含 PHI。
 
+### 37.1 锁定快照（report 0.2.0，M8-M4-02）
+
+- **端点**：`POST /v1/reports/locks`（`m4:report:lock`）生成快照；`GET /v1/reports/locks`
+  与 `GET /v1/reports/locks/{lockId}`（`m4:report:read`）返回元数据（不含 payload，快照数据
+  通过同参数查询/导出获取）。
+- **期间**：`period` 支持 `YYYY-MM`（整月，含首尾）或 `YYYY-MM-DD~YYYY-MM-DD`（闭区间），
+  也可用 `from`+`to`；`period` 与 `from`+`to` 只能二选一（都给/都不给 400），跨度 ≤ 366 天。
+- **参数指纹**：`params = {report, from, to, deptId, dimension|dimensions, metrics, scope}` 规范化
+  JSON 的 sha256；分页 `page/size` 不参与（不同页命中同一快照）。`scope` 为数据范围指纹
+  （ALL 或“类型:对象”排序串，SELF 含调用者标识）——**不同数据范围不共用快照**，避免跨范围读数。
+- **快照 payload**：workload 存完整 `WorkloadReport`（维度桶 + 术式分布）；multi 存**全部分组行**
+  与合计，查询按 `page/size` 在快照全量行上重放分页；payload 只含聚合值与维度标签，不含患者标识。
+- **锁定后查询/导出**：命中快照时响应 `source=SNAPSHOT` 并返回 `lockId/lockedAt`；导出
+  `X-Report-Source: SNAPSHOT`，审计 `REPORT_EXPORT` 附 `source` 与 `lockId`；未命中为 `LIVE`。
+- **重复锁定 409**：同一 `(report, period, params_hash)` 已存在快照即 409（服务层预检 +
+  数据库唯一键并发兜底）；快照 append-only（UPDATE/DELETE/TRUNCATE 一律 55000），
+  **不提供解锁端点**；解锁/重出数流程与保留期 **【待确认】**（§41 Q-9）。
+
 ## 38. 审计
 
 | 动作 | 触发 | detail（白名单） |
 |---|---|---|
 | `REPORT_QUERY` | 工作量/多维查询 | report、from、to、timezone、deptId?、dimension(s)、metrics、group/bucketCount、caseCount |
-| `REPORT_EXPORT` | CSV 导出（成功） | report、format、from、to、timezone、deptId?、dimension(s)、metrics、dataRows/groupCount |
+| `REPORT_EXPORT` | CSV 导出（成功） | report、format、from、to、timezone、deptId?、dimension(s)、metrics、dataRows/groupCount、**source**（LIVE/SNAPSHOT）、lockId? |
+| `REPORT_LOCK` | 报表锁定（V28） | report、period、from、to、paramsHash、payloadHash、rowCount、dataScope |
 
 审计只记聚合与筛选条件，不记患者标识、不记 SQL、不记人员姓名。
 
@@ -658,10 +718,12 @@
 - `/m4/reports`（权限 `m4:report:read`）：日期范围（默认近 30 天）、工作量维度选择、多维维度/
   指标多选、科室筛选（DEPT 桶派生）、查询、工作量汇总卡 + 维度表（含术式分布）、多维表
   （含动态指标列、合计与分页）；导出按钮仅 `m4:report:export` 可见。
+- **锁定（0.2.0）**：`锁定当前报表` 按钮仅 `m4:report:lock` 可见，按当前工作量参数锁定；
+  命中快照时展示 `快照` 标识（`lockId`/`lockedAt`）；同参数重复锁定提示 409 文案。
 - 前端预校验跨度 ≤ 366 天与维度/指标非空；服务端仍为权威校验（400 文案直接展示）。
 - 空数据展示空态；403/错误展示统一 `ApiError`（code + traceId）；无权限展示权限态不发请求。
-- Vitest 7 例（加载/权限态/只读/错误/空态/两种导出）；E2E 1 条（筛选切换 → 查询 → 导出工作量 CSV）
-  + 1 条无权限 403 守卫。
+- Vitest 8 例（加载/权限态/只读/错误/空态/两种导出/锁定后快照标识）；E2E 2 条（筛选切换 →
+  查询 → 导出工作量 CSV；锁定 → 同参数查询快照标识）+ 1 条无权限 403 守卫。
 
 ## 40. 测试与验收
 
@@ -670,7 +732,7 @@
   DataScope（denied/DEPT 空/DEPT 过滤/SELF/越界 403）、CSV BOM/列头/行数/防注入/无 PHI、
   空数据 0、权重启动校验、`minutes`/`hasDuration`/`isFormulaRisk` 边界；装配层
   `ReportCaseSourceAdapterTest` 2 例（空范围 fail-closed、null 过滤器不查库）。
-- 集成（`M4ReportApiIntegrationTest`，真跑嵌入式 PG16 + Flyway V1–V24，6 例）：固定 SYNTHETIC
+- 集成（`M4ReportApiIntegrationTest`，真跑嵌入式 PG16 + Flyway V1–V28，7 例）：固定 SYNTHETIC
   台次/记录单手算对照（3 台次/215 分钟/3.5 加权/1 无时长；契约示例为另一组合成数据
   3 台次/180 分钟）、DEPT/SELF 数据范围与越界 403、
   STAFF 工号+姓名与兜底桶、多维分页与合计、CSV BOM/列头/6 数据行/`'=SUM(1,2)` 防注入/
@@ -678,8 +740,18 @@
 - 性能（本机基线 2026-11-15）：5000 台次 / 366 天区间应用内聚合 **约 60ms（实测 59–63ms）**
   （单测 benchmark，断言 < 5000ms）；接口端到端为单条索引扫描 SQL + 同一聚合路径，
   距“月度报表 < 10s”留有余量。
+- 0.2.0 报表锁定（M8-M4-02）：`ReportLockServiceImplTest` 18 例（锁定快照元数据/月边界含闰二月/
+  from+to 标签/params 与 scope 指纹/命中快照不查库且手算值不变/不同参数与不同范围仍实时/
+  多维分页重放/导出快照与 LIVE 来源/重复锁定 409（预检 + 唯一键）/period 与 from+to 互斥/
+  跨度 366/白名单/denied 403/payload 损坏 fail-closed/列表详情 404/canonical 稳定性）；
+  集成 `M4ReportApiIntegrationTest#reportLockFreezesSnapshotAndExportReadsSnapshot`
+  （真实 PG16 + V28）：锁定后新增台次但查询/导出仍为 3 台次 215 分钟、`X-Report-Source`、
+  重复锁定 409、列表/详情/404、append-only 55000、REPORT_LOCK/REPORT_EXPORT(source) 审计、
+  无 `m4:report:lock` 403、V28 权限与 3 条授权。前端 Vitest 1 例（锁定后快照标识）+
+  E2E 1 条（锁定 → 同参数查询快照标识）。
 - 覆盖率（本机 JaCoCo，2026-11-15）：报表包行 **95.4%**、分支 **80.4%**（目标 ≥80%/≥70%），
-  m4-impl 模块整体行 93.0%、分支 73.7%；契约 3 个端点 100% 有用例。
+  m4-impl 模块整体行 93.0%、分支 73.7%；契约 3 个端点 100% 有用例（0.2.0 新增 3 个端点同样有
+  单测/集成用例）。
 
 ## 41. 待确认（报表域 Q）
 
@@ -702,6 +774,10 @@
 8. **报表域 Q-8 workload 导出上限**（评审 Q-3）：当前仅多维导出有 50000 行硬上限；工作量导出
    为“TOTAL + 维度桶 + 术式分布”，行数受维度基数与每桶 50 项术式分布约束，未设统一行数上限。
    是否统一设置上限（如 50000 行）或按桶数/台次预检，待压测与院方确认。
+9. **报表域 Q-9 快照保留期与解锁流程**（M8-M4-02）：快照 append-only、当前无自动清理与解锁/
+   重出数端点；保留期（月报通常按会计年度）、归档到 MinIO 的策略、是否需要“解锁并重出数
+   （新版本）”与审批、是否提供“强制实时（忽略快照）”查询参数，待院方与财务口径确认；
+   确认前不得物理删除快照，也不得用同参数覆盖已有快照。
 
 ## 42. 质控域数据归属与边界（E-M17）
 

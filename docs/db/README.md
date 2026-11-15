@@ -48,6 +48,7 @@ db/
 │   ├── V22__m4_staff_authorization_governance.sql  # 授权双人审批/撤销时点 + SYS_AUTH_MANAGER（M4-M13-01 评审）
 │   ├── …（V23–V26：M4 耗材/报表/质控与 M5 看板权限点，回滚见 §4.18–§4.21）
 │   ├── V27__m0_dict_message_file.sql       # m0_platform 消息/文件元数据 + 字典读索引 + m0 字典/消息/文件权限点（M8-M0-04）
+│   ├── V28__m4_alerts_report_lock.sql      # material.low_stock_threshold + m4_report.report_snapshot + m4:report:lock（M8-M4-02）
 │   └── ../seed/demo/V101__demo_drug_synthetic.sql # 演示药品 3 条（仅 dev/test/uat）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
@@ -73,7 +74,8 @@ db/
 | `m2_anes` | M2 麻醉记录 | 术前访视（V10）、知情同意/三方核查（V11）、记录单/事件/用药/出入量（V13）、设备登记与体征（V4/V14）、预警/抢救（V15/V16）、锁单/修订（V17）、复苏记录/Aldrete/转出（V18）、术后随访/镇痛（V19） |
 | `m4_staff` | M4 人员档案与分级授权（方案书 M3 人员管理，一期由 M4-M13-01 落地） | 人员档案/执业资质、分级授权（append-only 历史 + 当前视图）、排班、培训（V21）；授权治理列/角色（V22） |
 | `m4_drug` | M4 药品目录与麻精五专 | 药品目录/别名、专册、专柜交接、基数、日结、药房适配器日志（V20） |
-| `m4_supply` | M4 耗材追溯 | 批次、消耗 |
+| `m4_material` | M4 耗材（方案书 §2.5） | 耗材主数据（V28 增库存预警阈值 `low_stock_threshold`）、批次库存、出入库流水（append-only）、UDI 实例、SPD 适配器日志（V23/V28） |
+| `m4_report` | M4 报表（M8-M4-02） | 报表锁定快照 `report_snapshot`（append-only、唯一 `(report, period, params_hash)`；V28） |
 | `m5_drug` | M5 药品管理 | 麻精台账、处方 |
 | `m6_stats` | M6 工作量统计 | 统计周期与结果 |
 | `m7_qc` | M7 质量控制 | 指标、不良事件 |
@@ -799,6 +801,54 @@ V1 `uk_sys_dict_item_type_code (dict_type_id, code)`（同类型内编码唯一�
   只存 `business_type` + `business_id`（逻辑关联），不建跨 schema 外键，避免模块间数据库耦合。
 - **已知边界**：V27 权限点 UUID 使用 `b...86–b...8a`（`b...80–b...85` 已被 V21/V22 占用）；
   权限点插入**不使用** `ON CONFLICT DO NOTHING`，ID/编码冲突会让迁移 fail-fast，避免“静默少授权”。
+
+### 4.23 V28（M4 耗材库存预警阈值 + 报表数据锁定快照）回滚说明
+
+V28 是 **DDL + data-only 混合**迁移（M8-M4-02，收口 FINAL-REPORT §6.2 两项遗留）：
+- `ALTER TABLE m4_material.material ADD COLUMN low_stock_threshold numeric(12,2)`（可空 =
+  不按阈值预警；`CHECK low_stock_threshold IS NULL OR low_stock_threshold >= 0`）；
+- 新增 schema `m4_report` 与表 `m4_report.report_snapshot`（报表锁定快照，append-only，
+  唯一 `(report, period, params_hash)`，`params/payload jsonb` + sha256 哈希列）；
+- 新增权限点 `m4:report:lock`（最小授予 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER）。
+
+不改写 V1–V27 既有表结构、列、数据、权限与角色；耗材预警复用既有 `m4:material:read|write`，
+报表锁定列表/详情复用 `m4:report:read`。
+
+- **表与约束**：
+  - `m4_material.material.low_stock_threshold`：`numeric(12,2)`，可空；非空时 ≥ 0。
+    挂在耗材主数据上（全院一个阈值）；**按科室配置与阈值来源【待确认】**（未预置默认值）。
+  - `m4_report.report_snapshot`：`report`（workload/multi CHECK）、`period`
+    （`YYYY-MM` 或 `YYYY-MM-DD~YYYY-MM-DD`，非空 CHECK）、`from_date`/`to_date`
+    （CHECK `to_date >= from_date`）、`params`/`payload`（jsonb NOT NULL）、`params_hash`/
+    `payload_hash`/`scope_hash`（`^[0-9a-f]{64}$` CHECK）、`data_scope`（≤32）、`row_count`
+    （≥0）、`locked_by`/`locked_by_name`、`locked_at`；唯一 `uk_report_snapshot_params
+    (report, period, params_hash)`；索引 `(report, params_hash)` 供同参数命中、
+    `(from_date, to_date)` 供期间检索。
+  - append-only：`trg_report_snapshot_no_update/no_delete`（行级）与
+    `trg_report_snapshot_no_truncate`（语句级）调用 `m4_report.fn_reject_mutation()`/
+    `fn_reject_truncate()`，一律 55000。运行账号不得拥有 DDL 权限（否则可先 DISABLE TRIGGER），
+    迁移使用独立 DDL 账号（同 V23 约定，见 §5.3）。
+  - **保留期【待确认】**：不自动清理、不物理删除；归档 MinIO 与保留年限待院方/财务确认。
+- **权限点**：`m4:report:lock`（`POST /api/v1/reports/locks`）→ SYS_ADMIN/SYS_OR_MANAGER/
+  SYS_QC_MANAGER；UUID 使用 `b0000000-0000-4000-8000-00000000008b`（`…79` 已被 V25 质控占用，
+  `…80–…8a` 已被 V21/V22/V27 占用）。插入使用 `ON CONFLICT DO NOTHING` 仅为演练可重复执行，
+  迁移末尾 DO 块自检表/函数/触发器/权限/授权齐全，缺失即 fail-fast。
+- **应用回滚**：下线 `/v1/reports/locks*` 与 `/v1/materials/stock-alerts` 端点、前端
+  「锁定当前报表」按钮与库存预警卡；报表回到纯实时聚合；库存阈值列保留但不参与业务
+  （不影响出入库/UDI/流水）。应用回滚**不需要**删除快照。
+- **库层回滚**（需 DBA 审批 + 备份 + 先导出 `report_snapshot` 并校验行数，顺序不可颠倒）：
+  1. `DROP TRIGGER ... trg_report_snapshot_no_update / no_delete / no_truncate`；
+  2. `DROP FUNCTION m4_report.fn_reject_mutation();`、`fn_reject_truncate();`
+  3. `DROP TABLE m4_report.report_snapshot;`、`DROP SCHEMA IF EXISTS m4_report;`
+  4. `ALTER TABLE m4_material.material DROP CONSTRAINT ck_material_low_stock_threshold;`
+     `ALTER TABLE m4_material.material DROP COLUMN IF EXISTS low_stock_threshold;`
+  5. `DELETE FROM sys_role_permission WHERE permission_id = '...08b';`
+     `DELETE FROM sys_permission WHERE code = 'm4:report:lock';`
+- **令牌影响**：`m4:report:lock` 进入 JWT claim，回滚后需重新登录（或等令牌过期）使锁定端点
+  真正不可达。
+- **为什么快照不建在 m6_stats**：V24 说明曾预留“m6_stats 读模型与锁定表”；本期按模块边界落在
+  `m4_report`（报表域归 M4），避免为一张 append-only 快照新建跨里程碑 schema 归属争议；
+  若后续绩效域需要独立报表库，再以新迁移搬移（expand-contract），不修改本表语义。
 
 ## 5. 运行方式
 

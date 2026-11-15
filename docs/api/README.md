@@ -1,7 +1,7 @@
 # API 契约（OpenAPI 3.1）
 
-> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD + M4-M16-01 工作量/多维报表/导出 + M4-M17-01 质控指标/不良事件 RCA/病历抽查/上报导出 + M5-M18-01 实时态势与 KPI 看板 + M5-M18-02 风险与资源大屏 + M8-M0-04 字典/消息/文件（platform 0.2.0）
-（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.1.0`、`report 0.1.0`、`qc 0.1.0`、`dashboard 0.2.0`、`platform 0.2.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
+> 状态：S0-05 契约基线 + M2-M0-01 数据范围 + M2-M0-02 用户管理 + M2-M1-01 手术申请 + M2-M2-01 排程工作台 + M2-M2-02 停改台/急诊加台 + M2-M4-01 术前访视与评估 + M2-M5-01 知情同意与三方核查 + M2-M6-01 排程分析 + M3-M2-01 麻醉记录单/时间轴 + M3-M8-01 设备采集接入 + M3-M2-02 术中预警与抢救记录 + M3-M2-03 锁单/修订/CA 签名（模拟） + M3-M10-01 复苏记录与转出（Aldrete/SBAR） + M3-M11-01 术后随访与镇痛 + M4-M15-01 药品目录与麻精五专（含 M3 T-4 收口） + M4-M13-01 人员档案/分级授权/排班/培训 + M4-M14-01 耗材/UDI/SPD + M4-M16-01 工作量/多维报表/导出 + M4-M17-01 质控指标/不良事件 RCA/病历抽查/上报导出 + M5-M18-01 实时态势与 KPI 看板 + M5-M18-02 风险与资源大屏 + M8-M0-04 字典/消息/文件（platform 0.2.0） + M8-M4-02 耗材库存预警/报表锁定（material 0.2.0 / report 0.2.0）
+（`auth 0.5.0`、`patient 0.3.0`、`scheduling 0.6.0`、`anesthesia 0.10.0`、`device 0.1.0`、`drug 0.1.0`、`staff 0.1.1`、`material 0.2.0`、`report 0.2.0`、`qc 0.1.0`、`dashboard 0.2.0`、`platform 0.2.0`）。契约是接口的唯一事实源，前端 `apps/web/src/api/generated/` 与后端 DTO 都必须由契约派生，禁止手改生成物。
 >
 > 事实来源：方案书 §3.4（领域模型）、§3.5（接口与集成）、§3.9.2（RBAC 与数据权限）、§2.4.1（M0）、§2.4.2（M1）、§2.4.3（M2）。
 
@@ -38,12 +38,12 @@ packages/contracts/
 | `device.yaml` | 4 | 5 | 设备登记与术间绑定（唯一 gatewayId+deviceId）、网关批量上报（batchKey 批次幂等 + 行级唯一键）、体征窗口查询（质量过滤/分页）、设备离线判定与采集健康摘要 | §3.6、§3.6.5 |
 | `drug.yaml` | 10 | 15 | 药品目录（列表/检索/详情/创建/更新）、五专科室选择、麻精专册登记、专柜交接、基数维护、日结/班结（平账）、药房适配器状态（EXT-02 SIMULATED） | §2.5、§3.4、§3.9.2 |
 | `staff.yaml` | 10 | 15 | 人员档案（列表/详情/创建/更新）、科室选项、分级授权（当前 + append-only 历史、授予/撤销、授权校验）、排班（查询/新建/更新/取消、冲突检测）、培训（查询/登记/到期提醒） | §2.4.4、§3.4.1、§3.9.2 |
-| `material.yaml` | 12 | 15 | 耗材目录（列表/检索/详情/创建/更新/启停）、科室选项、批次库存、出入库（IN/OUT/RETURN/ADJUST）、UDI 实例登记/使用/追溯链、SPD 适配器状态与模拟同步（EXT-03） | §2.5、§3.4、§3.9.2 |
-| `report.yaml` | 3 | 3 | 工作量统计（台次/麻醉时长/加权台次/术式分布）、多维报表（组合维度 + 指标 + 分页 + 全量合计）、报表 CSV 导出（BOM/脱敏/防公式注入） | §2.4.7、§2.7.2、§3.8.1 |
+| `material.yaml` | 14 | 17 | 耗材目录（列表/检索/详情/创建/更新/启停）、科室选项、批次库存、出入库（IN/OUT/RETURN/ADJUST）、UDI 实例登记/使用/追溯链、SPD 适配器状态与模拟同步（EXT-03）、**0.2.0 库存预警（低阈值/零库存/临期 90 天 + 建议补货量）与阈值维护** | §2.5、§3.4、§3.9.2 |
+| `report.yaml` | 5 | 6 | 工作量统计（台次/麻醉时长/加权台次/术式分布）、多维报表（组合维度 + 指标 + 分页 + 全量合计）、报表 CSV 导出（BOM/脱敏/防公式注入）、**0.2.0 报表数据锁定/快照（锁定列表/详情、同参数查询/导出读快照）** | §2.4.7、§2.7.2、§3.8.1 |
 | `qc.yaml` | 9 | 11 | 质控指标定义/周期结果（分子/分母/达标/版本）、不良事件登记与 RCA 分阶段闭环、病历质量抽查评分与整改闭环、上报脱敏 CSV 导出 | §2.9、§2.9.2、§2.5.3 I-10 |
 | `dashboard.yaml` | 5 | 5 | 实时态势（术间状态/台次进度/未确认与严重告警/设备在线/数据延迟）、当日运营 KPI（台次/准点/取消/利用率/告警/平均麻醉时长；口径复用 M2-M6-01 与 M4 report）、风险分层（0.2.0：ASA/术前评分风险等级/未确认严重告警/超时台次，仅计数）、资源态势（0.2.0：术间利用率与状态、设备在线率、当班人员（班组）、缺口提示）、按小时趋势（0.2.0：告警/台次/利用率，30–1440 分钟窗口） | §2.4.9、E-M18 |
 | `platform.yaml` | 10 | 11 | 字典类型/字典项查询与维护（全院读、管理员写、逻辑停用）、站内消息（仅本人、内部发布器写入）、文件上传/下载/元数据（类型/大小白名单、无 PHI、本地 FS 适配器 + MinIO 占位 EXT-06） | §2.4.1、§3.9.2、§3.9.3 |
-| **合计** | **132** | **171** | 12 个限界上下文骨架 | — |
+| **合计** | **136** | **176** | 12 个限界上下文骨架 | — |
 
 每份契约均定义共享组件：`Error`（`code/message/traceId/details`）、`PageMeta`、`AuditFields`（`createdAt/createdBy/updatedAt/updatedBy/version`）、`IdResponse`（按域按需定义，auth 已移除未使用组件），以及 `401 Unauthorized`、`403 Forbidden`、`400 BadRequest`、`404 NotFound`、`409 Conflict`、`422 UnprocessableEntity` 响应组件。各域只保留实际使用到的组件，`oas3-unused-component` 保持 0 warning。
 
@@ -614,6 +614,23 @@ packages/contracts/
   SELF/ROOM fail-closed 403。最小实现与待确认项见 `docs/modules/m4/README.md` §23–§32 与 ADR-0020。
 - **示例**：全部 SYNTHETIC（演示耗材/UDI/批次/操作人），不含真实患者标识。
 
+### 3.15.1 耗材 0.2.0 增量：库存预警与阈值维护（M8-M4-02）
+
+> material **0.2.0** 为 **additive**（14 路径 / 17 operation / 26 schema）；`baseline/material.yaml`
+> 同步为 0.2.0，`oasdiff`（baseline → 当前、HEAD baseline → 当前）无破坏性变更。
+> 阈值来源、按科室粒度与临期天数【待确认】（`docs/modules/m4/README.md` §32 Q-8）。
+
+- **库存预警**（`m4:material:read`）：`GET /v1/materials/stock-alerts?departmentId=&alertType=&limit=`。
+  材料 × 科室 粒度；`alertTypes` ∈ `LOW_STOCK`（可用量严格低于阈值）/`ZERO_STOCK`（合计 0）/
+  `NEAR_EXPIRY`（存在数量 > 0 且效期 ≤ 今天 + 90 天的批次，含已过期为负天数）；
+  `suggestedQuantity = max(0, 阈值 − 可用量)`，阈值缺失为 null；按零库存优先、材料名称、科室排序。
+  数据范围 ALL/SITE/DEPT；SELF/ROOM/无科室维度 403；limit 1–200、alertType 非法 400。
+- **阈值维护**（`m4:material:write`）：`PUT /v1/materials/{materialId}/low-stock-threshold`，
+  body `{threshold: number|null, version}`；阈值可空 = 不按阈值预警（清除）；乐观锁 version
+  过期 409；负数/超 2 位小数/超 numeric(12,2) 400；不存在 404；审计
+  `MATERIAL_THRESHOLD_UPDATE`。`Material` schema 新增可空 `lowStockThreshold`（响应回显）。
+- **示例**：SYNTHETIC（演示耗材/科室/数量与效期）。
+
 ### 3.16 工作量统计、多维报表与导出（M4-M16-01，report 0.1.0 新增域）
 
 > 0.1.0 是**新增域**（3 条路径 / 3 个 operation / 8 个 schema，第 9 域），不改动既有八份
@@ -647,6 +664,26 @@ packages/contracts/
   multi，不新增权限码）。统计单元为只读投影（不新建报表表），口径与待确认项见
   `docs/modules/m4/README.md` §33–§41 与 ADR-0021。
 - **示例**：全部 SYNTHETIC（演示科室/术间/术式/人员工号与聚合值），不含真实患者标识。
+
+### 3.16.1 报表 0.2.0 增量：数据锁定与快照（M8-M4-02）
+
+> report **0.2.0** 为 **additive**（5 路径 / 6 operation / 11 schema）；`baseline/report.yaml`
+> 同步为 0.2.0，`oasdiff`（baseline → 当前、HEAD baseline → 当前）无破坏性变更。
+> 快照保留期、解锁/重出数与“强制实时”口径【待确认】（`docs/modules/m4/README.md` §41 Q-9）。
+
+- **锁定**（`m4:report:lock`）：`POST /v1/reports/locks`，body
+  `{report: workload|multi, period? | from+to, deptId?, dimension?, dimensions?, metrics?}`。
+  `period` 为 `YYYY-MM`（整月）或 `YYYY-MM-DD~YYYY-MM-DD`（闭区间），与 `from+to` 二选一；
+  跨度 ≤ 366 天；把「报表类型 + 期间 + 归一化参数（含数据范围指纹）」的聚合结果写入
+  append-only 快照，返回 `ReportLock` 元数据（lockId/period/from/to/params/paramsHash/
+  payloadHash/dataScope/rowCount/lockedBy/lockedByName/lockedAt）。同参数重复锁定 **409**。
+- **锁定列表/详情**（`m4:report:read`）：`GET /v1/reports/locks?report=&limit=`、
+  `GET /v1/reports/locks/{lockId}`（不存在 404）；只返回元数据，不含 payload。
+- **锁定后查询/导出**：`GET /v1/reports/workload|multi` 与 `/export` 在参数（含数据范围）命中
+  快照时返回快照值，响应字段 `source=SNAPSHOT` + `lockId/lockedAt`（未命中 `source=LIVE`）；
+  导出响应头 `X-Report-Source`，审计 `REPORT_EXPORT` 附 `source`。分页不参与参数指纹。
+- **审计**：锁定写 `REPORT_LOCK`（period/paramsHash/payloadHash/rowCount/dataScope），不含 PHI。
+- **示例**：SYNTHETIC（演示期间/参数/哈希与锁定人）。
 
 ### 3.17 质控指标、不良事件 RCA、病历抽查与上报导出（M4-M17-01，qc 0.1.0 新增域）
 

@@ -95,10 +95,68 @@ export interface paths {
      *       必要时按 **RFC 4180** 加双引号并转义内部引号；
      *     - 脱敏：只含科室/术间/术式/院内在册人员工号与姓名与聚合值，**不含**任何患者标识
      *       （姓名、住院号、院内患者号、身份证号、手机号、术前诊断、HIS 申请号）；
-     *     - 导出写审计 `REPORT_EXPORT`（detail 仅 report/格式/日期/维度/指标/数据行数）；
+     *     - **锁定优先**：若该报表类型与参数（含数据范围）已锁定，导出**默认使用快照**
+     *       （`source=SNAPSHOT`，与当前源数据变化无关），否则实时聚合（`source=LIVE`）；
+     *       来源同时写入响应头 `X-Report-Source` 与审计 `REPORT_EXPORT.source`；
+     *     - 导出写审计 `REPORT_EXPORT`（detail 仅 report/格式/日期/维度/指标/数据行数/source）；
      *     - 参数校验与数据范围解析在任何字节写出前完成，非法参数仍返回 JSON 400/403。
      */
     get: operations['exportReport']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/reports/locks': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询报表锁定列表（0.2.0）
+     * @description 权限 `m4:report:read`。按锁定时间倒序返回快照元数据（不含 payload，快照数据通过
+     *     同参数查询/导出获取）；`report` 可选过滤 `workload`/`multi`；`limit` 1–200 默认 50。
+     */
+    get: operations['listReportLocks']
+    put?: never
+    /**
+     * 锁定报表并生成快照（0.2.0）
+     * @description 权限 `m4:report:lock`（V28 授予 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER）。
+     *     把「报表类型 + 期间 + 归一化参数（deptId/维度/指标 + 数据范围指纹）」对应的聚合结果
+     *     写入 append-only 快照 `m4_report.report_snapshot`，之后**同参数查询/导出默认读快照**
+     *     （`source=SNAPSHOT`），源数据变化不影响已锁定值。
+     *
+     *     期间：`period` 支持 `YYYY-MM`（整月，含首尾）或 `YYYY-MM-DD~YYYY-MM-DD`（自定义闭区间）；
+     *     也可用 `from`+`to` 给出。`period` 与 `from`+`to` 只能二选一（都给或都不给 400），
+     *     跨度（含首尾）≤ 366 天，日期/白名单/报表类型非法 400；数据范围不足 403。
+     *     同一 (report, period, params_hash) 重复锁定 **409**（快照不可覆盖；解锁/新版本流程待院方确认）。
+     *     快照 payload 只含聚合值与维度标签，不含患者标识；审计 `REPORT_LOCK`
+     *     （detail: report/period/from/to/paramsHash/payloadHash/rowCount/dataScope）。
+     */
+    post: operations['lockReport']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/reports/locks/{lockId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询报表锁定详情（0.2.0）
+     * @description 权限 `m4:report:read`。返回单个快照元数据（不含 payload）；不存在 404。
+     */
+    get: operations['getReportLock']
     put?: never
     post?: never
     delete?: never
@@ -144,6 +202,19 @@ export interface components {
       unrecordedCaseCount: number
       /** @description 维度桶（按台次倒序、键升序，未匹配兜底桶固定最后；空数据为空数组）。 */
       buckets: components['schemas']['WorkloadBucket'][]
+      /**
+       * @description 数据来源（0.2.0 新增）：SNAPSHOT=命中报表锁定快照（锁定后同参数查询默认读快照）；
+       *     LIVE=实时聚合。服务端始终返回该字段。
+       * @enum {string}
+       */
+      source?: 'LIVE' | 'SNAPSHOT'
+      /** @description 命中的快照标识（source=SNAPSHOT 时返回；LIVE 时省略）。 */
+      lockId?: string
+      /**
+       * Format: date-time
+       * @description 快照锁定时间（source=SNAPSHOT 时返回）。
+       */
+      lockedAt?: string
     }
     /** @description 单个维度桶的聚合值与术式分布。 */
     WorkloadBucket: {
@@ -206,6 +277,19 @@ export interface components {
       total: number
       /** @description 总页数 = ceil(total / size)；空数据为 0。 */
       totalPages: number
+      /**
+       * @description 数据来源（0.2.0 新增）：SNAPSHOT=命中报表锁定快照（分页对快照全量行重放）；
+       *     LIVE=实时聚合。服务端始终返回该字段。
+       * @enum {string}
+       */
+      source?: 'LIVE' | 'SNAPSHOT'
+      /** @description 命中的快照标识（source=SNAPSHOT 时返回；LIVE 时省略）。 */
+      lockId?: string
+      /**
+       * Format: date-time
+       * @description 快照锁定时间（source=SNAPSHOT 时返回）。
+       */
+      lockedAt?: string
     }
     /** @description 多维分组行；未请求维度的字段省略（null），计数类字段始终返回。 */
     MultiRow: {
@@ -248,6 +332,93 @@ export interface components {
       unrecordedCaseCount: number
       /** @description 全部分组数。 */
       groupCount: number
+    }
+    /**
+     * @description 报表锁定请求（0.2.0）；期间用 `period` 或 `from`+`to` 之一给出（二选一）。
+     *     锁定参数即“同参数查询/导出命中快照”的判据；分页（page/size）不参与锁定参数。
+     */
+    ReportLockRequest: {
+      /**
+       * @description 报表类型：workload=工作量、multi=多维报表。
+       * @enum {string}
+       */
+      report: 'workload' | 'multi'
+      /** @description 期间：`YYYY-MM`（整月）或 `YYYY-MM-DD~YYYY-MM-DD`（闭区间）。 */
+      period?: string
+      /**
+       * Format: date
+       * @description 起始本地日期（含）；与 to 成对使用，不能与 period 同时给出。
+       */
+      from?: string
+      /**
+       * Format: date
+       * @description 结束本地日期（含）；跨度（含首尾）≤ 366 天。
+       */
+      to?: string
+      /** @description 申请科室标识（可选收窄条件；越界 403）。 */
+      deptId?: string
+      /**
+       * @description 工作量维度（report=workload 必填，白名单）。
+       * @enum {string}
+       */
+      dimension?: 'DEPT' | 'STAFF' | 'SURGERY' | 'ROOM'
+      /** @description 多维维度（report=multi 必填，1–4 个，按声明顺序生效）。 */
+      dimensions?: ('DEPT' | 'STAFF' | 'SURGERY' | 'ROOM')[]
+      /** @description 多维指标（report=multi 必填，1–3 个）。 */
+      metrics?: ('caseCount' | 'anesthesiaMinutes' | 'weightedCaseCount')[]
+    }
+    /**
+     * @description 报表锁定快照元数据（0.2.0）；payload 不在此返回（快照数据通过同参数查询/导出获取），
+     *     只含期间、参数指纹与锁定留痕，不含患者信息。
+     */
+    ReportLock: {
+      /** @description 快照标识（UUID）。 */
+      lockId: string
+      /**
+       * @description 报表类型。
+       * @enum {string}
+       */
+      report: 'workload' | 'multi'
+      /** @description 归一化期间（`YYYY-MM` 或 `YYYY-MM-DD~YYYY-MM-DD`）。 */
+      period: string
+      /**
+       * Format: date
+       * @description 起始本地日期（含）。
+       */
+      from: string
+      /**
+       * Format: date
+       * @description 结束本地日期（含）。
+       */
+      to: string
+      /** @description 归一化锁定参数（含数据范围摘要，不含患者信息）。 */
+      params: {
+        [key: string]: unknown
+      }
+      /** @description params 的 sha256（十六进制 64 位），与 report+period 组成唯一键。 */
+      paramsHash: string
+      /** @description 快照 payload 的 sha256，用于完整性核对。 */
+      payloadHash: string
+      /** @description 锁定人数据范围摘要（ALL/SITE/DEPT/ROOM/SELF+对象数）。 */
+      dataScope: string
+      /** @description 快照数据行数（workload=维度桶数，multi=分组数）。 */
+      rowCount: number
+      /** @description 锁定人用户标识。 */
+      lockedBy: string
+      /** @description 锁定人姓名摘要（院内在册人员，非患者信息）。 */
+      lockedByName: string
+      /**
+       * Format: date-time
+       * @description 锁定时间。
+       */
+      lockedAt: string
+    }
+    /** @description 报表锁定列表（按锁定时间倒序）。 */
+    ReportLockList: {
+      /** @description 快照元数据。 */
+      items: components['schemas']['ReportLock'][]
+      /** @description 本次返回条数。 */
+      total: number
     }
     /** @description 字段级或范围级错误明细；不含用户输入原文与患者标识。 */
     ErrorDetail: {
@@ -308,7 +479,7 @@ export interface components {
         'application/json': components['schemas']['Error']
       }
     }
-    /** @description 已认证但缺权限（m4:report:read|export）或数据范围不足（无可用范围/科室越界）。 */
+    /** @description 已认证但缺权限（m4:report:read|export|lock）或数据范围不足（无可用范围/科室越界）。 */
     Forbidden: {
       headers: {
         [name: string]: unknown
@@ -325,6 +496,45 @@ export interface components {
          *           "reason": "当前用户无可用报表数据范围"
          *         }
          *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
+    /** @description 同一报表类型 + 期间 + 参数组合已锁定（快照 append-only，不可覆盖）。 */
+    Conflict: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "STATE_CONFLICT",
+         *       "message": "该报表参数组合已锁定，请勿重复锁定",
+         *       "traceId": "SYNTH-TRACE-0904",
+         *       "details": [
+         *         {
+         *           "field": "period",
+         *           "reason": "同一 (report, period, params_hash) 已存在锁定快照"
+         *         }
+         *       ]
+         *     }
+         */
+        'application/json': components['schemas']['Error']
+      }
+    }
+    /** @description 报表锁定快照不存在（不泄露其他数据范围的快照存在性）。 */
+    NotFound: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        /**
+         * @example {
+         *       "code": "RESOURCE_NOT_FOUND",
+         *       "message": "资源不存在或不可见",
+         *       "traceId": "SYNTH-TRACE-0905",
+         *       "details": []
          *     }
          */
         'application/json': components['schemas']['Error']
@@ -552,6 +762,8 @@ export interface operations {
         headers: {
           /** @description 附件文件名，形如 attachment; filename="workload-DEPT-2026-12-01-2026-12-31.csv"。 */
           'Content-Disposition'?: string
+          /** @description 数据来源：SNAPSHOT=命中报表锁定快照，LIVE=实时聚合（0.2.0 新增）。 */
+          'X-Report-Source'?: 'LIVE' | 'SNAPSHOT'
           [name: string]: unknown
         }
         content: {
@@ -567,6 +779,166 @@ export interface operations {
       400: components['responses']['BadRequest']
       401: components['responses']['Unauthorized']
       403: components['responses']['Forbidden']
+    }
+  }
+  listReportLocks: {
+    parameters: {
+      query?: {
+        /** @description 报表类型过滤。 */
+        report?: 'workload' | 'multi'
+        /** @description 返回条数（1–200）。 */
+        limit?: number
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 锁定列表（按 lockedAt 倒序）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "lockId": "5a000000-0000-4000-8000-000000000001",
+           *           "report": "workload",
+           *           "period": "2026-11",
+           *           "from": "2026-11-01",
+           *           "to": "2026-11-30",
+           *           "params": {
+           *             "report": "workload",
+           *             "from": "2026-11-01",
+           *             "to": "2026-11-30",
+           *             "dimension": "DEPT"
+           *           },
+           *           "paramsHash": "3f1c5f4f8f0d4e6c8a9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f",
+           *           "payloadHash": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f3f1c5f4f8f0d4e6c",
+           *           "dataScope": "ALL",
+           *           "rowCount": 2,
+           *           "lockedBy": "10000000-0000-4000-8000-000000000001",
+           *           "lockedByName": "演示管理员（合成）",
+           *           "lockedAt": "2026-12-01T09:30:00+08:00"
+           *         }
+           *       ],
+           *       "total": 1
+           *     }
+           */
+          'application/json': components['schemas']['ReportLockList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  lockReport: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "report": "workload",
+         *       "period": "2026-11",
+         *       "dimension": "DEPT"
+         *     }
+         */
+        'application/json': components['schemas']['ReportLockRequest']
+      }
+    }
+    responses: {
+      /** @description 锁定成功，返回快照元数据。 */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "lockId": "5a000000-0000-4000-8000-000000000001",
+           *       "report": "workload",
+           *       "period": "2026-11",
+           *       "from": "2026-11-01",
+           *       "to": "2026-11-30",
+           *       "params": {
+           *         "report": "workload",
+           *         "from": "2026-11-01",
+           *         "to": "2026-11-30",
+           *         "dimension": "DEPT"
+           *       },
+           *       "paramsHash": "3f1c5f4f8f0d4e6c8a9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f",
+           *       "payloadHash": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f3f1c5f4f8f0d4e6c",
+           *       "dataScope": "ALL",
+           *       "rowCount": 2,
+           *       "lockedBy": "10000000-0000-4000-8000-000000000001",
+           *       "lockedByName": "演示管理员（合成）",
+           *       "lockedAt": "2026-12-01T09:30:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['ReportLock']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      409: components['responses']['Conflict']
+    }
+  }
+  getReportLock: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 快照标识（UUID）。 */
+        lockId: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 锁定详情。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "lockId": "5a000000-0000-4000-8000-000000000001",
+           *       "report": "workload",
+           *       "period": "2026-11",
+           *       "from": "2026-11-01",
+           *       "to": "2026-11-30",
+           *       "params": {
+           *         "report": "workload",
+           *         "from": "2026-11-01",
+           *         "to": "2026-11-30",
+           *         "dimension": "DEPT"
+           *       },
+           *       "paramsHash": "3f1c5f4f8f0d4e6c8a9b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f",
+           *       "payloadHash": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f3f1c5f4f8f0d4e6c",
+           *       "dataScope": "ALL",
+           *       "rowCount": 2,
+           *       "lockedBy": "10000000-0000-4000-8000-000000000001",
+           *       "lockedByName": "演示管理员（合成）",
+           *       "lockedAt": "2026-12-01T09:30:00+08:00"
+           *     }
+           */
+          'application/json': components['schemas']['ReportLock']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
     }
   }
 }

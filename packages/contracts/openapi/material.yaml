@@ -38,8 +38,15 @@ info:
        （≤200），不保存患者姓名/院内患者号/身份证号/手机号；UDI 追溯只回传 recordId 与
        scheduleId，不回传患者信息与临床自由文本。审计与日志不含 UDI 原文全串（只记 UDI-DI
        与状态摘要）。
+    7) **0.2.0 新增（M8-M4-02，additive）库存预警**：`material.low_stock_threshold`
+       numeric(12,2) 可空（**可空 = 不按阈值预警**；零库存与临期预警仍然生效）；
+       `GET /v1/materials/stock-alerts` 返回 材料 × 科室 粒度的预警（低于阈值 / 零库存 /
+       临期 90 天，含建议补货量）；阈值维护走 `PUT /v1/materials/{materialId}/low-stock-threshold`
+       （乐观锁 version，审计 `MATERIAL_THRESHOLD_UPDATE`）。阈值来源、按科室粒度与临期
+       天数均为 **【待确认】**（本期不内置默认阈值、不开放临期天数配置）。
+       预警只按科室数据范围（ALL/SITE/DEPT）生效，SELF/ROOM fail-closed 403。
     所有示例均为 SYNTHETIC 合成数据。
-  version: 0.1.0
+  version: 0.2.0
   contact:
     name: ANESOP 项目组
   license:
@@ -58,6 +65,8 @@ tags:
     description: UDI 实例一物一码登记、使用绑定记录/台次、material→UDI→record 追溯链。
   - name: SPD 适配器
     description: SPD 供应链适配器（EXT-03）状态与模拟同步，失败降级并留痕。
+  - name: 库存预警
+    description: 耗材库存预警（低阈值/零库存/临期 90 天）与阈值维护，按科室数据范围隔离。
 paths:
   /v1/materials:
     get:
@@ -335,6 +344,80 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /v1/materials/stock-alerts:
+    get:
+      operationId: listMaterialStockAlerts
+      tags:
+        - 库存预警
+      summary: 查询耗材库存预警（低阈值/零库存/临期）
+      description: |
+        按 **材料 × 科室** 聚合批次库存并返回预警行（0.2.0 新增）：
+        - `LOW_STOCK`：已配置 `lowStockThreshold` 且可用量 **严格低于** 阈值
+          （可用量 = 阈值时不预警，边界按“低于”判定）；
+        - `ZERO_STOCK`：该科室可用量合计 = 0（仅统计已发生过出入库、存在库存行的材料，
+          不返回“全目录 × 全科室”的空行【待确认】）；
+        - `NEAR_EXPIRY`：存在数量 > 0 且效期 ≤ 今天 + 90 天（含已过期，`daysToExpiry` < 0）
+          的批次。临期天数固定 90 天，**不开放配置【待确认】**。
+        `suggestedQuantity` = max(0, threshold − 可用量)；阈值缺失时为 null（不臆造补货量），
+        临期不产生补货量。停用耗材不参与预警。
+        数据范围：ALL/SITE/DEPT；SELF/ROOM/无科室维度 fail-closed 403。
+      parameters:
+        - name: departmentId
+          in: query
+          required: false
+          description: 科室标识过滤（必须在调用者数据范围内，否则 403）。
+          schema:
+            type: string
+        - name: alertType
+          in: query
+          required: false
+          description: 预警类型过滤；缺省返回命中任意类型的行。
+          schema:
+            type: string
+            enum:
+              - LOW_STOCK
+              - ZERO_STOCK
+              - NEAR_EXPIRY
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数（1–200）。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: 库存预警列表（按零库存优先、材料名称、科室排序）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialStockAlertList'
+              example:
+                items:
+                  - materialId: '4a000000-0000-4000-8000-000000000001'
+                    materialCode: MAT-CVC-001
+                    materialName: 中心静脉导管（演示）
+                    unit: 套
+                    departmentId: 'f1000000-0000-4000-8000-000000000002'
+                    departmentName: 麻醉科（合成）
+                    availableQuantity: 2
+                    lowStockThreshold: 10
+                    suggestedQuantity: 8
+                    alertTypes:
+                      - LOW_STOCK
+                    batchCount: 1
+                    nearestExpiryDate: '2027-01-31'
+                    daysToExpiry: 77
+                    nearExpiryBatchCount: 0
+                total: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/materials/{materialId}:
     get:
       operationId: getMaterial
@@ -480,6 +563,65 @@ paths:
                 updatedAt: '2026-11-14T10:00:00+08:00'
                 updatedBy: '10000000-0000-4000-8000-000000000001'
                 version: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/materials/{materialId}/low-stock-threshold:
+    put:
+      operationId: updateMaterialLowStockThreshold
+      tags:
+        - 库存预警
+      summary: 维护耗材库存预警阈值（乐观锁）
+      description: |
+        单独维护 `lowStockThreshold`（0.2.0 新增），避免与耗材主数据更新互相覆盖：
+        必须回传 `version`（过期 409）；`threshold` 为 null 或省略表示清除阈值
+        （不按阈值预警，零库存/临期预警仍生效）；负数或超过 2 位小数 400。
+        权限 `m4:material:write` + 科室数据范围（ALL/SITE/DEPT）；SELF/ROOM 403。
+        审计 `MATERIAL_THRESHOLD_UPDATE`（detail: materialId/code/previousThreshold/threshold/version）。
+        阈值来源（日均消耗 × 采购周期 + 安全库存）与是否需要按科室分别配置 **【待确认】**。
+      parameters:
+        - $ref: '#/components/parameters/MaterialId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LowStockThresholdRequest'
+            example:
+              threshold: 10
+              version: 1
+      responses:
+        '200':
+          description: 阈值已更新（返回更新后的耗材主数据）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Material'
+              example:
+                materialId: '4a000000-0000-4000-8000-000000000001'
+                code: MAT-CVC-001
+                name: 中心静脉导管（演示）
+                specification: 7F 三腔
+                unit: 套
+                category: CATHETER
+                udiDi: '06937000000001'
+                highValue: true
+                expiryManaged: true
+                status: ACTIVE
+                remark: SYNTHETIC 演示耗材
+                lowStockThreshold: 10
+                createdAt: '2026-11-14T08:00:00+08:00'
+                createdBy: '10000000-0000-4000-8000-000000000001'
+                updatedAt: '2026-11-14T10:00:00+08:00'
+                updatedBy: '10000000-0000-4000-8000-000000000001'
+                version: 2
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1074,6 +1216,15 @@ components:
           type: string
           maxLength: 500
           description: 备注（可选，不含患者信息）。
+        lowStockThreshold:
+          type:
+            - number
+            - 'null'
+          minimum: 0
+          multipleOf: 0.01
+          description: |
+            库存预警阈值 numeric(12,2)（0.2.0 新增）；**可空 = 不按阈值预警**
+            （零库存/临期预警仍生效）。来源与按科室粒度【待确认】，本期不内置默认值。
         createdAt:
           type: string
           format: date-time
@@ -1092,6 +1243,129 @@ components:
           type: integer
           description: 乐观锁版本号（从 1 起）。
           minimum: 1
+    LowStockThresholdRequest:
+      type: object
+      description: 库存预警阈值维护请求（0.2.0 新增）；threshold 为 null/省略表示清除阈值。
+      required:
+        - version
+      properties:
+        threshold:
+          type:
+            - number
+            - 'null'
+          minimum: 0
+          multipleOf: 0.01
+          description: 新阈值（最多 2 位小数，不得为负）；null/省略 = 清除阈值（不按阈值预警）。
+        version:
+          type: integer
+          description: 乐观锁版本号（必须等于耗材当前版本，过期 409）。
+          minimum: 1
+    StockAlertType:
+      type: string
+      description: |
+        库存预警类型：LOW_STOCK=可用量低于已配置阈值；ZERO_STOCK=可用量合计为 0；
+        NEAR_EXPIRY=存在效期 ≤ 今天 + 90 天且数量 > 0 的批次（含已过期）。
+      enum:
+        - LOW_STOCK
+        - ZERO_STOCK
+        - NEAR_EXPIRY
+    MaterialStockAlert:
+      type: object
+      description: |
+        材料 × 科室 粒度的库存预警行（0.2.0）；只含标识、聚合数量与预警摘要，
+        不含患者信息、供应商与批次明细原文。
+      required:
+        - materialId
+        - materialCode
+        - materialName
+        - unit
+        - departmentId
+        - departmentName
+        - availableQuantity
+        - alertTypes
+        - batchCount
+        - nearExpiryBatchCount
+      properties:
+        materialId:
+          type: string
+          description: 耗材标识。
+        materialCode:
+          type: string
+          maxLength: 64
+          description: 院内耗材编码。
+        materialName:
+          type: string
+          maxLength: 200
+          description: 耗材名称。
+        unit:
+          type: string
+          maxLength: 16
+          description: 单位。
+        departmentId:
+          type: string
+          description: 科室标识（预警归属科室）。
+        departmentName:
+          type: string
+          description: 科室名称（取启用科室；科室停用/不可见时回退为科室标识）。
+        availableQuantity:
+          type: number
+          description: 该科室批次库存合计（numeric(12,2)）。
+        lowStockThreshold:
+          type:
+            - number
+            - 'null'
+          minimum: 0
+          multipleOf: 0.01
+          description: 生效阈值；null 表示未配置（此时不产生 LOW_STOCK 预警）。
+        suggestedQuantity:
+          type:
+            - number
+            - 'null'
+          minimum: 0
+          multipleOf: 0.01
+          description: |
+            建议补货量 = max(0, 阈值 − 可用量)；阈值缺失时为 null（不臆造补货量），
+            临期预警不产生补货量。
+        alertTypes:
+          type: array
+          description: 命中的预警类型（去重；至少 1 项）。
+          items:
+            $ref: '#/components/schemas/StockAlertType'
+        batchCount:
+          type: integer
+          description: 该 材料 + 科室 的批次行数。
+          minimum: 0
+        nearestExpiryDate:
+          type:
+            - string
+            - 'null'
+          format: date
+          description: 数量 > 0 的批次中最近效期；无效期管理批次时为 null。
+        daysToExpiry:
+          type:
+            - integer
+            - 'null'
+          description: 距最近效期的天数（含已过期时 < 0）；无有效效期时为 null。
+        nearExpiryBatchCount:
+          type: integer
+          description: 命中临期（≤ 今天 + 90 天且数量 > 0）的批次数。
+          minimum: 0
+    MaterialStockAlertList:
+      type: object
+      description: 库存预警列表（按零库存优先、材料名称、科室排序）。
+      required:
+        - items
+        - total
+      properties:
+        items:
+          type: array
+          description: 预警行。
+          items:
+            $ref: '#/components/schemas/MaterialStockAlert'
+        total:
+          type: integer
+          description: 本次返回的预警行数（不跨页累计）。
+          minimum: 0
     MaterialList:
       type: object
       description: 耗材分页结果。

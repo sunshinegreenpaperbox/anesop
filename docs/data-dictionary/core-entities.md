@@ -631,6 +631,39 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 申请号（导出脱敏见契约 §导出）；人员工号与姓名属院内在册人员数据（非患者标识）。跨 schema
 读取只在装配层 `ReportCaseSourceAdapter` 的单条只读 SELECT 中发生，不复制 m1/m2 Mapper/实体。
 
+### 3.14.1 报表锁定快照 `m4_report.report_snapshot`（V28 已实现，M8-M4-02）
+
+| 字段 | 类型/约束 | 说明 |
+|---|---|---|
+| `id` | uuid PK | 快照标识（`lockId`） |
+| `report` | varchar(16) CHECK IN ('workload','multi') | 报表类型 |
+| `period` | varchar(64) 非空 | 归一化期间：`YYYY-MM` 或 `YYYY-MM-DD~YYYY-MM-DD` |
+| `from_date` / `to_date` | date，CHECK `to_date >= from_date` | 统计闭区间（Asia/Shanghai 本地日期） |
+| `params` | jsonb | 归一化锁定参数（report/from/to/deptId/维度/指标/数据范围指纹） |
+| `params_hash` | char(64) CHECK 十六进制 | params 的 sha256；唯一键组成部分 |
+| `payload` | jsonb | 快照数据：workload 完整报表（桶+术式分布）；multi 全部分组行+合计；不含患者标识 |
+| `payload_hash` | char(64) | payload 的 sha256（完整性核对） |
+| `data_scope` | varchar(32) | 锁定人数据范围摘要（ALL/SITE/DEPT/ROOM/SELF+对象数） |
+| `scope_hash` | char(64) | 数据范围指纹 sha256（同参数不同范围不共用快照） |
+| `row_count` | integer >= 0 | workload=维度桶数；multi=分组数 |
+| `locked_by` / `locked_by_name` | uuid / varchar(64) | 锁定人标识与姓名摘要（院内在册人员，非患者信息） |
+| `locked_at` | timestamptz | 锁定时间 |
+
+约束与语义：唯一 `uk_report_snapshot_params (report, period, params_hash)`；append-only
+（UPDATE/DELETE/TRUNCATE 一律 55000）；同参数重复锁定 409；**保留期与解锁/重出数流程【待确认】**
+（不自动清理、不物理删除）。命中快照时查询/导出返回 `source=SNAPSHOT`（未命中 `LIVE`）。
+
+### 3.14.2 耗材库存预警阈值 `m4_material.material.low_stock_threshold`（V28 已实现，M8-M4-02）
+
+| 字段 | 类型/约束 | 说明 |
+|---|---|---|
+| `low_stock_threshold` | numeric(12,2)，可空；CHECK 为空或 >= 0 | 库存预警阈值；**可空 = 不按阈值预警**（零库存/临期预警仍生效） |
+
+语义：材料 × 科室 的可用量**严格低于**阈值才产生 `LOW_STOCK`；建议补货量
+`max(0, 阈值 − 可用量)`；阈值缺失时不给出补货量。阈值维护独立端点（乐观锁 version，
+审计 `MATERIAL_THRESHOLD_UPDATE`）。阈值来源（日均消耗 × 采购周期 + 安全库存）与是否按科室
+分别配置 **【待确认】**，本期不内置默认值；临期天数固定 90 天 **【待确认】**。
+
 ### 3.15 质控指标、不良事件与病历抽查（V25 已实现，M4-M17-01，ADR-0022）
 
 | 表 | 关键字段 | 约束/说明 |
@@ -801,6 +834,7 @@ EXT-06）；**不保存客户端原始文件名**（展示名服务端生成 `fi
 | `StockMovement`、`StockMovementList`、`CreateStockMovementRequest` | `m4_material.stock_movement` | 出入库流水 IN/OUT/RETURN/ADJUST、append-only、余额快照；RETURN=退回供应商/中心库（V23） |
 | `UdiInstance`、`RegisterUdiInstanceRequest`、`UseUdiInstanceRequest`、`UdiTrace`、`MaterialTraceSummary`、`RecordLink` | `m4_material.udi_instance` | UDI 一物一码、状态机 IN_STOCK/USED/RETURNED、recordId/scheduleId 逻辑关联（V23） |
 | `SpdAdapterStatus`、`SpdSyncResult` | `m4_material.spd_sync_log` | SPD 适配器（EXT-03 SIMULATED）状态与降级留痕（V23） |
+| `MaterialStockAlert`、`MaterialStockAlertList`、`StockAlertType`、`LowStockThresholdRequest` | `m4_material.material_stock` + `material.low_stock_threshold` | 库存预警（材料 × 科室）：低阈值（严格低于）/零库存/临期 ≤90 天 + 建议补货量；阈值可空=不预警（V28） |
 | `DepartmentOption`、`DepartmentList`（material） | 读时投影（`m0_platform.sys_org` / `sys_user_org`） | 出入库/UDI 登记的科室选项，按数据范围收敛（V23） |
 | `StaffAuthorization`、`StaffAuthorizationHistory`、`UpdateStaffAuthorizationRequest` | `m4_staff.staff_authorization`（+ 视图 `staff_authorization_current`） | append-only 授权版本链、当前版本视图（V21） |
 | `AuthorizationCheckRequest`、`AuthorizationCheckResult`、`AuthorizationCheckReason` | 读时判定（无新表） | 授权校验（排程/术中集成点），原因码见契约枚举（V21） |
@@ -808,6 +842,7 @@ EXT-06）；**不保存客户端原始文件名**（展示名服务端生成 `fi
 | `StaffTraining`、`StaffTrainingList`、`ExpiringTrainingList`、`CreateStaffTrainingRequest` | `m4_staff.staff_training` | 培训记录、到期提醒（V21） |
 | `WorkloadReport`、`WorkloadBucket`、`SurgeryDistribution` | 读时投影（无新表） | 工作量：台次/麻醉时长/加权台次/无时长台次/术式分布（口径 report-1.0.0，V24 data-only） |
 | `MultiReport`、`MultiRow`、`ReportTotals` | 读时投影（无新表） | 多维报表：组合维度 × 指标、稳定排序 + 分页 + 全量合计 |
+| `ReportLock`、`ReportLockList`、`ReportLockRequest` | `m4_report.report_snapshot` | 报表锁定快照：append-only、唯一 (report, period, params_hash)、params/payload jsonb + sha256；锁定后同参数查询/导出读快照（V28） |
 | `Session` | 会话存储（Redis 7.2） | 具体键设计【待确认】，不落 PostgreSQL |
 
 ## 5. 【待确认】汇总
@@ -858,6 +893,12 @@ EXT-06）；**不保存客户端原始文件名**（展示名服务端生成 `fi
     （本人台次所涉术间）是否满足麻醉医师个人看板；见 ADR-0023 Q-1–Q-4。
 21. **Q-11 超时台次口径**：宽限分钟数、是否区分“延迟开始/超时结束”、是否按科室排名；
     见 ADR-0023 Q-5。
+22. **Q-12 库存预警阈值与临期天数**（M8-M4-02）：阈值来源（日均消耗 × 采购周期 + 安全库存）、
+    是否按科室分别配置、临期天数是否按高值/普通耗材区分（当前固定 90 天）、预警渠道与提醒
+    频率；确认前不内置默认阈值。
+23. **Q-13 报表快照保留期与解锁流程**（M8-M4-02）：`m4_report.report_snapshot` 保留年限、
+    归档 MinIO 策略、是否需要“解锁并重出数（新版本）”与审批、是否提供强制实时查询参数；
+    确认前不得物理删除或覆盖已有快照。
 22. **Q-12 资源口径**：备班（`ON_CALL`）是否计入当班、人员 SELF 范围按“本人台次所涉科室”
     裁剪是否可接受、缺口规则阈值与是否分科室展开、设备在线率是否按设备类型分列；
     见 ADR-0023 Q-6。

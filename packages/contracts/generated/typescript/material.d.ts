@@ -96,6 +96,35 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/materials/stock-alerts': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 查询耗材库存预警（低阈值/零库存/临期）
+     * @description 按 **材料 × 科室** 聚合批次库存并返回预警行（0.2.0 新增）：
+     *     - `LOW_STOCK`：已配置 `lowStockThreshold` 且可用量 **严格低于** 阈值
+     *       （可用量 = 阈值时不预警，边界按“低于”判定）；
+     *     - `ZERO_STOCK`：该科室可用量合计 = 0（仅统计已发生过出入库、存在库存行的材料，
+     *       不返回“全目录 × 全科室”的空行【待确认】）；
+     *     - `NEAR_EXPIRY`：存在数量 > 0 且效期 ≤ 今天 + 90 天（含已过期，`daysToExpiry` < 0）
+     *       的批次。临期天数固定 90 天，**不开放配置【待确认】**。
+     *     `suggestedQuantity` = max(0, threshold − 可用量)；阈值缺失时为 null（不臆造补货量），
+     *     临期不产生补货量。停用耗材不参与预警。
+     *     数据范围：ALL/SITE/DEPT；SELF/ROOM/无科室维度 fail-closed 403。
+     */
+    get: operations['listMaterialStockAlerts']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/v1/materials/{materialId}': {
     parameters: {
       query?: never
@@ -143,6 +172,31 @@ export interface paths {
      *     ACTIVE/INACTIVE（400）；耗材不存在 404；并发状态被其他请求修改 409。
      */
     patch: operations['updateMaterialStatus']
+    trace?: never
+  }
+  '/v1/materials/{materialId}/low-stock-threshold': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    /**
+     * 维护耗材库存预警阈值（乐观锁）
+     * @description 单独维护 `lowStockThreshold`（0.2.0 新增），避免与耗材主数据更新互相覆盖：
+     *     必须回传 `version`（过期 409）；`threshold` 为 null 或省略表示清除阈值
+     *     （不按阈值预警，零库存/临期预警仍生效）；负数或超过 2 位小数 400。
+     *     权限 `m4:material:write` + 科室数据范围（ALL/SITE/DEPT）；SELF/ROOM 403。
+     *     审计 `MATERIAL_THRESHOLD_UPDATE`（detail: materialId/code/previousThreshold/threshold/version）。
+     *     阈值来源（日均消耗 × 采购周期 + 安全库存）与是否需要按科室分别配置 **【待确认】**。
+     */
+    put: operations['updateMaterialLowStockThreshold']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
     trace?: never
   }
   '/v1/materials/stock-movements': {
@@ -335,6 +389,11 @@ export interface components {
       /** @description 备注（可选，不含患者信息）。 */
       remark?: string
       /**
+       * @description 库存预警阈值 numeric(12,2)（0.2.0 新增）；**可空 = 不按阈值预警**
+       *     （零库存/临期预警仍生效）。来源与按科室粒度【待确认】，本期不内置默认值。
+       */
+      lowStockThreshold?: number | null
+      /**
        * Format: date-time
        * @description 创建时间。
        */
@@ -350,6 +409,66 @@ export interface components {
       updatedBy: string
       /** @description 乐观锁版本号（从 1 起）。 */
       version: number
+    }
+    /** @description 库存预警阈值维护请求（0.2.0 新增）；threshold 为 null/省略表示清除阈值。 */
+    LowStockThresholdRequest: {
+      /** @description 新阈值（最多 2 位小数，不得为负）；null/省略 = 清除阈值（不按阈值预警）。 */
+      threshold?: number | null
+      /** @description 乐观锁版本号（必须等于耗材当前版本，过期 409）。 */
+      version: number
+    }
+    /**
+     * @description 库存预警类型：LOW_STOCK=可用量低于已配置阈值；ZERO_STOCK=可用量合计为 0；
+     *     NEAR_EXPIRY=存在效期 ≤ 今天 + 90 天且数量 > 0 的批次（含已过期）。
+     * @enum {string}
+     */
+    StockAlertType: 'LOW_STOCK' | 'ZERO_STOCK' | 'NEAR_EXPIRY'
+    /**
+     * @description 材料 × 科室 粒度的库存预警行（0.2.0）；只含标识、聚合数量与预警摘要，
+     *     不含患者信息、供应商与批次明细原文。
+     */
+    MaterialStockAlert: {
+      /** @description 耗材标识。 */
+      materialId: string
+      /** @description 院内耗材编码。 */
+      materialCode: string
+      /** @description 耗材名称。 */
+      materialName: string
+      /** @description 单位。 */
+      unit: string
+      /** @description 科室标识（预警归属科室）。 */
+      departmentId: string
+      /** @description 科室名称（取启用科室；科室停用/不可见时回退为科室标识）。 */
+      departmentName: string
+      /** @description 该科室批次库存合计（numeric(12,2)）。 */
+      availableQuantity: number
+      /** @description 生效阈值；null 表示未配置（此时不产生 LOW_STOCK 预警）。 */
+      lowStockThreshold?: number | null
+      /**
+       * @description 建议补货量 = max(0, 阈值 − 可用量)；阈值缺失时为 null（不臆造补货量），
+       *     临期预警不产生补货量。
+       */
+      suggestedQuantity?: number | null
+      /** @description 命中的预警类型（去重；至少 1 项）。 */
+      alertTypes: components['schemas']['StockAlertType'][]
+      /** @description 该 材料 + 科室 的批次行数。 */
+      batchCount: number
+      /**
+       * Format: date
+       * @description 数量 > 0 的批次中最近效期；无效期管理批次时为 null。
+       */
+      nearestExpiryDate?: string | null
+      /** @description 距最近效期的天数（含已过期时 < 0）；无有效效期时为 null。 */
+      daysToExpiry?: number | null
+      /** @description 命中临期（≤ 今天 + 90 天且数量 > 0）的批次数。 */
+      nearExpiryBatchCount: number
+    }
+    /** @description 库存预警列表（按零库存优先、材料名称、科室排序）。 */
+    MaterialStockAlertList: {
+      /** @description 预警行。 */
+      items: components['schemas']['MaterialStockAlert'][]
+      /** @description 本次返回的预警行数（不跨页累计）。 */
+      total: number
     }
     /** @description 耗材分页结果。 */
     MaterialList: {
@@ -1117,6 +1236,61 @@ export interface operations {
       403: components['responses']['Forbidden']
     }
   }
+  listMaterialStockAlerts: {
+    parameters: {
+      query?: {
+        /** @description 科室标识过滤（必须在调用者数据范围内，否则 403）。 */
+        departmentId?: string
+        /** @description 预警类型过滤；缺省返回命中任意类型的行。 */
+        alertType?: 'LOW_STOCK' | 'ZERO_STOCK' | 'NEAR_EXPIRY'
+        /** @description 返回条数（1–200）。 */
+        limit?: number
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 库存预警列表（按零库存优先、材料名称、科室排序）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "items": [
+           *         {
+           *           "materialId": "4a000000-0000-4000-8000-000000000001",
+           *           "materialCode": "MAT-CVC-001",
+           *           "materialName": "中心静脉导管（演示）",
+           *           "unit": "套",
+           *           "departmentId": "f1000000-0000-4000-8000-000000000002",
+           *           "departmentName": "麻醉科（合成）",
+           *           "availableQuantity": 2,
+           *           "lowStockThreshold": 10,
+           *           "suggestedQuantity": 8,
+           *           "alertTypes": [
+           *             "LOW_STOCK"
+           *           ],
+           *           "batchCount": 1,
+           *           "nearestExpiryDate": "2027-01-31",
+           *           "daysToExpiry": 77,
+           *           "nearExpiryBatchCount": 0
+           *         }
+           *       ],
+           *       "total": 1
+           *     }
+           */
+          'application/json': components['schemas']['MaterialStockAlertList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
   getMaterial: {
     parameters: {
       query?: never
@@ -1273,6 +1447,65 @@ export interface operations {
            *       "updatedAt": "2026-11-14T10:00:00+08:00",
            *       "updatedBy": "10000000-0000-4000-8000-000000000001",
            *       "version": 3
+           *     }
+           */
+          'application/json': components['schemas']['Material']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+    }
+  }
+  updateMaterialLowStockThreshold: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        /** @description 耗材标识（UUID 字符串）。 */
+        materialId: components['parameters']['MaterialId']
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        /**
+         * @example {
+         *       "threshold": 10,
+         *       "version": 1
+         *     }
+         */
+        'application/json': components['schemas']['LowStockThresholdRequest']
+      }
+    }
+    responses: {
+      /** @description 阈值已更新（返回更新后的耗材主数据）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "materialId": "4a000000-0000-4000-8000-000000000001",
+           *       "code": "MAT-CVC-001",
+           *       "name": "中心静脉导管（演示）",
+           *       "specification": "7F 三腔",
+           *       "unit": "套",
+           *       "category": "CATHETER",
+           *       "udiDi": "06937000000001",
+           *       "highValue": true,
+           *       "expiryManaged": true,
+           *       "status": "ACTIVE",
+           *       "remark": "SYNTHETIC 演示耗材",
+           *       "lowStockThreshold": 10,
+           *       "createdAt": "2026-11-14T08:00:00+08:00",
+           *       "createdBy": "10000000-0000-4000-8000-000000000001",
+           *       "updatedAt": "2026-11-14T10:00:00+08:00",
+           *       "updatedBy": "10000000-0000-4000-8000-000000000001",
+           *       "version": 2
            *     }
            */
           'application/json': components['schemas']['Material']
