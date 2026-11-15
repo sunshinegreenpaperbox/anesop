@@ -44,3 +44,4 @@
 | M4 管理域专项（发布准入） | AGENTS.md 权限/导出脱敏/追溯/测试要求 | drug/material/report/qc + auth | m4 + m0 权限/审计 | M4 列表/五专/追溯/报表/质控页 | M4AcceptanceTest（权限矩阵/授权治理/DataScope/5 类 CSV/五专对账/UDI 追溯/报表与质控手算）+ m4-narcotic-reconcile.spec.ts + m4-qc-export.spec.ts + 专项矩阵 docs/testing §11 | 已实现（M4-QA-01，2026-11-15；药品/耗材 CSV 导出契约未定义，登记遗留项） |
 | 风险与资源大屏 | E-M18 | dashboard.yaml 0.2.0 | m5/dashboard | 风险大屏 | DashboardRiskResourcesServiceImplTest | 已实现（M5-M18-02） |
 | 集成联调模拟器/契约测试 | E-M19 | 适配器契约 | services/simulators | — | 4 类契约测试 + integration-smoke | 已实现（M5-M19-01；EXT-01/02/03/04 模拟可联调） |
+| 安全加固（CSP/限流/扫描） | E-M19 | — | deploy/nginx + SecurityConfiguration | — | 安全专项 12 用例 | 已实现（M5-M19-02；EXT-08 镜像扫描） |

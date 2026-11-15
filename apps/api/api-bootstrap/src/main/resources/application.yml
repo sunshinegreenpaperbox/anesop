@@ -140,12 +140,15 @@ anesop:
     crypto:
       # 仅 dev/test 显式允许生成进程内随机密钥；默认 false（生产语义）。
       allow-dev-generated: false
-    # 登录/刷新 IP 级限流（S-6）：内存令牌桶，单实例语义。
+    # 登录/刷新端点限流（S-6 / M5-M19-02）：内存令牌桶，单实例语义。
+    # 登录按“来源 IP + 用户名”、刷新按来源 IP；超限 429 + Retry-After。
+    # 生产可通过环境变量调整（窗口/阈值），默认 20 次/分钟；集群部署须改 Redis 令牌桶。
     rate-limit:
-      enabled: true
-      capacity: 20
-      refill-tokens: 20
-      refill-period: PT1M
+      enabled: ${ANESOP_RATE_LIMIT_ENABLED:true}
+      capacity: ${ANESOP_RATE_LIMIT_CAPACITY:20}
+      refill-tokens: ${ANESOP_RATE_LIMIT_REFILL_TOKENS:20}
+      refill-period: ${ANESOP_RATE_LIMIT_REFILL_PERIOD:PT1M}
+      max-buckets: ${ANESOP_RATE_LIMIT_MAX_BUCKETS:10000}
 
 server:
   port: 8080

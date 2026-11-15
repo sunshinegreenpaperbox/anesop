@@ -356,8 +356,51 @@ bash scripts/integration-smoke.sh
 `api-bootstrap` 以 test 作用域依赖 `anesop-simulators`：根 reactor 自动先构建；只构建 `apps/api`
 时先 `./scripts/mvn.sh -B -f services/simulators/pom.xml install`。
 
+## 14. 安全专项（M5-M19-02，发布准入）
+
+> 依据：`docs/security/README.md`。覆盖 HTTP 安全头/CSP、登录/刷新限流、权限矩阵补测、
+> 审计覆盖与依赖扫描；全部 SYNTHETIC 数据，不需要真实患者数据。
+
+| 准入项 | 断言（可失败） | 用例/脚本 |
+|---|---|---|
+| Nginx 安全头/CSP | 443 下发 HSTS/nosniff/XFO DENY/Referrer/Permissions；CSP 含 `script-src 'self'`（无 inline/eval）、`connect-src 'self'`、`frame-ancestors 'none'`；80 明文响应无 HSTS；`/api/` 日志无 query | `NginxSecurityHeadersConfigTest`（2）、`NginxPhiLogConfigTest`、`scripts/security-check.sh` |
+| API 安全头 | 健康检查与 401 响应带 XCTO/XFO/Referrer/Permissions/CSP；HSTS 仅 `secure(true)` 请求下发 | `SecurityHeadersIntegrationTest`（3） |
+| 登录限流 | 同一 IP+用户名容量 2：第 3 次 429 `RATE_LIMITED` + `Retry-After`；不同用户名不共享桶；正常登录 200 且令牌可用 | `RateLimitIntegrationTest`（4） |
+| 限流窗口恢复 | 容量 1、PT5S 窗口：401 → 429 → 等待后恢复 401（不再 429） | `RateLimitRecoveryTest`（1） |
+| 审计与敏感字段 | 失败/成功登录审计只含用户名与固定文案，不含口令/access token；429 短路不写登录审计 | 上述限流用例 |
+| 权限矩阵补测 | SYS_QC_MANAGER 驾驶舱 4 端点 200；SYS_SURGEON 403 + `ACCESS_DENIED` 审计；匿名 401；M0 用户管理仅 SYS_ADMIN，麻醉医师读/写 403 且零写入 | `SecurityAuthorizationRegressionTest`（2） |
+| 依赖/镜像扫描 | npm 生产依赖 0 HIGH/CRITICAL；许可证/白名单（1 条历史 WARN spring-tx）；镜像清单 9 项（EXT-08） | `scripts/security-scan.sh`，证据 `.cache/security/` |
+| 静态安全门禁 | 21 项：无私钥/云 token、密钥占位、默认/prod fail-closed、CSP/安全头、日志无 PHI、前端无 inline script | `scripts/security-check.sh`（接入 `check.sh` 第 8/8 步，约 1–2s） |
+
+运行：
+
+```bash
+source scripts/env.sh
+# 安全专项（12 例，约 2 分钟；含独立限流上下文与 PT5S 窗口）
+./scripts/mvn.sh -B -pl apps/api/api-bootstrap -am \
+  -Dtest=RateLimitIntegrationTest,RateLimitRecoveryTest,SecurityHeadersIntegrationTest,NginxSecurityHeadersConfigTest,SecurityAuthorizationRegressionTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+bash scripts/security-check.sh     # 离线 21 项，约 1s
+bash scripts/security-scan.sh      # 联网依赖扫描 + 镜像清单，约 30–60s
+bash scripts/compose-check.sh      # nginx/compose 静态校验
+```
+
+实测（2026-11-15）：安全专项 **12/12** 通过；`apps/api` clean verify BUILD SUCCESS
+（1157 用例，14:07）；`security-check.sh` 21/21；`security-scan.sh` OK（0 HIGH/CRITICAL，
+1 条白名单 WARN，镜像清单 9 项）；`compose-check.sh` 34 PASS；`pnpm test:unit` 179/179、
+`pnpm build`/`pnpm lint` 通过、`pnpm e2e` 45/45。
+
+阻断规则：安全头缺失/CSP 退回 inline script、限流无 429/Retry-After、越权用例失败、
+扫描出现 HIGH/CRITICAL 未登记例外、日志/审计出现口令或令牌 → 阻断发布；不得放宽断言
+或跳过用例。已知限制（单实例限流、Maven jar CVE 依赖 CI 镜像扫描、CSP style-src
+`unsafe-inline`、`spring-tx` 白名单缺口）见 `docs/security/README.md` §8。
+
 ## 12. 变更记录
 
+- 2026-11-15（M5-M19-02）：新增 §14 安全专项（12 例：安全头 3、nginx 配置 2、限流 4、
+  窗口恢复 1、权限矩阵补测 2）；新增 `scripts/security-check.sh`（21 项，接入 `check.sh`
+  第 8/8 步）与 `scripts/security-scan.sh`（npm 0 HIGH/CRITICAL、镜像清单 9 项 EXT-08）；
+  nginx 启用 CSP、XFO 改 DENY；API 层同语义安全头；登录限流改 IP+用户名并返回 Retry-After。
 - 2026-11-15（M5-M19-01）：新增 §13 集成联调与契约测试矩阵；新增 `services/simulators`
   （36 用例，97.28%/83.46%）与 4 类契约测试；新增 `scripts/simulators.sh`、
   `scripts/integration-smoke.sh`；E2E 不变（42 条）。

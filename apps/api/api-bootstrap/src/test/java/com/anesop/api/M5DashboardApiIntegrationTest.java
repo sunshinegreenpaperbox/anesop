@@ -168,11 +168,14 @@ class M5DashboardApiIntegrationTest extends AbstractApiIntegrationTest {
                 "recordId", "record_id", "patientId", "acknowledgeReason");
 
         // 审计 DASHBOARD_VIEW 采样落库，detail 无 PHI。
+        // 审计表为全局 append-only：按本用例操作人过滤，避免其它用例/类的
+        // DASHBOARD_VIEW 采样行（M5-M19-02 新增安全用例）干扰“最近一条”断言。
         Map<String, Object> audit = jdbcTemplate.queryForMap("""
                 SELECT detail::text AS detail FROM m0_platform.sys_audit_log
                  WHERE action = 'DASHBOARD_VIEW' AND resource_type = 'DASHBOARD'
+                   AND actor_id = ?::uuid
                  ORDER BY occurred_at DESC LIMIT 1
-                """);
+                """, USER_ID);
         assertThat(audit.get("detail").toString())
                 .contains("\"kind\": \"realtime\"")
                 .contains("\"dataScope\": \"DEPT\"")

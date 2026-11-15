@@ -190,6 +190,12 @@ services:
     env_file:
       - .env
     environment:
+      # 安全相关可选环境变量（默认值见 application.yml，未设置时用默认；不改端口/网络）：
+      #   ANESOP_RATE_LIMIT_ENABLED / ANESOP_RATE_LIMIT_CAPACITY / ANESOP_RATE_LIMIT_REFILL_TOKENS
+      #   ANESOP_RATE_LIMIT_REFILL_PERIOD / ANESOP_RATE_LIMIT_MAX_BUCKETS
+      # 登录按“来源 IP+用户名”、刷新按来源 IP，超限 429 + Retry-After；集群须改 Redis 令牌桶。
+      # HTTP 安全头由 deploy/nginx/anesop.conf 统一下发（CSP/HSTS/XFO/Referrer/Permissions），
+      # API 层 SecurityConfiguration 同语义兜底；详见 docs/security/README.md。
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE}
       SPRING_FLYWAY_LOCATIONS: ${SPRING_FLYWAY_LOCATIONS}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}

@@ -49,6 +49,12 @@ public final class SyntheticAccounts {
     /** SYS_AUTH_MANAGER 角色标识（V22）。 */
     public static final String AUTH_MANAGER_ROLE_ID = "a0000000-0000-4000-8000-000000000008";
 
+    /** M5-M19-02 权限矩阵补测：SYS_QC_MANAGER（ALL 数据范围，持 m5:dashboard:read）。 */
+    public static final String QC_MANAGER_ID = "e0000000-0000-4000-8000-0000000000f9";
+    public static final String QC_MANAGER_USERNAME = "test.qc.manager";
+    public static final String QC_MANAGER_PASSWORD = "Synth@2026";
+    public static final String QC_MANAGER_ROLE_ID = "a0000000-0000-4000-8000-000000000006";
+
     /** V100 演示种子：麻醉科 / 手术室组织（DEPT 范围对象）。 */
     public static final String DEMO_ANES_ORG_ID = "f1000000-0000-4000-8000-000000000002";
     public static final String DEMO_OR_ORG_ID = "f1000000-0000-4000-8000-000000000003";
@@ -197,8 +203,25 @@ public final class SyntheticAccounts {
         jdbcTemplate.update("DELETE FROM m0_platform.sys_user_org WHERE user_id = ?::uuid", UNBOUND_ID);
     }
 
-    /** 幂等创建 ROOM 数据范围账号：自定义 ROOM 角色 + 术间 1 绑定（术间 2 不授权）。 */
-    public static void ensureRoomUser(JdbcTemplate jdbcTemplate) {
+    /** 幂等创建 SYS_QC_MANAGER 账号（ALL 数据范围，用于驾驶舱权限矩阵正例）。 */
+    public static void ensureQcManager(JdbcTemplate jdbcTemplate) {
+        String hash = new BCryptPasswordEncoder().encode(QC_MANAGER_PASSWORD);
+        jdbcTemplate.update("""
+                INSERT INTO m0_platform.sys_user
+                    (id, username, password_hash, display_name, status, must_change_password,
+                     failed_attempts, version, deleted)
+                VALUES (?::uuid, ?, ?, '测试质控管理员（合成）', 1, false, 0, 0, false)
+                ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+                    must_change_password = false, failed_attempts = 0, locked_until = NULL,
+                    status = 1, deleted = false
+                """, QC_MANAGER_ID, QC_MANAGER_USERNAME, hash);
+        jdbcTemplate.update("""
+                INSERT INTO m0_platform.sys_user_role (user_id, role_id)
+                VALUES (?::uuid, ?::uuid) ON CONFLICT DO NOTHING
+                """, QC_MANAGER_ID, QC_MANAGER_ROLE_ID);
+    }
+
+    /** 幂等创建 ROOM 数据范围账号：自定义 ROOM 角色 + 术间 1 绑定（术间 2 不授权）。 */    public static void ensureRoomUser(JdbcTemplate jdbcTemplate) {
         String hash = new BCryptPasswordEncoder().encode(ROOM_PASSWORD);
         jdbcTemplate.update("""
                 INSERT INTO m0_platform.sys_role (id, code, name, description, data_scope)

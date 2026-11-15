@@ -12,7 +12,7 @@
 | M5-M18-01 | 实时态势与 KPI 看板（术间/台次/告警/资源、SSE 或轮询） | dashboard.yaml（新域）、m5 模块、V26、前端 | M4 | Review |
 | M5-M18-02 | 风险与资源大屏（风险分层、利用率、告警聚合、大屏布局） | m5 模块、前端 | M5-M18-01 | Review |
 | M5-M19-01 | 集成联调模拟器与契约测试（HIS/药房/SPD/设备 + Pact/契约测试） | `services/simulators/**`（新建）、apps/api adapter、契约测试 | M4 | Review |
-| M5-M19-02 | 安全加固（CSP/速率限制/依赖扫描/权限复核/审计覆盖） | apps/api 安全配置、deploy/nginx、CI 脚本 | M4 | Ready |
+| M5-M19-02 | 安全加固（CSP/速率限制/依赖扫描/权限复核/审计覆盖） | apps/api 安全配置、deploy/nginx、CI 脚本 | M4 | Review |
 | M5-QA-01 | 性能与安全专项（压测基准、OWASP 清单、并发/幂等回归） | 测试/文档 | M5-M18-01…M5-M19-02 | Blocked |
 
 ## 任务卡要点
@@ -91,3 +91,20 @@
   `apps/api` clean verify BUILD SUCCESS（1147 用例，13:57）、冒烟脚本 OK（命令见 docs/integration §2/§8）。
   遗留：真实接口（HL7/WebService、mTLS、对账）待院方环境；EXT 编号口径与
   `docs/acceptance/EXTERNAL-DEPS.md` 早期登记不一致，待统一（不在本任务写域）。
+- 执行结果（2026-11-15，M5-M19-02）：nginx 443 启用 CSP（`script-src 'self'` 无 inline/eval、
+  `connect-src 'self'`、`frame-ancestors 'none'`）、XFO 改 DENY、HSTS 仍仅 443；API 层
+  `SecurityConfiguration` 增加同语义头（CSP 最小化、HSTS 仅 HTTPS）；`RateLimitFilter` 改为
+  登录按 IP+用户名、刷新按 IP，429 + `Retry-After`，容量/窗口/桶上限可配置（env），桶表 LRU
+  上限 10000；`security-check.sh`（21 项离线静态门禁，接入 `check.sh` 第 8/8 步，约 1–2s）与
+  `security-scan.sh`（npm 生产依赖 0 HIGH/CRITICAL；allowlist/许可证；镜像清单 9 项，Docker/Trivy
+  不可用按 EXT-08 生成待扫清单）。权限矩阵复核 M0–M5（`docs/security/README.md` §5）+ 补测
+  `SecurityAuthorizationRegressionTest`（QC 驾驶舱 200、外科 403+审计、M0 用户管理仅管理员）；
+  审计覆盖复核含登录/刷新/登出/改密/越权/401/业务动作的成功与失败路径。文档：`docs/security/README.md`
+  （安全头/CSP/限流/扫描/权限矩阵/审计/OWASP Top 10/已知限制）、ACCEPTANCE §B/§C-8/§G、
+  `docs/testing/README.md` §14。证据：安全专项 12 例（`RateLimitIntegrationTest` 4 +
+  `RateLimitRecoveryTest` 1 + `SecurityHeadersIntegrationTest` 3 + `NginxSecurityHeadersConfigTest` 2 +
+  `SecurityAuthorizationRegressionTest` 2）；`security-check.sh` 21/21、`security-scan.sh` OK、
+  `compose-check.sh` 34 PASS；`apps/api` clean verify BUILD SUCCESS（1157 用例，14:07）、
+  `pnpm test:unit` 179/179、`pnpm build`/`pnpm lint` 通过、`pnpm e2e` 45/45（1.4m）。遗留：多实例限流需 Redis、Maven jar CVE 由 CI 镜像扫描、CSP
+  `style-src 'unsafe-inline'`（Element Plus）、`org.springframework:spring-tx` 未登记 allowlist
+  （历史缺口，`docs/deps` 不在本任务写域，已登记 WARN）。

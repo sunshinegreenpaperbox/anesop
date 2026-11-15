@@ -15,6 +15,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -33,6 +34,7 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 
 /**
  * 认证与授权安全配置（S0-07，契约 auth.yaml 0.3.0 / 方案书 §3.9.2、§3.9.5）。
@@ -47,6 +49,9 @@ import org.springframework.security.web.SecurityFilterChain;
  *
  * <p>访问令牌为 HS256 JWT（15 分钟）；resource server 校验签名、iss、exp 与吊销表（登出即失效）。
  * {@link MustChangePasswordFilter} 在 Bearer 认证后限制强制改密账号的可用接口（S-3）。
+ *
+ * <p>安全响应头（M5-M19-02）：CSP（API 最小化）、X-Frame-Options DENY、nosniff、
+ * Referrer-Policy、Permissions-Policy；HSTS 仅对 HTTPS 请求下发，与 nginx 443 配置同语义。
  */
 @Configuration
 @EnableMethodSecurity
@@ -65,6 +70,28 @@ public class SecurityConfiguration {
                 .formLogin(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                // 安全响应头（M5-M19-02）：与 nginx 同等语义；API 的 CSP 最小化到
+                // "不渲染任何内容"，HSTS 由 HeaderWriterFilter 仅对 HTTPS 请求下发。
+                .headers(headers -> {
+                    headers.contentTypeOptions(Customizer.withDefaults());
+                    headers.frameOptions(frame -> {
+                        frame.deny();
+                    });
+                    headers.referrerPolicy(referrer -> {
+                        referrer.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN);
+                    });
+                    headers.permissionsPolicy(policy -> {
+                        policy.policy("camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+                    });
+                    headers.contentSecurityPolicy(csp -> {
+                        csp.policyDirectives(
+                                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+                    });
+                    headers.httpStrictTransportSecurity(hsts -> {
+                        hsts.includeSubDomains(true);
+                        hsts.maxAgeInSeconds(31536000);
+                    });
+                })
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/v1/auth/login", "/v1/auth/refresh").permitAll()
                         // 网关上报不走用户 JWT：由服务层 X-Gateway-Token fail-closed 校验（M3-M8-01）。

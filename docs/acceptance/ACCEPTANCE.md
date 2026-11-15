@@ -27,7 +27,7 @@
 | 迁移 | 空库迁移、升级迁移双路径通过 | |
 | E2E | 登录、排程冲突、采集断网补传、锁单修订、权限越权、麻精双人核对 | |
 | 性能 | 排程页 1000 条 <2s、报表 <10s（本地基准） | |
-| 安全 | 依赖漏洞无 HIGH/CRITICAL；密钥不入库；审计可用 | |
+| 安全 | 依赖漏洞无 HIGH/CRITICAL；密钥不入库；审计可用 | **通过（本地可执行项）**：`pnpm audit --prod` 0 HIGH/CRITICAL；`security-check.sh` 21 项（密钥占位/默认与 prod fail-closed/日志无 PHI）；安全头与限流专项 12 例；扫描摘要见 `docs/security/README.md`。镜像 Trivy 与 Maven jar CVE 为 EXT-08 |
 | 部署 | `docker compose config` 校验通过；一键起文档完整（Docker 不可用时标环境受限） | |
 | 集成联调 | 模拟器启动/停止、HIS/药房/SPD 字段映射契约测试、错误/超时/重试/降级、冒烟脚本可重复运行 | 环境受限（EXT-01/02/03/04）：模拟器可联调，真实接口待接入 |
 
@@ -39,7 +39,10 @@
 4. 术中：开始记录 → 模拟设备数据推送 → 触发预警 → 用药/事件 → 锁单 → 修订；
 5. 复苏 → 转出 → 术后随访；
 6. 质控指标与工作量报表 → 驾驶舱大屏；
-7. 审计日志查询：任意关键操作可追溯。
+7. 审计日志查询：任意关键操作可追溯；
+8. **安全演示（M5-M19-02）**：连续错误登录触发 429 + `Retry-After`（等待窗口后恢复）；
+   低权限账号访问管理员/驾驶舱接口 403 并在审计中可查 `ACCESS_DENIED`；
+   浏览器开发者工具确认 CSP/HSTS/X-Content-Type-Options/X-Frame-Options 等响应头。
 
 ## D. 文档验收
 
@@ -67,3 +70,18 @@
 
 判据：契约测试通过 = 字段映射与异常语义已锁定；**不等于**真实接口已验证。真实接口联调仍需院方
 测试环境，按上表“遗留”逐项补齐；编号统一属文档遗留（不在 M5-M19-01 写域）。
+
+## G. 安全加固与 OWASP 结论（M5-M19-02）
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| HTTP 安全头 | 通过：nginx 443 下发 CSP/HSTS/XFO DENY/nosniff/Referrer/Permissions；80 不声明 HSTS；API 层同语义兜底（HSTS 仅 HTTPS） | `SecurityHeadersIntegrationTest`（3）、`NginxSecurityHeadersConfigTest`（2）、`security-check.sh` |
+| CSP | 通过：`script-src 'self'`（无 inline/eval）、`connect-src 'self'`、`frame-ancestors 'none'`；`style-src` 保留 `unsafe-inline`（Element Plus 行内样式，见已知限制） | 同上 + `docs/security/README.md` §2 |
+| 速率限制 | 通过：登录按 IP+用户名、刷新按 IP；429 + `Retry-After`；容量/窗口/桶上限可配置；窗口恢复 | `RateLimitIntegrationTest`（4）、`RateLimitRecoveryTest`（1） |
+| 依赖/镜像扫描 | 通过（可执行项）：npm 生产依赖 0 HIGH/CRITICAL、许可证/白名单校验（1 条历史 WARN）；镜像清单 9 项待 CI Trivy（EXT-08） | `scripts/security-scan.sh`、`.cache/security/` |
+| 权限矩阵 | 通过：M0–M5 端点×角色与迁移授权一致；补测 QC 驾驶舱正例、外科医师 403+审计、M0 用户管理仅管理员 | `docs/security/README.md` §5、`SecurityAuthorizationRegressionTest`（2） |
+| 审计覆盖 | 通过：LOGIN/REFRESH/LOGOUT/PASSWORD_CHANGE/ACCESS_DENIED/AUTH_UNAUTHORIZED/业务动作成功与失败均留痕；无口令/令牌/PHI | `docs/security/README.md` §6 |
+| OWASP Top 10 | 通过，遗留项已登记（多实例限流 Redis、CSP style-src、HSTS preload、Maven jar CVE 镜像扫描、`spring-tx` 白名单缺口） | `docs/security/README.md` §7–§8 |
+
+> 结论：安全项“通过（本地可执行项）”；EXT-08（Docker/Trivy 镜像扫描与镜像内 jar CVE）
+> 解除条件与责任见 `docs/security/README.md` §8，不影响代码验收。
