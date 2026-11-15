@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   addEmergencyCase,
@@ -23,6 +24,7 @@ import { formatLocalDate } from '../utils/date'
 import { useAuthStore } from '../../../stores/auth'
 
 const auth = useAuthStore()
+const router = useRouter()
 
 const date = ref(formatLocalDate())
 const rooms = ref<OperatingRoom[]>([])
@@ -76,6 +78,7 @@ const form = ref<ScheduleForm>({
 })
 
 const canWrite = computed(() => auth.hasPermission('m1:schedule:write'))
+const canReadRecord = computed(() => auth.hasPermission('m2:record:read'))
 const canApprove = computed(() => auth.hasPermission('m1:schedule:approve'))
 
 /** 停台原因码白名单（与契约 0.5.0/服务端一致）。 */
@@ -494,6 +497,11 @@ async function preemptCandidate(conflict: ScheduleConflict): Promise<void> {
   await submitEmergency(conflict.conflictingScheduleId)
 }
 
+/** 打开该台次的麻醉记录单（无记录时页面内可创建；权限不足时页面提示 403）。 */
+function openRecord(schedule: Schedule): void {
+  void router.push(`/m2/records/${schedule.scheduleId}`)
+}
+
 async function openHistory(schedule: Schedule): Promise<void> {
   historySchedule.value = schedule
   historyItems.value = []
@@ -638,6 +646,16 @@ onMounted(() => {
               <span class="board__mono">{{ schedule.patientNo }}</span>
             </div>
             <div class="board__item-actions">
+              <el-button
+                v-if="canReadRecord"
+                size="small"
+                text
+                type="primary"
+                data-testid="record-link"
+                @click="openRecord(schedule)"
+              >
+                麻醉记录
+              </el-button>
               <el-button
                 size="small"
                 text

@@ -527,4 +527,30 @@ describe('ScheduleBoardView 排程工作台', () => {
     expect(wrapper.text()).toContain('EMERGENCY_PREEMPT')
     expect(wrapper.text()).toContain('80000000-0000-4000-8000-000000000099')
   })
+
+  it('无 m2:record:read 时不显示麻醉记录入口', async () => {
+    const queue = createFetchQueue([jsonResponse(roomList), jsonResponse(schedulePage)])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="record-link"]').exists()).toBe(false)
+  })
+
+  it('有 m2:record:read 时点击麻醉记录入口跳转对应台次记录单', async () => {
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:schedule:read', 'm2:record:read'] }))
+    const queue = createFetchQueue([jsonResponse(roomList), jsonResponse(schedulePage)])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined as never)
+
+    const wrapper = mountBoard()
+    await flushPromises()
+
+    const link = wrapper.find('[data-testid="record-link"]')
+    expect(link.exists()).toBe(true)
+    await link.trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith(`/m2/records/${schedule.scheduleId}`)
+  })
 })
