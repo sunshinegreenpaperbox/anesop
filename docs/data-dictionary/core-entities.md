@@ -649,10 +649,11 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 - **权限**：`m4:qc:read|write|review|export`（V25，最小授予 SYS_ADMIN/SYS_QC_MANAGER 四项、
   SYS_OR_MANAGER 读+写）；审计动作见 `docs/modules/m4/README.md` §48。
 
-### 3.16 实时态势与 KPI 看板读模型（只读投影，无表，M5-M18-01，ADR-0023）
+### 3.16 实时态势、KPI、风险与资源看板读模型（只读投影，无表，M5-M18-01/M5-M18-02，ADR-0023）
 
-实时态势与 KPI **不新增表**（V26 为 data-only 权限迁移）：看板是对既有术间、台次、麻醉记录单、
-术中告警与设备登记的只读聚合，字段来源如下（契约 `dashboard.yaml` 0.1.0，口径 dashboard-1.0.0）。
+看板 **不新增表**（V26 为 data-only 权限迁移；0.2.0 亦未新增迁移）：看板是对既有术间、台次、
+麻醉记录单、术中告警、设备登记、术前评估与人员排班的只读聚合，字段来源如下
+（契约 `dashboard.yaml` 0.2.0，口径 dashboard-1.1.0）。
 
 | 看板字段 | 来源 | 说明 |
 |---|---|---|
@@ -671,12 +672,22 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 | KPI 利用率 | 台次计划起止与当日窗口重叠分钟 + 术间数 | 分母 = 可见术间数 × 每术间每日可用分钟（默认 600）；计划 vs 实际口径【待确认】 |
 | KPI 告警数 | `m2_anes.alert` | 当日触发告警数与其中 CRITICAL 数 |
 | KPI 平均麻醉时长 | `m2_anes.anesthesia_record.started_at/ended_at` | `Σ floor((ended_at − started_at)/60s) / 有记录台次`（2 位小数），无时长台次单列 |
-| 审计 | `m0_platform.sys_audit_log` | `DASHBOARD_VIEW` 按用户采样（默认 300s），detail 仅看板类型/日期/范围/计数/延迟 |
+| 风险 `asaClassCounts` / `riskLevelCounts` / `assessedCaseCount` | `m2_anes.preop_assessment.asa_class/risk_level/status/finalized_at` | 取每份申请**最新一份 FINALIZED 且未删除**的评估，按 `(asa_class, risk_level)` 分组计数；未评估台次只计入 `unassessedCaseCount`；不返回评分明细 |
+| 风险 `highRiskCaseCount` | 同上 | ASA ≥ III 或 `risk_level = HIGH`（按台次去重） |
+| 风险 `severeAlertCount` | `m2_anes.alert.severity/status/triggered_at` | 当日未确认（TRIGGERED）且 CRITICAL 的告警数 |
+| 风险 `delayedStartCount` / `overrunCaseCount` / `overdueCaseCount` | `m1_sched.schedule.start_at/end_at/status` + 记录单 `started_at/ended_at` | 计划开始/结束超过宽限仍未开始/未完成；`overdueCaseCount` 为两类并集（去重）；宽限默认 0（0–120 分钟）【待确认 Q-11】 |
+| 资源 `roomUtilization` | 台次计划起止 + `m1_sched.operating_room.deleted` | 与 KPI 利用率同源（可见术间数 × 每日可用分钟） |
+| 资源 `devices` / `deviceOnlineRate` | `m2_anes.device_registry.status/last_seen_at` | 在线率 = 在线 / 总数（查询期推导，不写回） |
+| 资源 `staffOnDuty` | `m4_staff.staff_schedule.staff_id/shift/schedule_date/status` | 当日 `PLANNED`：`total` 按 `staff_id` 去重，`byShift` 按班次分组（班组之和可能 > total）；不返回人员标识【待确认 Q-12】 |
+| 资源 `resourceGaps` | 上述聚合结果 | 固定编码（设备离线/维护、停用术间、排程超载、当班为 0、无可见术间）+ 计数 + 中文提示；展示辅助，非决策 |
+| 趋势 `points[]` | 告警 `triggered_at` + 台次计划起止/状态 + 术间数 | 按 `Asia/Shanghai` 整点分桶；告警数不限处置状态、台次按计划开始归桶；不返回时效字段 |
+| 审计 | `m0_platform.sys_audit_log` | `DASHBOARD_VIEW` 按用户采样（默认 300s），`resource_id=realtime|kpi|risk|resources|trends`，detail 仅看板类型/日期/范围/计数/延迟 |
 
 说明：看板响应**不含**患者姓名、住院号/院内患者号、证件号、手机号、术前诊断、术式自由文本、
-记录单自由文本与告警处置原因（只有计数/状态/术间/科室）。跨 schema 读取只在装配层
-`DashboardCaseSourceAdapter`/`DashboardRoomSourceAdapter`/`DashboardAlertSourceAdapter`/
-`DashboardDeviceSourceAdapter` 的单条只读 SELECT 中发生，不复制其他模块 Mapper/实体。
+记录单自由文本、术前评估评分明细、人员标识与告警处置原因（只有计数/状态/术间/科室/班组）。
+跨 schema 读取只在装配层 `DashboardCaseSourceAdapter`/`DashboardRoomSourceAdapter`/
+`DashboardAlertSourceAdapter`/`DashboardDeviceSourceAdapter`/`DashboardRiskSourceAdapter`/
+`DashboardStaffSourceAdapter` 的单条只读 SELECT 中发生，不复制其他模块 Mapper/实体。
 
 ## 4. 与契约的对应
 
@@ -777,3 +788,8 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 20. **Q-10 看板口径**：准点率“实际开始时间”来源（记录单 `started_at` vs 台次 `updated_at`）、
     利用率计划/实际占用口径、停用术间语义（M1 无独立停用状态，暂以软删除表示）、SELF 范围
     （本人台次所涉术间）是否满足麻醉医师个人看板；见 ADR-0023 Q-1–Q-4。
+21. **Q-11 超时台次口径**：宽限分钟数、是否区分“延迟开始/超时结束”、是否按科室排名；
+    见 ADR-0023 Q-5。
+22. **Q-12 资源口径**：备班（`ON_CALL`）是否计入当班、人员 SELF 范围按“本人台次所涉科室”
+    裁剪是否可接受、缺口规则阈值与是否分科室展开、设备在线率是否按设备类型分列；
+    见 ADR-0023 Q-6。

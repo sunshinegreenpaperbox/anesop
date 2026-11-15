@@ -81,6 +81,143 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/v1/dashboard/risk': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 风险分层（ASA 分级/术前评分风险等级/未确认严重告警/超时台次）
+     * @description 只读聚合，权限 `m5:dashboard:read`。口径版本 **dashboard-1.1.0**，时区 **Asia/Shanghai**。
+     *     **只返回聚合计数，不返回任何患者标识、台次标识或评分明细**（钻取走 M2 术前评估/告警接口，
+     *     并受其各自权限与数据范围约束）。
+     *
+     *     口径（窗口 = 当日 `Asia/Shanghai` 自然日 `[00:00, now]`，仅非取消台次）：
+     *     - `totalCaseCount` = 当日非取消台次数（风险分层分母，口径同 report-1.0.0）；
+     *     - `asaClassCounts` = 按**最新一份已最终化（`status=FINALIZED`）术前评估**的 `asa_class`
+     *       计数（I–VI）；同一申请多次最终化取 `finalized_at` 最新一份，向后兼容临床修订；
+     *     - `riskLevelCounts` = 同一份评估的 `risk_level`（LOW/MODERATE/HIGH）计数；
+     *       术前评分风险等级沿用 M2 评估单的综合 `risk_level`（评分算法版本见 `calculator_version`），
+     *       驾驶舱不重新评分、不暴露单项评分；
+     *     - `assessedCaseCount` = 有已最终化术前评估的台次数；`unassessedCaseCount` =
+     *       `totalCaseCount − assessedCaseCount`（未访视/仅草稿），用于数据完整性复核；
+     *     - `highRiskCaseCount` = ASA 分级 ≥ III **或** 术前评分风险等级 = HIGH 的台次数
+     *       （每个台次只有一个 ASA/风险等级组合，按组合去重，不会重复计数）；
+     *     - `severeAlertCount` = 当日**未确认**（`status=TRIGGERED`）且 `severity=CRITICAL`
+     *       的告警数（同 0.1.0 告警口径，不含处置原因与告警值）；
+     *     - `overdueCaseCount` / `delayedStartCount` / `overrunCaseCount`：超时口径见下。
+     *
+     *     超时台次口径（【待确认】Q-5）：
+     *     - `delayedStartCount` = 非取消台次中“计划开始时间 + 宽限 < now 且**未开始**”的台次数
+     *       （未开始 = 无记录单 `started_at` 且状态不是 IN_PROGRESS/COMPLETED）；
+     *     - `overrunCaseCount` = 非取消台次中“计划结束时间 + 宽限 < now 且**未完成**”的台次数
+     *       （未完成 = 无记录单 `ended_at` 且状态不是 COMPLETED）；
+     *     - `overdueCaseCount` = 上述两类台次的**并集**计数（同一台次同时延迟开始且超时未结束只计 1）；
+     *     - 宽限默认 0 分钟（`anesop.m5.dashboard.overdue-grace-minutes`，可收紧到 0–120），
+     *       随响应返回 `overdueThresholdMinutes`。是否区分“延误”与“超时”由院方确认【待确认】。
+     *
+     *     数据范围：与 0.1.0 完全一致（ALL/SITE/DEPT/ROOM/SELF，fail-closed，无可用范围 403）。
+     *     空数据：计数为 0、数组为空、`dataQuality=NO_DATA`，不返回 404。
+     *     查询写审计 `DASHBOARD_VIEW`（`resource_id=risk`，按用户采样）。
+     */
+    get: operations['getRiskDashboard']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/dashboard/resources': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 资源态势（术间利用率/状态分布、设备在线率、当班人员、资源缺口）
+     * @description 只读聚合，权限 `m5:dashboard:read`。口径版本 **dashboard-1.1.0**，时区 **Asia/Shanghai**。
+     *     **只返回术间/班组/设备类型的聚合计数与比率，不返回人员姓名、工号与设备序列号。**
+     *
+     *     口径（窗口 = 当日 `Asia/Shanghai` 自然日 `[00:00, now]`）：
+     *     - `roomUtilization`：`surgeryMinutes` = 当日非取消台次与当日窗口重叠的手术分钟数之和
+     *       （计划口径，与 KPI `totalSurgeryMinutes` 同源）；`availableMinutes` = 参与分母的可见术间数
+     *       （不含停用）× 每术间每日可用分钟（默认 600，`anesop.m5.dashboard.room-daily-available-minutes`）；
+     *       `utilizationRate` = `surgeryMinutes / availableMinutes`（0–1 小数 4 位，可 &gt; 1，分母 0 返回 0）。
+     *       计划 vs 实际占用口径 **【待确认】**（ADR-0023 Q-2）；
+     *     - `roomStatusCounts`：与实时态势同源同映射（含软删除术间按停用计入【待确认】）；
+     *     - `devices`：设备总数/在线/离线/维护中（查询期推导，`status ≠ MAINTENANCE` 且
+     *       `last_seen_at > now − 120s` 为在线，不写回设备登记）；
+     *     - `staffOnDuty`：当日 `m4_staff.staff_schedule` 中 `status=PLANNED` 的排班人数，
+     *       按班次 `DAY`/`NIGHT`/`ON_CALL` 分组（只输出计数 &gt; 0 的班次），`total` 为人数合计
+     *       （同一人同一天不同班次按 1 人计：按 `staff_id` 去重）。班次划分与“当班”的定义沿用
+     *       M4 排班口径，是否把 `ON_CALL`（备班）计入当班 **【待确认】**（ADR-0023 Q-6）；
+     *     - `resourceGaps`：确定性规则生成的缺口提示（`code` 固定枚举、`severity=INFO|WARN`、
+     *       `count` 为受影响单元数、`message` 为中文提示且不含任何标识）：设备离线（WARN）、
+     *       设备维护中（INFO）、停用术间（INFO）、排程超载 `utilizationRate &gt; 1`（WARN）、
+     *       当班人员为 0（WARN）、无可见术间（WARN）。规则是展示辅助，不是临床/管理决策；
+     *       是否需要按科室/术间细化缺口 **【待确认】**。
+     *
+     *     数据范围：与 0.1.0 一致（ALL/SITE/DEPT/ROOM/SELF，fail-closed，无可用范围 403）。
+     *     `SELF` 对人员计数的语义为“本人当日台次所涉**科室**的当班人数”（人员排班无用户标识，
+     *     故不能按“本人”精确裁剪）**【待确认】**（ADR-0023 Q-6）。
+     *     空数据：计数与比率为 0、数组为空、`dataQuality=NO_DATA`，不返回 404。
+     *     查询写审计 `DASHBOARD_VIEW`（`resource_id=resources`，按用户采样）。
+     */
+    get: operations['getResourceDashboard']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/v1/dashboard/trends': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * 告警/台次/利用率按小时趋势（30–1440 分钟窗口）
+     * @description 只读聚合，权限 `m5:dashboard:read`。口径版本 **dashboard-1.1.0**，时区 **Asia/Shanghai**。
+     *     **只返回按小时聚合的计数与比率，不返回告警明细、台次标识或患者标识。**
+     *
+     *     窗口：`hours` ∈ `[0.5, 24]`（即 **30–1440 分钟**），缺省 24 小时；窗口终点固定为服务端
+     *     当前时刻 `to`，起点 `from = to − hours × 60 分钟`；`windowMinutes` 为换算后的整数分钟。
+     *     小时桶按 `Asia/Shanghai` 整点对齐（`bucketMinutes=60`），只返回与窗口有交集的桶：
+     *     首个/末个桶可能不足 60 分钟，其计数与手术分钟只统计**与窗口交集**内的数据。
+     *
+     *     每个桶 `TrendPoint`：
+     *     - `alertCount` / `criticalAlertCount` = 桶内触发的告警数 / 其中 `severity=CRITICAL` 的数量
+     *       （不限处置状态，口径同 KPI `alertCount`）；
+     *     - `caseCount` = **计划开始时间**落在桶内的**非取消**台次数（口径同 report-1.0.0 的台次定义）；
+     *     - `surgeryMinutes` = 非取消台次与桶交集的重叠分钟数之和；
+     *     - `utilizationRate` = `surgeryMinutes / (可见术间数 × 桶与窗口交集的分钟数)`，
+     *       0–1 小数 4 位，可 &gt; 1，分母 0 返回 0。
+     *
+     *     趋势端点**不返回** `dataDelaySeconds`/`dataQuality`：小时桶是聚合值，单值延迟无意义；
+     *     实时时效标注见 `GET /v1/dashboard/realtime`。
+     *     数据范围与 0.1.0 一致（fail-closed）；空数据：各桶计数与比率为 0、`points` 仍按小时桶
+     *     返回（便于前端画零线），不返回 404。`hours` 超出 0.5–24 返回 400
+     *     （`details[0].field=hours`）；非数字或非有限数由参数校验返回 400。
+     *     查询写审计 `DASHBOARD_VIEW`（`resource_id=trends`，按用户采样）。
+     */
+    get: operations['getDashboardTrends']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -308,9 +445,232 @@ export interface components {
       /** @description 尚未获院方确认的口径项（前端须展示“口径待确认”标识；无则空数组）。 */
       pendingConfirmations: string[]
     }
+    /**
+     * @description ASA 麻醉风险分级（与 M2 术前评估 `asa_class` 一致）：I/II/III/IV/V/VI。
+     *     只输出计数，不输出单个台次的 ASA 分级（避免小样本反推患者）。
+     * @enum {string}
+     */
+    AsaClass: 'I' | 'II' | 'III' | 'IV' | 'V' | 'VI'
+    /** @description 单个 ASA 分级的台次计数。 */
+    AsaClassCount: {
+      asaClass: components['schemas']['AsaClass']
+      /** @description 当日该 ASA 分级的非取消台次数。 */
+      count: number
+    }
+    /**
+     * @description 术前评分综合风险等级（M2 术前评估 `risk_level`）：`LOW`=低危、`MODERATE`=中危、
+     *     `HIGH`=高危。驾驶舱不重新评分，只做计数。
+     * @enum {string}
+     */
+    RiskLevel: 'LOW' | 'MODERATE' | 'HIGH'
+    /** @description 单个风险等级的台次计数。 */
+    RiskLevelCount: {
+      riskLevel: components['schemas']['RiskLevel']
+      /** @description 当日该风险等级的非取消台次数。 */
+      count: number
+    }
+    /**
+     * @description 风险分层聚合（口径 dashboard-1.1.0；只读、仅计数、无 PHI）。
+     *     高危 = ASA ≥ III 或风险等级 HIGH；超时台次按“延迟开始/超时未结束”并集去重。
+     */
+    RiskDashboard: {
+      /**
+       * Format: date-time
+       * @description 服务端生成响应的时刻（RFC 3339，Asia/Shanghai 偏移）。
+       */
+      updatedAt: string
+      /** @description 统计时区，固定 Asia/Shanghai。 */
+      timezone: string
+      /**
+       * Format: date
+       * @description 统计自然日（Asia/Shanghai，缺省为服务端当日）。
+       */
+      date: string
+      /** @description 数据延迟秒数（口径同实时态势：台次/记录单/告警最新业务数据时间）。 */
+      dataDelaySeconds: number
+      dataQuality: components['schemas']['DataQuality']
+      dataScope: components['schemas']['DataScopeType']
+      /** @description 当日非取消台次数（风险分层分母）。 */
+      totalCaseCount: number
+      /** @description 有已最终化（FINALIZED）术前评估的台次数。 */
+      assessedCaseCount: number
+      /** @description 无已最终化术前评估的台次数（= totalCaseCount − assessedCaseCount）。 */
+      unassessedCaseCount: number
+      /** @description ASA 分级 ≥ III 或风险等级 HIGH 的台次数（按台次去重）。 */
+      highRiskCaseCount: number
+      /** @description 按 ASA 分级计数（按 I→VI 顺序，只输出计数 > 0 的分级；空数据为空数组）。 */
+      asaClassCounts: components['schemas']['AsaClassCount'][]
+      /** @description 按风险等级计数（按 LOW→HIGH 顺序，只输出计数 > 0 的等级；空数据为空数组）。 */
+      riskLevelCounts: components['schemas']['RiskLevelCount'][]
+      /** @description 当日未确认且严重（severity=CRITICAL）的告警数。 */
+      severeAlertCount: number
+      /** @description 超时台次数（延迟开始 ∪ 超时未结束，同一台次只计 1）。 */
+      overdueCaseCount: number
+      /** @description 计划开始时间超过宽限仍未开始的非取消台次数。 */
+      delayedStartCount: number
+      /** @description 计划结束时间超过宽限仍未完成的非取消台次数。 */
+      overrunCaseCount: number
+      /** @description 超时判定宽限分钟数（默认 0）。 */
+      overdueThresholdMinutes: number
+      /** @description 风险分层与超时口径说明（随响应返回，口径可追溯）。 */
+      formula: string
+      /** @description 尚未获院方确认的口径项（前端须展示“口径待确认”标识；无则空数组）。 */
+      pendingConfirmations: string[]
+    }
+    /** @description 术间利用率（计划口径；比率 0–1 小数 4 位，可 &gt; 1，分母 0 返回 0）。 */
+    RoomUtilization: {
+      /** @description 参与分母的可见术间数（不含停用术间）。 */
+      roomCount: number
+      /** @description 当日非取消台次与当日窗口重叠的手术分钟数之和。 */
+      surgeryMinutes: number
+      /** @description 可用分钟数 = 可见术间数 × 每术间每日可用分钟（默认 600）。 */
+      availableMinutes: number
+      /**
+       * Format: double
+       * @description 利用率 = surgeryMinutes / availableMinutes（0 时返回 0，可大于 1）。
+       */
+      utilizationRate: number
+    }
+    /**
+     * @description 班次（与 M4 排班 `shift` 一致）：DAY=白班、NIGHT=夜班、ON_CALL=备班。
+     * @enum {string}
+     */
+    Shift: 'DAY' | 'NIGHT' | 'ON_CALL'
+    /** @description 单个班次的当班人数。 */
+    StaffShiftCount: {
+      shift: components['schemas']['Shift']
+      /** @description 该班次的当班人数（同一人同日多班次按 1 人计）。 */
+      count: number
+    }
+    /** @description 当班人员数（按班组；只输出人数，不输出姓名/工号）。 */
+    StaffOnDuty: {
+      /** @description 当日排班人数合计（按 staffId 去重）。 */
+      total: number
+      /** @description 按班次分组（顺序 DAY→NIGHT→ON_CALL，只输出计数 > 0 的班次；空数据为空数组）。 */
+      byShift: components['schemas']['StaffShiftCount'][]
+    }
+    /**
+     * @description 缺口提示级别（展示辅助，不是临床/管理决策）：INFO=提示、WARN=需关注。
+     * @enum {string}
+     */
+    ResourceGapSeverity: 'INFO' | 'WARN'
+    /**
+     * @description 缺口提示编码（确定性规则，前端按编码本地化与排序）：
+     *     `DEVICE_OFFLINE`=设备离线、`DEVICE_MAINTENANCE`=设备维护中、`ROOM_OUT_OF_SERVICE`=停用术间、
+     *     `ROOM_OVERLOADED`=排程超载（利用率 &gt; 1）、`STAFF_NOT_SCHEDULED`=当班人员为 0、
+     *     `NO_VISIBLE_ROOM`=无可见术间。
+     * @enum {string}
+     */
+    ResourceGapCode:
+      | 'DEVICE_OFFLINE'
+      | 'DEVICE_MAINTENANCE'
+      | 'ROOM_OUT_OF_SERVICE'
+      | 'ROOM_OVERLOADED'
+      | 'STAFF_NOT_SCHEDULED'
+      | 'NO_VISIBLE_ROOM'
+    /** @description 资源缺口提示（只含编码/级别/计数/中文提示，无任何人员或设备标识）。 */
+    ResourceGap: {
+      code: components['schemas']['ResourceGapCode']
+      severity: components['schemas']['ResourceGapSeverity']
+      /** @description 受影响单元数（设备台数/术间数/人数；`NO_VISIBLE_ROOM` 固定为 0）。 */
+      count: number
+      /** @description 中文提示（不含姓名、工号、设备序列号与患者标识）。 */
+      message: string
+    }
+    /** @description 资源态势聚合（口径 dashboard-1.1.0；只读、仅计数与比率、无 PHI）。 */
+    ResourceDashboard: {
+      /**
+       * Format: date-time
+       * @description 服务端生成响应的时刻（RFC 3339）。
+       */
+      updatedAt: string
+      /** @description 统计时区，固定 Asia/Shanghai。 */
+      timezone: string
+      /**
+       * Format: date
+       * @description 统计自然日（Asia/Shanghai，缺省为服务端当日）。
+       */
+      date: string
+      /** @description 数据延迟秒数（口径同实时态势：台次/记录单/设备最新业务数据时间）。 */
+      dataDelaySeconds: number
+      dataQuality: components['schemas']['DataQuality']
+      dataScope: components['schemas']['DataScopeType']
+      roomUtilization: components['schemas']['RoomUtilization']
+      roomStatusCounts: components['schemas']['RoomStatusCounts']
+      devices: components['schemas']['DeviceSummary']
+      /**
+       * Format: double
+       * @description 设备在线率 = online / total（0–1，4 位小数；无设备时为 0）。
+       */
+      deviceOnlineRate: number
+      staffOnDuty: components['schemas']['StaffOnDuty']
+      /** @description 缺口提示（按固定编码顺序；无缺口为空数组）。 */
+      resourceGaps: components['schemas']['ResourceGap'][]
+      /** @description 利用率/在线率/当班人数的公式说明（随响应返回，口径可追溯）。 */
+      formula: string
+      /** @description 尚未获院方确认的口径项（前端须展示“口径待确认”标识；无则空数组）。 */
+      pendingConfirmations: string[]
+    }
+    /** @description 单个小时桶的趋势点（计数与比率，无明细标识）。 */
+    TrendPoint: {
+      /**
+       * Format: date-time
+       * @description 桶起点（Asia/Shanghai 整点；首末桶按窗口裁剪）。
+       */
+      startsAt: string
+      /** @description 桶内触发的告警数（不限处置状态）。 */
+      alertCount: number
+      /** @description 桶内触发的严重（CRITICAL）告警数。 */
+      criticalAlertCount: number
+      /** @description 桶内计划开始的非取消台次数。 */
+      caseCount: number
+      /** @description 桶内重叠手术分钟数之和。 */
+      surgeryMinutes: number
+      /**
+       * Format: double
+       * @description 桶利用率 = surgeryMinutes / (可见术间数 × 桶与窗口交集分钟)；分母 0 返回 0。
+       */
+      utilizationRate: number
+    }
+    /**
+     * @description 按小时趋势（口径 dashboard-1.1.0；只读、仅聚合计数、无 PHI）。不返回时效字段
+     *     （`dataDelaySeconds`/`dataQuality`），实时时效标注见 `/v1/dashboard/realtime`。
+     */
+    TrendDashboard: {
+      /**
+       * Format: date-time
+       * @description 服务端生成响应的时刻（RFC 3339）。
+       */
+      updatedAt: string
+      /** @description 统计时区，固定 Asia/Shanghai。 */
+      timezone: string
+      dataScope: components['schemas']['DataScopeType']
+      /** @description 窗口长度（分钟，30–1440）。 */
+      windowMinutes: number
+      /** @description 桶长度（分钟，固定 60）。 */
+      bucketMinutes: number
+      /**
+       * Format: date-time
+       * @description 窗口起点（RFC 3339，= to − windowMinutes）。
+       */
+      from: string
+      /**
+       * Format: date-time
+       * @description 窗口终点（RFC 3339，= 服务端当前时刻）。
+       */
+      to: string
+      /** @description 参与利用率分母的可见术间数（不含停用术间）。 */
+      roomCount: number
+      /** @description 按桶起点升序（只包含与窗口有交集的桶；空数据时仍返回各桶的零值）。 */
+      points: components['schemas']['TrendPoint'][]
+      /** @description 趋势口径说明（随响应返回，口径可追溯）。 */
+      formula: string
+      /** @description 尚未获院方确认的口径项（前端须展示“口径待确认”标识；无则空数组）。 */
+      pendingConfirmations: string[]
+    }
   }
   responses: {
-    /** @description 请求参数校验失败（`date` 格式非法或超出允许范围）。 */
+    /** @description 请求参数校验失败（如 `date` 格式非法/超出允许范围、`hours` 超出 0.5–24 或非数字）。 */
     BadRequest: {
       headers: {
         [name: string]: unknown
@@ -541,6 +901,226 @@ export interface operations {
            *     }
            */
           'application/json': components['schemas']['DashboardKpi']
+        }
+      }
+      400: components['responses']['BadRequest']
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  getRiskDashboard: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 风险分层聚合（计数，无患者标识与台次标识）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "updatedAt": "2026-11-15T09:30:12+08:00",
+           *       "timezone": "Asia/Shanghai",
+           *       "date": "2026-11-15",
+           *       "dataDelaySeconds": 8,
+           *       "dataQuality": "OK",
+           *       "dataScope": "DEPT",
+           *       "totalCaseCount": 6,
+           *       "assessedCaseCount": 4,
+           *       "unassessedCaseCount": 2,
+           *       "highRiskCaseCount": 2,
+           *       "asaClassCounts": [
+           *         {
+           *           "asaClass": "I",
+           *           "count": 1
+           *         },
+           *         {
+           *           "asaClass": "II",
+           *           "count": 2
+           *         },
+           *         {
+           *           "asaClass": "III",
+           *           "count": 1
+           *         }
+           *       ],
+           *       "riskLevelCounts": [
+           *         {
+           *           "riskLevel": "LOW",
+           *           "count": 2
+           *         },
+           *         {
+           *           "riskLevel": "MODERATE",
+           *           "count": 1
+           *         },
+           *         {
+           *           "riskLevel": "HIGH",
+           *           "count": 1
+           *         }
+           *       ],
+           *       "severeAlertCount": 1,
+           *       "overdueCaseCount": 1,
+           *       "delayedStartCount": 1,
+           *       "overrunCaseCount": 0,
+           *       "overdueThresholdMinutes": 0,
+           *       "formula": "风险分层 = 当日非取消台次按 ASA 分级与术前评估风险等级计数；高危 = ASA ≥ III 或风险等级 HIGH；超时 = 计划开始/结束超过宽限仍未开始/未完成（并集去重）",
+           *       "pendingConfirmations": [
+           *         "超时台次的宽限分钟数与“延迟开始/超时结束”是否分开考核【待确认】",
+           *         "高危台次定义为 ASA ≥ III 或风险等级 HIGH，是否再加未确认严重告警【待确认】"
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['RiskDashboard']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  getResourceDashboard: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 资源态势聚合（术间/设备/人员计数与比率，无人员与设备标识）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "updatedAt": "2026-11-15T09:30:12+08:00",
+           *       "timezone": "Asia/Shanghai",
+           *       "date": "2026-11-15",
+           *       "dataDelaySeconds": 8,
+           *       "dataQuality": "OK",
+           *       "dataScope": "DEPT",
+           *       "roomUtilization": {
+           *         "roomCount": 3,
+           *         "surgeryMinutes": 630,
+           *         "availableMinutes": 1800,
+           *         "utilizationRate": 0.35
+           *       },
+           *       "roomStatusCounts": {
+           *         "total": 3,
+           *         "inSurgery": 1,
+           *         "idle": 1,
+           *         "cleaning": 1,
+           *         "preparing": 0,
+           *         "recovery": 0,
+           *         "outOfService": 0
+           *       },
+           *       "devices": {
+           *         "total": 4,
+           *         "online": 3,
+           *         "offline": 1,
+           *         "maintenance": 0,
+           *         "offlineTimeoutSeconds": 120
+           *       },
+           *       "deviceOnlineRate": 0.75,
+           *       "staffOnDuty": {
+           *         "total": 5,
+           *         "byShift": [
+           *           {
+           *             "shift": "DAY",
+           *             "count": 4
+           *           },
+           *           {
+           *             "shift": "ON_CALL",
+           *             "count": 1
+           *           }
+           *         ]
+           *       },
+           *       "resourceGaps": [
+           *         {
+           *           "code": "DEVICE_OFFLINE",
+           *           "severity": "WARN",
+           *           "count": 1,
+           *           "message": "1 台设备离线（超时未上报），请检查采集网关与设备电源"
+           *         }
+           *       ],
+           *       "formula": "利用率 = 当日重叠手术分钟 / (可见术间数 × 每术间每日可用分钟)；设备在线率 = 在线 / 设备总数；当班人数 = 当日 PLANNED 排班人数（按 staff_id 去重，按班次分组）",
+           *       "pendingConfirmations": [
+           *         "利用率为“计划手术时长 / 可用时长”，是否改为实际占用【待确认】",
+           *         "备班（ON_CALL）是否计入“当班人员”【待确认】",
+           *         "人员排班无用户标识，SELF 范围按“本人台次所涉科室”裁剪【待确认】"
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['ResourceDashboard']
+        }
+      }
+      401: components['responses']['Unauthorized']
+      403: components['responses']['Forbidden']
+    }
+  }
+  getDashboardTrends: {
+    parameters: {
+      query?: {
+        /**
+         * @description 趋势窗口长度（小时，允许 0.5–24，即 30–1440 分钟），缺省 24。
+         *     超出范围返回 400（`details[0].field=hours`）；非数字返回 400。
+         */
+        hours?: number
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description 按小时趋势（计数与比率，无告警明细与患者标识）。 */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          /**
+           * @example {
+           *       "updatedAt": "2026-11-15T09:30:12+08:00",
+           *       "timezone": "Asia/Shanghai",
+           *       "dataScope": "ALL",
+           *       "windowMinutes": 1440,
+           *       "bucketMinutes": 60,
+           *       "from": "2026-11-14T09:30:12+08:00",
+           *       "to": "2026-11-15T09:30:12+08:00",
+           *       "roomCount": 3,
+           *       "points": [
+           *         {
+           *           "startsAt": "2026-11-15T08:00:00+08:00",
+           *           "alertCount": 2,
+           *           "criticalAlertCount": 1,
+           *           "caseCount": 1,
+           *           "surgeryMinutes": 45,
+           *           "utilizationRate": 0.25
+           *         },
+           *         {
+           *           "startsAt": "2026-11-15T09:00:00+08:00",
+           *           "alertCount": 0,
+           *           "criticalAlertCount": 0,
+           *           "caseCount": 0,
+           *           "surgeryMinutes": 30,
+           *           "utilizationRate": 0.1667
+           *         }
+           *       ],
+           *       "formula": "告警 = 桶内触发告警数；台次 = 桶内计划开始的非取消台次；利用率 = 桶内重叠手术分钟 / (可见术间数 × 桶与窗口交集分钟)",
+           *       "pendingConfirmations": [
+           *         "利用率为“计划手术时长 / 可用时长”，是否改为实际占用【待确认】",
+           *         "台次趋势按“计划开始”归桶，是否需要同时提供“实际开始”口径【待确认】"
+           *       ]
+           *     }
+           */
+          'application/json': components['schemas']['TrendDashboard']
         }
       }
       400: components['responses']['BadRequest']
