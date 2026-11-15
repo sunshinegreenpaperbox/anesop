@@ -2,6 +2,9 @@ package com.anesop.m4.impl.report;
 
 import com.anesop.contracts.report.model.MultiReport;
 import com.anesop.contracts.report.model.MultiRow;
+import com.anesop.contracts.report.model.ReportLock;
+import com.anesop.contracts.report.model.ReportLockList;
+import com.anesop.contracts.report.model.ReportLockRequest;
 import com.anesop.contracts.report.model.ReportTotals;
 import com.anesop.contracts.report.model.SurgeryDistribution;
 import com.anesop.contracts.report.model.WorkloadBucket;
@@ -13,6 +16,7 @@ import com.anesop.m0.api.security.DataScope;
 import com.anesop.m0.api.security.DataScopeAssignment;
 import com.anesop.m0.api.security.DataScopeAssignments;
 import com.anesop.m0.api.security.DataScopeResolver;
+import com.anesop.m4.api.error.M4ConflictException;
 import com.anesop.m4.api.error.M4ValidationException;
 import com.anesop.m4.api.report.MultiReportQuery;
 import com.anesop.m4.api.report.ReportCaseFact;
@@ -20,10 +24,13 @@ import com.anesop.m4.api.report.ReportCaseFilter;
 import com.anesop.m4.api.report.ReportCaseSource;
 import com.anesop.m4.api.report.ReportDimension;
 import com.anesop.m4.api.report.ReportExportQuery;
+import com.anesop.m4.api.report.ReportLockService;
 import com.anesop.m4.api.report.ReportMetric;
 import com.anesop.m4.api.report.ReportQuery;
 import com.anesop.m4.api.report.ReportService;
 import com.anesop.m4.impl.config.ReportProperties;
+import com.anesop.m4.impl.persistence.entity.ReportSnapshotEntity;
+import com.anesop.m4.impl.persistence.mapper.ReportSnapshotMapper;
 import com.anesop.m4.impl.support.M4Values;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import jakarta.annotation.PostConstruct;
@@ -39,6 +46,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -48,11 +56,15 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 工作量统计、多维报表与导出服务实现（M4-M16-01，契约 report.yaml 0.1.0）。
@@ -78,7 +90,7 @@ import org.springframework.stereotype.Service;
  * 查询与导出分别写审计 {@code REPORT_QUERY}/{@code REPORT_EXPORT}，detail 不含患者标识。
  */
 @Service
-public class ReportServiceImpl implements ReportService {
+public class ReportServiceImpl implements ReportService, ReportLockService {
 
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private static final String TIMEZONE = "Asia/Shanghai";
@@ -93,6 +105,10 @@ public class ReportServiceImpl implements ReportService {
     private static final int MAX_PAGE_SIZE = 200;
     private static final String REPORT_WORKLOAD = "workload";
     private static final String REPORT_MULTI = "multi";
+    private static final ZoneOffset DISPLAY_OFFSET = ZoneOffset.ofHours(8);
+    private static final String SOURCE_LIVE = "LIVE";
+    private static final String SOURCE_SNAPSHOT = "SNAPSHOT";
+    private static final int MAX_LOCK_LIMIT = 200;
     private static final String LEVEL_TOTAL = "TOTAL";
     private static final String LEVEL_BUCKET = "BUCKET";
     private static final String LEVEL_SURGERY = "SURGERY";
@@ -109,15 +125,21 @@ public class ReportServiceImpl implements ReportService {
     private final DataScopeResolver dataScopeResolver;
     private final AuditWriter auditWriter;
     private final ReportProperties properties;
+    private final ReportSnapshotMapper snapshotMapper;
+    private final ReportSnapshotCodec codec;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
-            justification = "Spring 注入的只读配置/服务由容器管理；服务只读权重配置，不修改其内部状态")
+            justification = "Spring 注入的只读配置/服务/Mapper 由容器管理；服务只读权重配置，"
+                    + "不修改其内部状态")
     public ReportServiceImpl(ReportCaseSource caseSource, DataScopeResolver dataScopeResolver,
-            AuditWriter auditWriter, ReportProperties properties) {
+            AuditWriter auditWriter, ReportProperties properties,
+            ReportSnapshotMapper snapshotMapper, ReportSnapshotCodec codec) {
         this.caseSource = caseSource;
         this.dataScopeResolver = dataScopeResolver;
         this.auditWriter = auditWriter;
         this.properties = properties;
+        this.snapshotMapper = snapshotMapper;
+        this.codec = codec;
     }
 
     /**
@@ -143,11 +165,26 @@ public class ReportServiceImpl implements ReportService {
         }
         ReportDimension dimension = ReportDimension.parse(query.dimension());
         Window window = window(query.from(), query.to(), query.deptId(), caller);
-        WorkloadReport report = buildWorkload(window, dimension);
+        ReportSnapshotEntity snapshot = findSnapshot(REPORT_WORKLOAD,
+                paramsHash(lockParams(REPORT_WORKLOAD, window, dimension.name(), null, null)));
+        WorkloadReport report;
+        if (snapshot != null) {
+            report = codec.readWorkload(snapshot.getPayload());
+            report.setSource(WorkloadReport.SourceEnum.SNAPSHOT);
+            report.setLockId(snapshot.getId().toString());
+            report.setLockedAt(snapshot.getLockedAt().atOffset(DISPLAY_OFFSET));
+        } else {
+            report = buildWorkload(window, loadCases(window), dimension);
+            report.setSource(WorkloadReport.SourceEnum.LIVE);
+        }
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("dimension", dimension.name());
         extra.put("bucketCount", report.getBuckets().size());
         extra.put("caseCount", report.getCaseCount());
+        extra.put("source", report.getSource() == null ? SOURCE_LIVE : report.getSource().getValue());
+        if (report.getLockId() != null) {
+            extra.put("lockId", report.getLockId());
+        }
         audit("REPORT_QUERY", REPORT_WORKLOAD, window, caller, context, extra);
         return report;
     }
@@ -163,13 +200,32 @@ public class ReportServiceImpl implements ReportService {
         int page = page(query.page());
         int size = size(query.size());
         Window window = window(query.from(), query.to(), query.deptId(), caller);
-        MultiAggregate aggregate = aggregateMulti(window, dimensions);
-        MultiReport report = toMultiReport(window, dimensions, metrics, aggregate, page, size);
+        ReportSnapshotEntity snapshot = findSnapshot(REPORT_MULTI, paramsHash(lockParams(
+                REPORT_MULTI, window, null, dimensionCodes(dimensions), metricCodes(metrics))));
+        MultiReport report;
+        int groupCount;
+        if (snapshot != null) {
+            ReportSnapshotCodec.MultiSnapshot stored = codec.readMulti(snapshot.getPayload());
+            report = toMultiReport(window, stored, page, size);
+            report.setSource(MultiReport.SourceEnum.SNAPSHOT);
+            report.setLockId(snapshot.getId().toString());
+            report.setLockedAt(snapshot.getLockedAt().atOffset(DISPLAY_OFFSET));
+            groupCount = stored.rows().size();
+        } else {
+            MultiAggregate aggregate = aggregateMulti(window, loadCases(window), dimensions);
+            report = toMultiReport(window, dimensions, metrics, aggregate, page, size);
+            report.setSource(MultiReport.SourceEnum.LIVE);
+            groupCount = aggregate.totals().getGroupCount();
+        }
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("dimensions", dimensionCodes(dimensions));
         extra.put("metrics", metricCodes(metrics));
-        extra.put("groupCount", aggregate.totals().getGroupCount());
-        extra.put("caseCount", aggregate.totals().getCaseCount());
+        extra.put("groupCount", groupCount);
+        extra.put("caseCount", report.getTotals().getCaseCount());
+        extra.put("source", report.getSource().getValue());
+        if (report.getLockId() != null) {
+            extra.put("lockId", report.getLockId());
+        }
         audit("REPORT_QUERY", REPORT_MULTI, window, caller, context, extra);
         return report;
     }
@@ -185,44 +241,364 @@ public class ReportServiceImpl implements ReportService {
         if (REPORT_WORKLOAD.equals(report)) {
             ReportDimension dimension = ReportDimension.parse(query.dimension());
             Window window = window(query.from(), query.to(), query.deptId(), caller);
-            WorkloadReport model = buildWorkload(window, dimension);
+            ReportSnapshotEntity snapshot = findSnapshot(REPORT_WORKLOAD,
+                    paramsHash(lockParams(REPORT_WORKLOAD, window, dimension.name(), null, null)));
+            WorkloadReport model;
+            String source;
+            if (snapshot != null) {
+                // 锁定后导出默认读快照：源数据变化不影响已锁定值（手算对照不变）。
+                model = codec.readWorkload(snapshot.getPayload());
+                source = SOURCE_SNAPSHOT;
+            } else {
+                model = buildWorkload(window, loadCases(window), dimension);
+                source = SOURCE_LIVE;
+            }
             CsvRows rows = csvWorkload(model);
             Map<String, Object> extra = new LinkedHashMap<>();
             extra.put("dimension", dimension.name());
             extra.put("dataRows", rows.rows().size());
+            extra.put("source", source);
+            if (snapshot != null) {
+                extra.put("lockId", snapshot.getId().toString());
+            }
             audit("REPORT_EXPORT", REPORT_WORKLOAD, window, caller, context, extra);
             String fileName = "workload-" + dimension.name() + "-" + window.from() + "-"
                     + window.to() + "." + format;
-            return new ExportPlan(fileName, rows.rows().size(), output -> writeCsv(output, rows));
+            return new ExportPlan(fileName, rows.rows().size(),
+                    output -> writeCsv(output, rows), source);
         }
         List<ReportDimension> dimensions = parseDimensions(query.dimensions());
         List<ReportMetric> metrics = parseMetrics(query.metrics());
         Window window = window(query.from(), query.to(), query.deptId(), caller);
-        MultiAggregate aggregate = aggregateMulti(window, dimensions);
-        if (aggregate.rows().size() > MAX_EXPORT_ROWS) {
-            throw new M4ValidationException("dimensions",
-                    "导出分组数超过上限 " + MAX_EXPORT_ROWS + "，请缩小日期范围或增加维度");
+        ReportSnapshotEntity snapshot = findSnapshot(REPORT_MULTI, paramsHash(lockParams(
+                REPORT_MULTI, window, null, dimensionCodes(dimensions), metricCodes(metrics))));
+        CsvRows rows;
+        String source;
+        int groupCount;
+        String dimensionPart;
+        if (snapshot != null) {
+            ReportSnapshotCodec.MultiSnapshot stored = codec.readMulti(snapshot.getPayload());
+            if (stored.rows().size() > MAX_EXPORT_ROWS) {
+                throw new M4ValidationException("dimensions",
+                        "导出分组数超过上限 " + MAX_EXPORT_ROWS + "，请缩小日期范围或增加维度");
+            }
+            List<ReportDimension> storedDimensions = parseDimensionCodes(stored.dimensions());
+            MultiAggregate aggregate = new MultiAggregate(stored.rows(), stored.totals(),
+                    stored.from().toString(), stored.to().toString());
+            rows = csvMulti(storedDimensions, aggregate);
+            source = SOURCE_SNAPSHOT;
+            groupCount = stored.rows().size();
+            dimensionPart = String.join("+", stored.dimensions());
+        } else {
+            MultiAggregate aggregate = aggregateMulti(window, loadCases(window), dimensions);
+            if (aggregate.rows().size() > MAX_EXPORT_ROWS) {
+                throw new M4ValidationException("dimensions",
+                        "导出分组数超过上限 " + MAX_EXPORT_ROWS + "，请缩小日期范围或增加维度");
+            }
+            rows = csvMulti(dimensions, aggregate);
+            source = SOURCE_LIVE;
+            groupCount = aggregate.rows().size();
+            dimensionPart = String.join("+", dimensionCodes(dimensions));
         }
-        CsvRows rows = csvMulti(dimensions, aggregate);
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("dimensions", dimensionCodes(dimensions));
         extra.put("metrics", metricCodes(metrics));
-        extra.put("groupCount", aggregate.rows().size());
+        extra.put("groupCount", groupCount);
         extra.put("dataRows", rows.rows().size());
+        extra.put("source", source);
+        if (snapshot != null) {
+            extra.put("lockId", snapshot.getId().toString());
+        }
         audit("REPORT_EXPORT", REPORT_MULTI, window, caller, context, extra);
-        String fileName = "multi-" + String.join("+", dimensionCodes(dimensions)) + "-"
-                + window.from() + "-" + window.to() + "." + format;
-        return new ExportPlan(fileName, rows.rows().size(), output -> writeCsv(output, rows));
+        String fileName = "multi-" + dimensionPart + "-" + window.from() + "-"
+                + window.to() + "." + format;
+        return new ExportPlan(fileName, rows.rows().size(),
+                output -> writeCsv(output, rows), source);
+    }
+
+    // ---------------------------------------------------------------------
+    // 报表锁定（V28，report.yaml 0.2.0）
+    // ---------------------------------------------------------------------
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ReportLock lock(ReportLockRequest request, AuthPrincipal caller,
+            AuthRequestContext context) {
+        if (request == null) {
+            throw new M4ValidationException("body", "请求体不能为空");
+        }
+        String report = requireLockReport(request.getReport());
+        Period period = resolvePeriod(request);
+        String dimensionCode = null;
+        List<ReportDimension> dimensions = null;
+        List<ReportMetric> metrics = null;
+        if (REPORT_WORKLOAD.equals(report)) {
+            dimensionCode = ReportDimension.parse(request.getDimension() == null
+                    ? null : request.getDimension().getValue()).name();
+        } else {
+            dimensions = parseDimensions(joinDimensionCodes(request.getDimensions()));
+            metrics = parseMetrics(joinMetricCodes(request.getMetrics()));
+        }
+        Window window = window(period.from().toString(), period.to().toString(),
+                request.getDeptId(), caller);
+        Map<String, Object> params = lockParams(report, window, dimensionCode,
+                dimensions == null ? null : dimensionCodes(dimensions),
+                metrics == null ? null : metricCodes(metrics));
+        String paramsHash = paramsHash(params);
+        if (findSnapshot(report, paramsHash) != null) {
+            throw duplicateLock(period);
+        }
+
+        String payload;
+        int rowCount;
+        if (REPORT_WORKLOAD.equals(report)) {
+            WorkloadReport model = buildWorkload(window, loadCases(window),
+                    ReportDimension.valueOf(dimensionCode));
+            model.setSource(WorkloadReport.SourceEnum.LIVE);
+            rowCount = model.getBuckets().size();
+            payload = codec.writeWorkload(model, rowCount);
+        } else {
+            MultiAggregate aggregate = aggregateMulti(window, loadCases(window), dimensions);
+            if (aggregate.rows().size() > MAX_EXPORT_ROWS) {
+                throw new M4ValidationException("dimensions",
+                        "锁定分组数超过上限 " + MAX_EXPORT_ROWS + "，请缩小日期范围或增加维度");
+            }
+            rowCount = aggregate.rows().size();
+            payload = codec.writeMulti(new ReportSnapshotCodec.MultiSnapshot(window.from(),
+                    window.to(), dimensionCodes(dimensions), metricCodes(metrics),
+                    aggregate.rows(), aggregate.totals(), rowCount));
+        }
+        String payloadHash = codec.hash(payload);
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        ReportSnapshotEntity entity = new ReportSnapshotEntity();
+        entity.setId(UUID.randomUUID());
+        entity.setReport(report);
+        entity.setPeriod(period.label());
+        entity.setFromDate(window.from());
+        entity.setToDate(window.to());
+        entity.setParams(codec.canonical(params));
+        entity.setParamsHash(paramsHash);
+        entity.setPayload(payload);
+        entity.setPayloadHash(payloadHash);
+        entity.setDataScope(window.dataScopeSummary());
+        entity.setScopeHash(codec.hash(window.scopeSignature()));
+        entity.setRowCount(rowCount);
+        entity.setLockedBy(caller == null ? null : caller.userId());
+        entity.setLockedByName(lockerName(caller));
+        entity.setLockedAt(now);
+        try {
+            snapshotMapper.insertSnapshot(entity);
+        } catch (DuplicateKeyException duplicate) {
+            throw duplicateLock(period);
+        }
+
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("operation", "REPORT_LOCK");
+        detail.put("lockId", entity.getId().toString());
+        detail.put("report", report);
+        detail.put("period", period.label());
+        detail.put("from", window.from().toString());
+        detail.put("to", window.to().toString());
+        detail.put("paramsHash", paramsHash);
+        detail.put("payloadHash", payloadHash);
+        detail.put("rowCount", rowCount);
+        detail.put("dataScope", window.dataScopeSummary());
+        auditWriter.record("REPORT_LOCK", RESOURCE_TYPE, entity.getId().toString(), true, detail,
+                caller == null ? null : caller.userId(),
+                caller == null ? null : caller.username(), context);
+        return toLock(entity);
+    }
+
+    @Override
+    public ReportLockList list(String report, int limit, AuthPrincipal caller) {
+        if (limit < 1 || limit > MAX_LOCK_LIMIT) {
+            throw new M4ValidationException("limit", "返回条数必须在 1–" + MAX_LOCK_LIMIT + " 之间");
+        }
+        String normalized = report == null || report.isBlank() ? null : normalizeReport(report);
+        List<ReportSnapshotEntity> rows = snapshotMapper.selectLocks(normalized, limit);
+        ReportLockList result = new ReportLockList();
+        List<ReportLock> items = new ArrayList<>(rows.size());
+        for (ReportSnapshotEntity row : rows) {
+            items.add(toLock(row));
+        }
+        result.setItems(items);
+        result.setTotal(items.size());
+        return result;
+    }
+
+    @Override
+    public ReportLock get(String lockId, AuthPrincipal caller) {
+        UUID id = parseUuid(lockId);
+        ReportSnapshotEntity entity = id == null ? null : snapshotMapper.selectById(id);
+        if (entity == null) {
+            throw new NoSuchElementException("报表锁定快照不存在或不可见");
+        }
+        return toLock(entity);
+    }
+
+    /** 锁定参数（固定键集合）：查询与锁定必须用同一构造方式，否则哈希不一致会读不到快照。 */
+    private static Map<String, Object> lockParams(String report, Window window, String dimension,
+            List<String> dimensions, List<String> metrics) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("report", report);
+        params.put("from", window.from().toString());
+        params.put("to", window.to().toString());
+        params.put("deptId", window.deptId() == null ? null : window.deptId().toString());
+        params.put("dimension", dimension);
+        params.put("dimensions", dimensions);
+        params.put("metrics", metrics);
+        params.put("scope", window.scopeSignature());
+        return params;
+    }
+
+    private String paramsHash(Map<String, Object> params) {
+        return codec.hash(codec.canonical(params));
+    }
+
+    private ReportSnapshotEntity findSnapshot(String report, String paramsHash) {
+        return snapshotMapper.selectByReportAndParamsHash(report, paramsHash);
+    }
+
+    private ReportLock toLock(ReportSnapshotEntity entity) {
+        ReportLock lock = new ReportLock();
+        lock.setLockId(entity.getId().toString());
+        lock.setReport(ReportLock.ReportEnum.fromValue(entity.getReport()));
+        lock.setPeriod(entity.getPeriod());
+        lock.setFrom(entity.getFromDate());
+        lock.setTo(entity.getToDate());
+        lock.setParams(entity.getParams() == null ? Map.of() : codec.readParams(entity.getParams()));
+        lock.setParamsHash(entity.getParamsHash());
+        lock.setPayloadHash(entity.getPayloadHash());
+        lock.setDataScope(entity.getDataScope());
+        lock.setRowCount(entity.getRowCount());
+        lock.setLockedBy(entity.getLockedBy() == null ? null : entity.getLockedBy().toString());
+        lock.setLockedByName(entity.getLockedByName());
+        lock.setLockedAt(entity.getLockedAt().atOffset(DISPLAY_OFFSET));
+        return lock;
+    }
+
+    private static String requireLockReport(ReportLockRequest.ReportEnum report) {
+        if (report == null) {
+            throw new M4ValidationException("report", "report 必须为 workload 或 multi");
+        }
+        return normalizeReport(report.getValue());
+    }
+
+    private static String joinDimensionCodes(List<ReportLockRequest.DimensionsEnum> values) {
+        if (values == null || values.isEmpty()) {
+            throw new M4ValidationException("dimensions", "dimensions 不能为空");
+        }
+        return values.stream().map(ReportLockRequest.DimensionsEnum::getValue)
+                .collect(Collectors.joining(","));
+    }
+
+    private static String joinMetricCodes(List<ReportLockRequest.MetricsEnum> values) {
+        if (values == null || values.isEmpty()) {
+            throw new M4ValidationException("metrics", "metrics 不能为空");
+        }
+        return values.stream().map(ReportLockRequest.MetricsEnum::getValue)
+                .collect(Collectors.joining(","));
+    }
+
+    private static String lockerName(AuthPrincipal caller) {
+        if (caller == null || caller.username() == null || caller.username().isBlank()) {
+            return "UNKNOWN";
+        }
+        String name = caller.username().trim();
+        return name.length() > 64 ? name.substring(0, 64) : name;
+    }
+
+    private static M4ConflictException duplicateLock(Period period) {
+        return new M4ConflictException("该报表参数组合已锁定，请勿重复锁定",
+                List.of(new M4ConflictException.Detail("period",
+                        "同一 (report, period, params_hash) 已存在锁定快照："
+                                + period.from() + "~" + period.to())));
+    }
+
+    /** 解析锁定期间：period（YYYY-MM 或 YYYY-MM-DD~YYYY-MM-DD）与 from+to 二选一。 */
+    private static Period resolvePeriod(ReportLockRequest request) {
+        String raw = request.getPeriod() == null ? null : request.getPeriod().trim();
+        if (raw != null && raw.isEmpty()) {
+            raw = null;
+        }
+        LocalDate requestedFrom = request.getFrom();
+        LocalDate requestedTo = request.getTo();
+        if (raw != null && (requestedFrom != null || requestedTo != null)) {
+            throw new M4ValidationException("period", "period 与 from/to 只能二选一");
+        }
+        LocalDate start;
+        LocalDate end;
+        String label;
+        if (raw != null) {
+            if (raw.matches("\\d{4}-\\d{2}")) {
+                int year;
+                int month;
+                try {
+                    year = Integer.parseInt(raw.substring(0, 4));
+                    month = Integer.parseInt(raw.substring(5, 7));
+                } catch (NumberFormatException invalid) {
+                    throw invalidPeriod();
+                }
+                if (month < 1 || month > 12) {
+                    throw invalidPeriod();
+                }
+                start = LocalDate.of(year, month, 1);
+                end = start.withDayOfMonth(start.lengthOfMonth());
+                label = raw;
+            } else if (raw.matches("\\d{4}-\\d{2}-\\d{2}~\\d{4}-\\d{2}-\\d{2}")) {
+                String[] parts = raw.split("~", -1);
+                start = parseDate(parts[0], "period");
+                end = parseDate(parts[1], "period");
+                label = start + "~" + end;
+            } else {
+                throw invalidPeriod();
+            }
+        } else {
+            if (requestedFrom == null || requestedTo == null) {
+                throw new M4ValidationException("period", "必须提供 period 或 from+to");
+            }
+            start = requestedFrom;
+            end = requestedTo;
+            label = start + "~" + end;
+        }
+        if (end.isBefore(start)) {
+            throw new M4ValidationException("to", "结束日期不能早于起始日期");
+        }
+        long days = ChronoUnit.DAYS.between(start, end) + 1;
+        if (days > MAX_RANGE_DAYS) {
+            throw new M4ValidationException("to", "查询跨度不能超过 " + MAX_RANGE_DAYS + " 天");
+        }
+        return new Period(start, end, label);
+    }
+
+    private static M4ValidationException invalidPeriod() {
+        return new M4ValidationException("period",
+                "period 必须为 YYYY-MM 或 YYYY-MM-DD~YYYY-MM-DD");
+    }
+
+    private static UUID parseUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value.trim());
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
+    }
+
+    private record Period(LocalDate from, LocalDate to, String label) {
     }
 
     // ---------------------------------------------------------------------
     // 工作量
     // ---------------------------------------------------------------------
 
-    private WorkloadReport buildWorkload(Window window, ReportDimension dimension) {
+    private WorkloadReport buildWorkload(Window window, List<ReportCaseFact> cases,
+            ReportDimension dimension) {
         Map<String, BucketAccumulator> buckets = new LinkedHashMap<>();
         Stat total = new Stat();
-        for (ReportCaseFact fact : window.cases()) {
+        for (ReportCaseFact fact : cases) {
             DimensionKey key = keyOf(dimension, fact);
             int minutes = minutes(fact);
             BigDecimal weight = weightOf(fact);
@@ -306,10 +682,11 @@ public class ReportServiceImpl implements ReportService {
     // 多维报表
     // ---------------------------------------------------------------------
 
-    private MultiAggregate aggregateMulti(Window window, List<ReportDimension> dimensions) {
+    private MultiAggregate aggregateMulti(Window window, List<ReportCaseFact> cases,
+            List<ReportDimension> dimensions) {
         Map<List<String>, RowAccumulator> groups = new LinkedHashMap<>();
         Stat total = new Stat();
-        for (ReportCaseFact fact : window.cases()) {
+        for (ReportCaseFact fact : cases) {
             List<DimensionKey> keys = new ArrayList<>(dimensions.size());
             for (ReportDimension dimension : dimensions) {
                 keys.add(keyOf(dimension, fact));
@@ -413,6 +790,31 @@ public class ReportServiceImpl implements ReportService {
         report.setWeightFormula(WEIGHT_FORMULA);
         report.setRows(new ArrayList<>(all.subList(fromIndex, toIndex)));
         report.setTotals(aggregate.totals());
+        report.setPage(page);
+        report.setSize(size);
+        report.setTotal(total);
+        report.setTotalPages(totalPages);
+        return report;
+    }
+
+    /** 由锁定快照重建多维报表：分页重放在快照全量行上，合计取自快照。 */
+    private static MultiReport toMultiReport(Window window,
+            ReportSnapshotCodec.MultiSnapshot stored, int page, int size) {
+        List<MultiRow> all = stored.rows() == null ? List.of() : stored.rows();
+        int total = all.size();
+        int totalPages = total == 0 ? 0 : (total + size - 1) / size;
+        int fromIndex = Math.min((page - 1) * size, total);
+        int toIndex = Math.min(fromIndex + size, total);
+        MultiReport report = new MultiReport();
+        report.setFrom(stored.from() == null ? window.from() : stored.from());
+        report.setTo(stored.to() == null ? window.to() : stored.to());
+        report.setTimezone(TIMEZONE);
+        report.setDimensions(stored.dimensions() == null ? List.of() : stored.dimensions());
+        report.setMetrics(stored.metrics() == null ? List.of() : stored.metrics());
+        report.setFormula(FORMULA);
+        report.setWeightFormula(WEIGHT_FORMULA);
+        report.setRows(new ArrayList<>(all.subList(fromIndex, toIndex)));
+        report.setTotals(stored.totals());
         report.setPage(page);
         report.setSize(size);
         report.setTotal(total);
@@ -528,8 +930,51 @@ public class ReportServiceImpl implements ReportService {
         Instant toExclusive = to.plusDays(1).atStartOfDay(ZONE).toInstant();
         ReportCaseFilter filter = new ReportCaseFilter(fromInstant, toExclusive, deptId,
                 unrestricted, orgIds, roomIds, selfUserId, selfScoped);
-        List<ReportCaseFact> cases = caseSource.findCases(filter);
-        return new Window(from, to, deptId, cases == null ? List.of() : cases);
+        return new Window(from, to, deptId, filter, scopeSignature(scope, caller),
+                dataScopeSummary(scope));
+    }
+
+    /** 拉取统计单元（命中锁定快照时不调用，避免无谓查询与“快照后又变”的错觉）。 */
+    private List<ReportCaseFact> loadCases(Window window) {
+        List<ReportCaseFact> cases = caseSource.findCases(window.filter());
+        return cases == null ? List.of() : cases;
+    }
+
+    /** 数据范围指纹：同一参数在不同范围下不共用快照（避免跨范围读数）。 */
+    private static String scopeSignature(DataScopeAssignments scope, AuthPrincipal caller) {
+        if (scope.isUnrestricted()) {
+            return "ALL";
+        }
+        List<String> parts = new ArrayList<>();
+        for (DataScopeAssignment assignment : scope.assignments()) {
+            if (assignment == null || assignment.type() == null) {
+                continue;
+            }
+            if (assignment.type() == DataScope.SELF) {
+                parts.add("SELF:" + (caller == null || caller.userId() == null
+                        ? "" : caller.userId()));
+                continue;
+            }
+            List<String> ids = new ArrayList<>(assignment.scopeIds());
+            ids.sort(Comparator.naturalOrder());
+            parts.add(assignment.type().name() + ":" + String.join(",", ids));
+        }
+        parts.sort(Comparator.naturalOrder());
+        return String.join(";", parts);
+    }
+
+    /** 数据范围摘要（存 report_snapshot.data_scope，≤32 字符）。 */
+    private static String dataScopeSummary(DataScopeAssignments scope) {
+        if (scope.isUnrestricted()) {
+            return "ALL";
+        }
+        Set<String> types = new TreeSet<>();
+        for (DataScopeAssignment assignment : scope.assignments()) {
+            if (assignment != null && assignment.type() != null) {
+                types.add(assignment.type().name());
+            }
+        }
+        return types.isEmpty() ? "NONE" : String.join("+", types);
     }
 
     private static boolean hasSelf(DataScopeAssignments scope) {
@@ -636,6 +1081,25 @@ public class ReportServiceImpl implements ReportService {
 
     private static List<String> metricCodes(List<ReportMetric> metrics) {
         return metrics.stream().map(ReportMetric::code).toList();
+    }
+
+    /** 快照内维度编码 → 枚举（payload 由本服务写入，非法视为数据损坏 500）。 */
+    private static List<ReportDimension> parseDimensionCodes(List<String> codes) {
+        if (codes == null) {
+            throw new IllegalStateException("报表快照维度编码缺失");
+        }
+        List<ReportDimension> dimensions = new ArrayList<>(codes.size());
+        for (String code : codes) {
+            if (code == null || code.isBlank()) {
+                throw new IllegalStateException("报表快照维度编码为空");
+            }
+            try {
+                dimensions.add(ReportDimension.valueOf(code));
+            } catch (IllegalArgumentException corrupt) {
+                throw new IllegalStateException("报表快照维度编码损坏：" + code);
+            }
+        }
+        return dimensions;
     }
 
     private static boolean blank(String value) {
@@ -882,6 +1346,7 @@ public class ReportServiceImpl implements ReportService {
     private record MultiAggregate(List<MultiRow> rows, ReportTotals totals, String from, String to) {
     }
 
-    private record Window(LocalDate from, LocalDate to, UUID deptId, List<ReportCaseFact> cases) {
+    private record Window(LocalDate from, LocalDate to, UUID deptId, ReportCaseFilter filter,
+            String scopeSignature, String dataScopeSummary) {
     }
 }

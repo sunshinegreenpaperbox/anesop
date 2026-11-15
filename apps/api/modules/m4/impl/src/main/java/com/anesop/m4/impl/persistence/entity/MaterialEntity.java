@@ -2,13 +2,15 @@ package com.anesop.m4.impl.persistence.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 /**
  * 耗材主数据实体，对应 {@code m4_material.material}（V23）。
  *
  * <p>编码/名称唯一、UDI-DI 非空唯一（服务层先查重）；highValue 决定是否必须逐件 UDI 登记；
- * 乐观锁 version 由服务层回传并在 SQL 中递增，数据库守卫兜底（version 只增、编码不可改）。
+ * lowStockThreshold 为库存预警阈值（可空=不按阈值预警，V28）；乐观锁 version 由服务层回传
+ * 并在 SQL 中递增，数据库守卫兜底（version 只增、编码不可改）。
  */
 @TableName("m4_material.material")
 public class MaterialEntity {
@@ -24,6 +26,7 @@ public class MaterialEntity {
     private Boolean expiryManaged;
     private String status;
     private String remark;
+    private BigDecimal lowStockThreshold;
     private Instant createdAt;
     private UUID createdBy;
     private Instant updatedAt;
@@ -116,6 +119,14 @@ public class MaterialEntity {
 
     public void setRemark(String remark) {
         this.remark = remark;
+    }
+
+    public BigDecimal getLowStockThreshold() {
+        return lowStockThreshold;
+    }
+
+    public void setLowStockThreshold(BigDecimal lowStockThreshold) {
+        this.lowStockThreshold = lowStockThreshold;
     }
 
     public Instant getCreatedAt() {

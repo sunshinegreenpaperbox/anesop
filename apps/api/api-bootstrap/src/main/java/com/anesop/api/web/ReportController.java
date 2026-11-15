@@ -2,9 +2,13 @@ package com.anesop.api.web;
 
 import com.anesop.api.security.AuthPrincipals;
 import com.anesop.contracts.report.model.MultiReport;
+import com.anesop.contracts.report.model.ReportLock;
+import com.anesop.contracts.report.model.ReportLockList;
+import com.anesop.contracts.report.model.ReportLockRequest;
 import com.anesop.contracts.report.model.WorkloadReport;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m4.api.report.MultiReportQuery;
+import com.anesop.m4.api.report.ReportLockService;
 import com.anesop.m4.api.report.ReportExportQuery;
 import com.anesop.m4.api.report.ReportQuery;
 import com.anesop.m4.api.report.ReportService;
@@ -12,13 +16,19 @@ import com.anesop.m4.api.security.M4Permissions;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import java.io.IOException;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -32,6 +42,10 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>CSV 导出直接写 {@link HttpServletResponse} 输出流（UTF-8 BOM、流式）；服务层在写任何
  * 字节前完成参数校验与数据范围解析，非法请求仍由全局异常处理器返回 400/403 JSON。
  * 导出只含聚合值与维度标签（科室/术间/术式/院内在册人员工号姓名），不含患者标识。
+ *
+ * <p>0.2.0（M8-M4-02）：新增报表锁定端点 {@code POST /v1/reports/locks}（权限
+ * {@code m4:report:lock}）与锁定列表/详情（复用 {@code m4:report:read}）；锁定后同参数
+ * 查询/导出默认读快照，导出同时在响应头 {@code X-Report-Source} 标明来源。
  */
 @RestController
 @RequestMapping("/v1/reports")
@@ -39,9 +53,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class ReportController {
 
     private final ReportService reportService;
+    private final ReportLockService reportLockService;
 
-    public ReportController(ReportService reportService) {
+    public ReportController(ReportService reportService, ReportLockService reportLockService) {
         this.reportService = reportService;
+        this.reportLockService = reportLockService;
     }
 
     @GetMapping("/workload")
@@ -99,6 +115,34 @@ public class ReportController {
         response.setContentType("text/csv;charset=UTF-8");
         response.setHeader("Content-Disposition",
                 "attachment; filename=\"" + plan.fileName() + "\"");
+        // 0.2.0：标明数据来源（SNAPSHOT=命中报表锁定快照；LIVE=实时聚合），与审计一致。
+        response.setHeader("X-Report-Source", plan.source());
         plan.writer().accept(response.getOutputStream());
+    }
+
+    @PostMapping("/locks")
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAuthority('" + M4Permissions.AUTHORITY_REPORT_LOCK + "')")
+    @Operation(operationId = "lockReport", summary = "锁定报表（生成 append-only 快照）")
+    public ReportLock lock(@AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody ReportLockRequest request, AuthRequestContext context) {
+        return reportLockService.lock(request, AuthPrincipals.from(jwt), context);
+    }
+
+    @GetMapping("/locks")
+    @PreAuthorize("hasAuthority('" + M4Permissions.AUTHORITY_REPORT_READ + "')")
+    @Operation(operationId = "listReportLocks", summary = "查询报表锁定列表（元数据，不含快照数据）")
+    public ReportLockList locks(@RequestParam(name = "report", required = false) String report,
+            @RequestParam(name = "limit", defaultValue = "50") int limit,
+            @AuthenticationPrincipal Jwt jwt) {
+        return reportLockService.list(report, limit, AuthPrincipals.from(jwt));
+    }
+
+    @GetMapping("/locks/{lockId}")
+    @PreAuthorize("hasAuthority('" + M4Permissions.AUTHORITY_REPORT_READ + "')")
+    @Operation(operationId = "getReportLock", summary = "查询报表锁定详情（元数据）")
+    public ReportLock lockDetail(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("lockId") String lockId) {
+        return reportLockService.get(lockId, AuthPrincipals.from(jwt));
     }
 }

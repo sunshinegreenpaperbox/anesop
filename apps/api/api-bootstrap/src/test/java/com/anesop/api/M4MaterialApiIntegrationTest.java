@@ -840,6 +840,181 @@ class M4MaterialApiIntegrationTest extends AbstractApiIntegrationTest {
                 .andExpect(jsonPath("$.details[0].field").value("udiPi"));
     }
 
+    // ------------------------------------------------------------------
+    // 库存预警与阈值维护（M8-M4-02，V28 / material.yaml 0.2.0）
+    // ------------------------------------------------------------------
+
+    @Test
+    void stockAlertsCoverThresholdZeroStockNearExpiryAndDataScope() throws Exception {
+        String admin = login(SyntheticAccounts.DEMO_ADMIN_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        String suffix = String.valueOf(SEQ.incrementAndGet() + 500);
+        LocalDate today = LocalDate.now(ZoneOffset.ofHours(8));
+        String lowId = createMaterial(admin, "MAT-ALR-LOW-" + suffix,
+                "预警低库存耗材（" + suffix + "）", null, false, true);
+        String zeroId = createMaterial(admin, "MAT-ALR-ZERO-" + suffix,
+                "预警零库存耗材（" + suffix + "）", null, false, true);
+        String nearId = createMaterial(admin, "MAT-ALR-NEAR-" + suffix,
+                "预警临期耗材（" + suffix + "）", null, false, true);
+
+        // 阈值：低库存/零库存耗材 = 10；临期耗材不配置（= 不按阈值预警）。
+        putThreshold(admin, lowId, 10, 1);
+        putThreshold(admin, zeroId, 10, 1);
+        mockMvc.perform(get("/v1/materials/" + lowId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lowStockThreshold").value(10));
+
+        // 入库：低库存 9（低于 10）；零库存先入 3 再出 3；临期 2（效期 +30 天）。
+        LocalDate farExpiry = today.plusDays(200);
+        mockMvc.perform(post("/v1/materials/stock-movements")
+                        .header("Authorization", "Bearer " + admin).contentType(JSON)
+                        .content(objectMapper.writeValueAsString(stockBody("IN", lowId,
+                                "BATCH-ALR-LOW-" + suffix, farExpiry, 9, "中心库房（合成）",
+                                null))))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/v1/materials/stock-movements")
+                        .header("Authorization", "Bearer " + admin).contentType(JSON)
+                        .content(objectMapper.writeValueAsString(stockBody("IN", zeroId,
+                                "BATCH-ALR-ZERO-" + suffix, farExpiry, 3, "中心库房（合成）",
+                                null))))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/v1/materials/stock-movements")
+                        .header("Authorization", "Bearer " + admin).contentType(JSON)
+                        .content(objectMapper.writeValueAsString(stockBody("OUT", zeroId,
+                                "BATCH-ALR-ZERO-" + suffix, farExpiry, 3, "麻醉科（合成）",
+                                null))))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/v1/materials/stock-movements")
+                        .header("Authorization", "Bearer " + admin).contentType(JSON)
+                        .content(objectMapper.writeValueAsString(stockBody("IN", nearId,
+                                "BATCH-ALR-NEAR-" + suffix, today.plusDays(30), 2,
+                                "中心库房（合成）", null))))
+                .andExpect(status().isCreated());
+
+        JsonNode all = alerts(admin, DEPT, null);
+        JsonNode low = alertOf(all, lowId);
+        assertThat(low).isNotNull();
+        assertThat(types(low)).containsExactly("LOW_STOCK");
+        assertThat(low.get("availableQuantity").decimalValue()).isEqualByComparingTo("9");
+        assertThat(low.get("lowStockThreshold").decimalValue()).isEqualByComparingTo("10");
+        assertThat(low.get("suggestedQuantity").decimalValue()).isEqualByComparingTo("1");
+        assertThat(low.get("departmentName").asText()).isNotBlank();
+        assertThat(low.get("daysToExpiry").asInt()).isGreaterThan(90);
+
+        JsonNode zero = alertOf(all, zeroId);
+        assertThat(zero).isNotNull();
+        assertThat(types(zero)).containsExactly("LOW_STOCK", "ZERO_STOCK");
+        assertThat(zero.get("availableQuantity").decimalValue()).isEqualByComparingTo("0");
+        assertThat(zero.get("suggestedQuantity").decimalValue()).isEqualByComparingTo("10");
+
+        JsonNode near = alertOf(all, nearId);
+        assertThat(near).isNotNull();
+        assertThat(types(near)).containsExactly("NEAR_EXPIRY");
+        assertThat(near.get("daysToExpiry").asInt()).isEqualTo(30);
+        assertThat(near.get("nearExpiryBatchCount").asInt()).isEqualTo(1);
+        assertThat(near.hasNonNull("suggestedQuantity")).isFalse();
+
+        // 类型过滤：NEAR_EXPIRY 只返回临期耗材（低库存/零库存不出现）。
+        JsonNode nearOnly = alerts(admin, DEPT, "NEAR_EXPIRY");
+        assertThat(alertOf(nearOnly, nearId)).isNotNull();
+        assertThat(alertOf(nearOnly, lowId)).isNull();
+        assertThat(alertOf(nearOnly, zeroId)).isNull();
+
+        // 阈值边界：可用量 = 阈值（9 = 9）不再低库存；阈值仅决定 LOW_STOCK，不影响零库存/临期。
+        putThreshold(admin, lowId, 9, 2);
+        JsonNode lowOnly = alerts(admin, DEPT, "LOW_STOCK");
+        assertThat(alertOf(lowOnly, lowId)).isNull();
+        assertThat(alertOf(alerts(admin, DEPT, null), lowId)).isNull();
+
+        // 阈值维护校验：负数 400、版本过期 409、缺权限 403、科室数据范围（DEPT）可维护。
+        mockMvc.perform(put("/v1/materials/" + lowId + "/low-stock-threshold")
+                        .header("Authorization", "Bearer " + admin).contentType(JSON)
+                        .content("{\"threshold\":-1,\"version\":3}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.details[0].field").value("threshold"));
+        mockMvc.perform(put("/v1/materials/" + lowId + "/low-stock-threshold")
+                        .header("Authorization", "Bearer " + admin).contentType(JSON)
+                        .content("{\"threshold\":12,\"version\":1}"))
+                .andExpect(status().isConflict());
+        mockMvc.perform(put("/v1/materials/" + lowId + "/low-stock-threshold")
+                        .header("Authorization", "Bearer " + admin).contentType(JSON)
+                        .content("{\"version\":3}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lowStockThreshold").doesNotExist());
+
+        String roomToken = login(SyntheticAccounts.ROOM_USERNAME,
+                SyntheticAccounts.ROOM_PASSWORD);
+        mockMvc.perform(get("/v1/materials/stock-alerts")
+                        .header("Authorization", "Bearer " + roomToken)
+                        .param("departmentId", DEPT))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(put("/v1/materials/" + lowId + "/low-stock-threshold")
+                        .header("Authorization", "Bearer " + roomToken).contentType(JSON)
+                        .content("{\"threshold\":5,\"version\":4}"))
+                .andExpect(status().isForbidden());
+
+        String deptToken = login(SyntheticAccounts.DEMO_DEPT_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        mockMvc.perform(put("/v1/materials/" + lowId + "/low-stock-threshold")
+                        .header("Authorization", "Bearer " + deptToken).contentType(JSON)
+                        .content("{\"threshold\":5,\"version\":4}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lowStockThreshold").value(5));
+
+        // 审计：每次成功维护都有 MATERIAL_THRESHOLD_UPDATE（含前后阈值，不含患者信息）。
+        Integer audits = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_audit_log "
+                        + "WHERE action = 'MATERIAL_THRESHOLD_UPDATE' AND resource_id = ?",
+                Integer.class, lowId);
+        assertThat(audits).isGreaterThanOrEqualTo(4);
+        String detail = jdbcTemplate.queryForObject(
+                "SELECT detail::text FROM m0_platform.sys_audit_log "
+                        + "WHERE action = 'MATERIAL_THRESHOLD_UPDATE' AND resource_id = ? "
+                        + "ORDER BY occurred_at DESC LIMIT 1",
+                String.class, lowId);
+        assertThat(detail).contains("threshold").contains("previousThreshold")
+                .doesNotContain("患者");
+    }
+
+    private void putThreshold(String token, String materialId, int threshold, int version)
+            throws Exception {
+        mockMvc.perform(put("/v1/materials/" + materialId + "/low-stock-threshold")
+                        .header("Authorization", "Bearer " + token).contentType(JSON)
+                        .content("{\"threshold\":" + threshold + ",\"version\":" + version
+                                + "}"))
+                .andExpect(status().isOk());
+    }
+
+    private JsonNode alerts(String token, String departmentId, String alertType) throws Exception {
+        var request = get("/v1/materials/stock-alerts")
+                .header("Authorization", "Bearer " + token)
+                .param("departmentId", departmentId)
+                .param("limit", "200");
+        if (alertType != null) {
+            request.param("alertType", alertType);
+        }
+        MvcResult result = mockMvc.perform(request).andExpect(status().isOk()).andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    private static JsonNode alertOf(JsonNode list, String materialId) {
+        for (JsonNode item : list.get("items")) {
+            if (materialId.equals(item.get("materialId").asText())) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private static List<String> types(JsonNode alert) {
+        List<String> types = new java.util.ArrayList<>();
+        for (JsonNode type : alert.get("alertTypes")) {
+            types.add(type.asText());
+        }
+        return types;
+    }
+
     // ------------------------------------------------------------------ 辅助 --
 
     private static Map<String, Object> materialBody(String code, String name, String udiDi,

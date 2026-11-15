@@ -24,6 +24,10 @@ import java.util.function.Consumer;
  * <p>数据范围 fail-closed：ALL 全院；SITE/DEPT 按申请科室、ROOM 按术间、SELF 按本人创建
  * 麻醉记录单过滤；无可用范围/科室越界 403。查询写审计 {@code REPORT_QUERY}、导出写
  * {@code REPORT_EXPORT}，detail 不含患者标识。
+ *
+ * <p>0.2.0（M8-M4-02）：锁定后同参数查询/导出默认读快照（{@code source=SNAPSHOT}），
+ * 快照数据来自 {@code m4_report.report_snapshot}（append-only），源数据变化不影响已锁定值；
+ * 未锁定参数仍为实时聚合（{@code source=LIVE}）。锁定端点见 {@link ReportLockService}。
  */
 public interface ReportService {
 
@@ -45,7 +49,13 @@ public interface ReportService {
     ExportPlan prepareExport(ReportExportQuery query, AuthPrincipal caller,
             AuthRequestContext context);
 
-    /** 导出计划：文件名、数据行数（不含表头）与流式写出动作。 */
-    record ExportPlan(String fileName, int dataRows, Consumer<OutputStream> writer) {
+    /**
+     * 导出计划：文件名、数据行数（不含表头）、流式写出动作与数据来源。
+     *
+     * <p>{@code source} 为 {@code LIVE}（实时聚合）或 {@code SNAPSHOT}（命中报表锁定快照，
+     * report.yaml 0.2.0）；Web 层据此设置 {@code X-Report-Source} 响应头。
+     */
+    record ExportPlan(String fileName, int dataRows, Consumer<OutputStream> writer,
+            String source) {
     }
 }

@@ -1,6 +1,7 @@
 package com.anesop.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -112,6 +114,15 @@ class M4ReportApiIntegrationTest extends AbstractApiIntegrationTest {
             jdbcTemplate.update(
                     "DELETE FROM m1_sched.patient_snapshot WHERE his_patient_no LIKE 'SYNTH-M4-REP-%'");
             jdbcTemplate.update("DELETE FROM m4_staff.staff_profile WHERE staff_no = ?", STAFF_NO);
+            // 报表快照 append-only：夹具同样临时停用触发器后清理，避免锁定用例污染其他用例。
+            jdbcTemplate.execute(
+                    "ALTER TABLE m4_report.report_snapshot DISABLE TRIGGER USER");
+            try {
+                jdbcTemplate.update("DELETE FROM m4_report.report_snapshot");
+            } finally {
+                jdbcTemplate.execute(
+                        "ALTER TABLE m4_report.report_snapshot ENABLE TRIGGER USER");
+            }
             // SELF 用例账号/角色/授权一并清理（先关联表、后主表，避免残留跨用例脏数据）。
             jdbcTemplate.update(
                     "DELETE FROM m0_platform.sys_user_role "
@@ -528,6 +539,141 @@ class M4ReportApiIntegrationTest extends AbstractApiIntegrationTest {
                     """, recordId, scheduleId, applicationId, patientId, start, end,
                     recordCreatedBy, recordCreatedBy);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 报表数据锁定（M8-M4-02，V28）
+    // ------------------------------------------------------------------
+
+    @Test
+    void reportLockFreezesSnapshotAndExportReadsSnapshot() throws Exception {
+        String admin = login(SyntheticAccounts.DEMO_ADMIN_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        String lockBody = """
+                {"report":"workload","period":"2031-03","dimension":"DEPT"}
+                """;
+
+        MvcResult created = mockMvc.perform(post("/v1/reports/locks")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON).content(lockBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.report").value("workload"))
+                .andExpect(jsonPath("$.period").value("2031-03"))
+                .andExpect(jsonPath("$.from").value(FROM))
+                .andExpect(jsonPath("$.to").value(TO))
+                .andExpect(jsonPath("$.dataScope").value("ALL"))
+                .andExpect(jsonPath("$.rowCount").value(2))
+                .andExpect(jsonPath("$.paramsHash").value(
+                        org.hamcrest.Matchers.matchesPattern("[0-9a-f]{64}")))
+                .andExpect(jsonPath("$.payloadHash").value(
+                        org.hamcrest.Matchers.matchesPattern("[0-9a-f]{64}")))
+                .andExpect(jsonPath("$.lockedByName").value("demo_admin"))
+                .andReturn();
+        String lockId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .get("lockId").asText();
+
+        // 锁定后新增台次（源数据变化）：实时值会变成 4 台次，快照必须仍为 3 台次 / 215 分钟。
+        insertCase("0006", ROOM_01, DEPT_ANES, "麻醉科（合成）", "SYNTH-ART-001",
+                "演示关节置换术（合成）", "2031-03-06T08:00:00+08:00",
+                "2031-03-06T09:00:00+08:00", "COMPLETED", null);
+
+        mockMvc.perform(get("/v1/reports/workload")
+                        .header("Authorization", "Bearer " + admin)
+                        .param("from", FROM).param("to", TO).param("dimension", "DEPT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("SNAPSHOT"))
+                .andExpect(jsonPath("$.lockId").value(lockId))
+                .andExpect(jsonPath("$.caseCount").value(3))
+                .andExpect(jsonPath("$.anesthesiaMinutes").value(215))
+                .andExpect(jsonPath("$.weightedCaseCount").value(3.5));
+
+        // 不同参数（STAFF 维度）不受锁定影响，仍走实时。
+        mockMvc.perform(get("/v1/reports/workload")
+                        .header("Authorization", "Bearer " + admin)
+                        .param("from", FROM).param("to", TO).param("dimension", "STAFF"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("LIVE"))
+                .andExpect(jsonPath("$.caseCount").value(4));
+
+        // 导出走快照（手算值不变），响应头标明来源。
+        mockMvc.perform(get("/v1/reports/export")
+                        .header("Authorization", "Bearer " + admin)
+                        .param("report", "workload").param("format", "csv")
+                        .param("from", FROM).param("to", TO).param("dimension", "DEPT"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Report-Source", "SNAPSHOT"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "workload,TOTAL,DEPT,ALL,全部,3,215")));
+
+        // 重复锁定同参数 → 409（快照不可覆盖）。
+        mockMvc.perform(post("/v1/reports/locks")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON).content(lockBody))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("STATE_CONFLICT"));
+
+        // 锁定列表/详情（元数据，不含 payload）。
+        mockMvc.perform(get("/v1/reports/locks")
+                        .header("Authorization", "Bearer " + admin)
+                        .param("report", "workload"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].lockId").value(lockId));
+        mockMvc.perform(get("/v1/reports/locks/" + lockId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.period").value("2031-03"))
+                .andExpect(jsonPath("$.rowCount").value(2))
+                .andExpect(jsonPath("$.params.dimension").value("DEPT"));
+        mockMvc.perform(get("/v1/reports/locks/00000000-0000-4000-8000-0000000000ff")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isNotFound());
+
+        // append-only：UPDATE / DELETE 一律 55000（快照不得改写或删除）。
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE m4_report.report_snapshot SET period = '2031-04'"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("append-only");
+        assertThatThrownBy(() -> jdbcTemplate.update("DELETE FROM m4_report.report_snapshot"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("append-only");
+
+        // 审计：REPORT_LOCK（resource_id=lockId）与 REPORT_EXPORT（source=SNAPSHOT）。
+        Integer lockAudits = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_audit_log "
+                        + "WHERE action = 'REPORT_LOCK' AND resource_id = ?",
+                Integer.class, lockId);
+        assertThat(lockAudits).isEqualTo(1);
+        Integer exportAudits = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_audit_log "
+                        + "WHERE action = 'REPORT_EXPORT' AND detail->>'source' = 'SNAPSHOT'",
+                Integer.class);
+        assertThat(exportAudits).isNotNull().isGreaterThanOrEqualTo(1);
+        String lockDetail = jdbcTemplate.queryForObject(
+                "SELECT detail::text FROM m0_platform.sys_audit_log "
+                        + "WHERE action = 'REPORT_LOCK' AND resource_id = ?",
+                String.class, lockId);
+        assertThat(lockDetail).contains("paramsHash").contains("payloadHash")
+                .doesNotContain("患者");
+
+        // 权限 403：报表本人角色只有 m4:report:read|export，没有 m4:report:lock。
+        String selfToken = login(SELF_USERNAME, SELF_PASSWORD);
+        mockMvc.perform(post("/v1/reports/locks")
+                        .header("Authorization", "Bearer " + selfToken)
+                        .contentType(JSON).content(lockBody))
+                .andExpect(status().isForbidden());
+
+        // V28 权限点与最小授权（迁移自检之外再从数据面核对一次）。
+        Integer permission = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_permission WHERE code = 'm4:report:lock'",
+                Integer.class);
+        assertThat(permission).isEqualTo(1);
+        Integer grants = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_role_permission rp "
+                        + "JOIN m0_platform.sys_permission sp ON sp.id = rp.permission_id "
+                        + "WHERE sp.code = 'm4:report:lock'",
+                Integer.class);
+        assertThat(grants).isEqualTo(3);
     }
 
     private String login(String username, String password) throws Exception {

@@ -4,9 +4,11 @@ import com.anesop.api.security.AuthPrincipals;
 import com.anesop.contracts.material.model.CreateMaterialRequest;
 import com.anesop.contracts.material.model.Material;
 import com.anesop.contracts.material.model.MaterialList;
+import com.anesop.contracts.material.model.LowStockThresholdRequest;
 import com.anesop.contracts.material.model.MaterialStatusRequest;
 import com.anesop.contracts.material.model.UpdateMaterialRequest;
 import com.anesop.m0.api.security.AuthRequestContext;
+import com.anesop.m4.api.material.MaterialAlertService;
 import com.anesop.m4.api.material.MaterialCatalogService;
 import com.anesop.m4.api.security.M4Permissions;
 import io.swagger.v3.oas.annotations.Operation;
@@ -33,6 +35,9 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>授权：查询需要 {@code m4:material:read}（目录全院可读），维护需要
  * {@code m4:material:write}（V23 授予 SYS_ADMIN/SYS_OR_MANAGER）。编码/名称/UDI-DI 冲突 409，
  * 版本过期 409，耗材不存在 404。返回体只含耗材主数据，不含患者信息。
+ *
+ * <p>0.2.0（M8-M4-02）新增库存预警阈值维护端点（独立于主数据更新，审计
+ * {@code MATERIAL_THRESHOLD_UPDATE}），需科室数据范围 ALL/SITE/DEPT（SELF/ROOM 403）。
  */
 @RestController
 @RequestMapping("/v1/materials")
@@ -40,9 +45,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class MaterialController {
 
     private final MaterialCatalogService catalogService;
+    private final MaterialAlertService alertService;
 
-    public MaterialController(MaterialCatalogService catalogService) {
+    public MaterialController(MaterialCatalogService catalogService,
+            MaterialAlertService alertService) {
         this.catalogService = catalogService;
+        this.alertService = alertService;
     }
 
     @GetMapping
@@ -87,6 +95,16 @@ public class MaterialController {
             @PathVariable("materialId") String materialId,
             @Valid @RequestBody UpdateMaterialRequest request, AuthRequestContext context) {
         return catalogService.update(materialId, request, AuthPrincipals.from(jwt), context);
+    }
+
+    @PutMapping("/{materialId}/low-stock-threshold")
+    @PreAuthorize("hasAuthority('" + M4Permissions.AUTHORITY_MATERIAL_WRITE + "')")
+    @Operation(operationId = "updateMaterialLowStockThreshold",
+            summary = "维护库存预警阈值（乐观锁，独立审计 MATERIAL_THRESHOLD_UPDATE）")
+    public Material updateLowStockThreshold(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("materialId") String materialId,
+            @Valid @RequestBody LowStockThresholdRequest request, AuthRequestContext context) {
+        return alertService.updateThreshold(materialId, request, AuthPrincipals.from(jwt), context);
     }
 
     @PatchMapping("/{materialId}/status")

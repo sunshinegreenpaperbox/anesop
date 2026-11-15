@@ -27,6 +27,8 @@ import com.anesop.m4.api.report.ReportExportQuery;
 import com.anesop.m4.api.report.ReportQuery;
 import com.anesop.m4.api.report.ReportService;
 import com.anesop.m4.impl.config.ReportProperties;
+import com.anesop.m4.impl.persistence.mapper.ReportSnapshotMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -82,6 +84,8 @@ class ReportServiceImplTest {
     private DataScopeResolver dataScopeResolver;
     @Mock
     private AuditWriter auditWriter;
+    @Mock
+    private ReportSnapshotMapper snapshotMapper;
 
     private ReportProperties properties;
     private ReportServiceImpl service;
@@ -90,7 +94,8 @@ class ReportServiceImplTest {
     void setUp() {
         properties = new ReportProperties();
         properties.setSurgeryWeights(Map.of(ART, new BigDecimal("1.5")));
-        service = new ReportServiceImpl(caseSource, dataScopeResolver, auditWriter, properties);
+        service = new ReportServiceImpl(caseSource, dataScopeResolver, auditWriter, properties,
+                snapshotMapper, new ReportSnapshotCodec(new ObjectMapper()));
         when(dataScopeResolver.resolve(any())).thenReturn(all());
         when(caseSource.findCases(any())).thenReturn(List.of(caseA(), caseB(), caseC()));
     }

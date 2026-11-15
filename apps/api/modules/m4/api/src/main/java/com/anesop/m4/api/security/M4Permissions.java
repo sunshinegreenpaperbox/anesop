@@ -14,6 +14,7 @@ package com.anesop.m4.api.security;
  * SYS_ANESTHESIOLOGIST（五专登记由临床与药房共同完成，麻醉护士暂不授予维护权）。
  * 报表域（V24，data-only）新增 {@code m4:report:read|export}：授予 SYS_ADMIN/SYS_OR_MANAGER/
  * SYS_QC_MANAGER（管理口径，D-21）；临床个人工作量视图待绩效方案确认后另开。
+ * V28（M8-M4-02）新增 {@code m4:report:lock}（报表锁定/快照），授予同一角色面。
  */
 public final class M4Permissions {
 
@@ -94,6 +95,12 @@ public final class M4Permissions {
 
     /** Spring Security 授权表达式中的报表导出权限：{@code PERM_m4:report:export}。 */
     public static final String AUTHORITY_REPORT_EXPORT = "PERM_" + REPORT_EXPORT;
+
+    /** 报表数据锁定（V28，M8-M4-02）：生成 append-only 快照，授予 SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER。 */
+    public static final String REPORT_LOCK = "m4:report:lock";
+
+    /** Spring Security 授权表达式中的报表锁定权限：{@code PERM_m4:report:lock}。 */
+    public static final String AUTHORITY_REPORT_LOCK = "PERM_" + REPORT_LOCK;
 
     /** 质控指标/不良事件/病历抽查只读（V25；按科室或全院数据范围裁剪）。 */
     public static final String QC_READ = "m4:qc:read";

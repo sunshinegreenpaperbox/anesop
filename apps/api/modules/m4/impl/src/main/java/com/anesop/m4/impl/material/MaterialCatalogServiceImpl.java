@@ -40,6 +40,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>约束：编码/名称按 trim + 忽略大小写唯一；UDI-DI 非空时唯一；编码创建后不可改；
  * 更新为乐观锁（过期 409）。目录全院可读，维护需要 {@code m4:material:write}（Web 层校验）。
+ * 库存预警阈值（V28）不在此更新：走 {@code PUT /v1/materials/{id}/low-stock-threshold}
+ * （独立审计 MATERIAL_THRESHOLD_UPDATE），避免主数据更新覆盖阈值。
  * highValue 由 false 改 true 时若仍有数量 &gt; 0 的批次库存 → 409（不允许出现无法追溯的高值库存）。
  * 审计 MATERIAL_CREATE/MATERIAL_UPDATE/MATERIAL_STATUS 只含标识、编码、名称与标志摘要。
  * 失败审计带 materialId/code/udiDi 摘要，便于定位且不含患者信息。
@@ -370,6 +372,7 @@ public class MaterialCatalogServiceImpl implements MaterialCatalogService {
         material.setUdiDi(entity.getUdiDi());
         material.setHighValue(Boolean.TRUE.equals(entity.getHighValue()));
         material.setExpiryManaged(Boolean.TRUE.equals(entity.getExpiryManaged()));
+        material.setLowStockThreshold(entity.getLowStockThreshold());
         material.setStatus(Material.StatusEnum.fromValue(entity.getStatus()));
         material.setRemark(entity.getRemark());
         material.setCreatedAt(entity.getCreatedAt().atOffset(ZoneOffset.ofHours(8)));

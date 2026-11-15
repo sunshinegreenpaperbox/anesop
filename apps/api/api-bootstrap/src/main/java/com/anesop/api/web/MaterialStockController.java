@@ -3,10 +3,12 @@ package com.anesop.api.web;
 import com.anesop.api.security.AuthPrincipals;
 import com.anesop.contracts.material.model.CreateStockMovementRequest;
 import com.anesop.contracts.material.model.DepartmentList;
+import com.anesop.contracts.material.model.MaterialStockAlertList;
 import com.anesop.contracts.material.model.MaterialStockLevelList;
 import com.anesop.contracts.material.model.StockMovement;
 import com.anesop.contracts.material.model.StockMovementList;
 import com.anesop.m0.api.security.AuthRequestContext;
+import com.anesop.m4.api.material.MaterialAlertService;
 import com.anesop.m4.api.material.MaterialStockService;
 import com.anesop.m4.api.security.M4Permissions;
 import io.swagger.v3.oas.annotations.Operation;
@@ -29,8 +31,11 @@ import org.springframework.web.bind.annotation.RestController;
  * 耗材批次库存与出入库接口（契约 material.yaml 0.1.0，M4-M14-01）。
  *
  * <p>授权：查询需要 {@code m4:material:read}，登记需要 {@code m4:material:write}；
- * 库存/流水按科室数据范围（ALL/SITE/DEPT）隔离，SELF/ROOM 403。数量不足 409，
+ * 库存/流水/预警按科室数据范围（ALL/SITE/DEPT）隔离，SELF/ROOM 403。数量不足 409，
  * 效期/高值裸数量规则 422；流水 append-only（只增不改）。
+ *
+ * <p>0.2.0（M8-M4-02）新增 {@code GET /v1/materials/stock-alerts}：材料 × 科室 粒度的
+ * 低库存（严格低于阈值）/零库存/临期（效期 ≤ 今天 + 90 天，含已过期）预警与建议补货量。
  */
 @RestController
 @RequestMapping("/v1/materials")
@@ -38,9 +43,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class MaterialStockController {
 
     private final MaterialStockService stockService;
+    private final MaterialAlertService alertService;
 
-    public MaterialStockController(MaterialStockService stockService) {
+    public MaterialStockController(MaterialStockService stockService,
+            MaterialAlertService alertService) {
         this.stockService = stockService;
+        this.alertService = alertService;
     }
 
     @GetMapping("/departments")
@@ -73,6 +81,18 @@ public class MaterialStockController {
             @AuthenticationPrincipal Jwt jwt) {
         return stockService.listMovements(materialId, departmentId, from, to, limit,
                 AuthPrincipals.from(jwt));
+    }
+
+    @GetMapping("/stock-alerts")
+    @PreAuthorize("hasAuthority('" + M4Permissions.AUTHORITY_MATERIAL_READ + "')")
+    @Operation(operationId = "listMaterialStockAlerts",
+            summary = "查询库存预警（低于阈值/零库存/临期 90 天，含建议补货量）")
+    public MaterialStockAlertList alerts(
+            @RequestParam(name = "departmentId", required = false) String departmentId,
+            @RequestParam(name = "alertType", required = false) String alertType,
+            @RequestParam(name = "limit", defaultValue = "100") int limit,
+            @AuthenticationPrincipal Jwt jwt) {
+        return alertService.stockAlerts(departmentId, alertType, limit, AuthPrincipals.from(jwt));
     }
 
     @PostMapping("/stock-movements")

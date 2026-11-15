@@ -2,6 +2,7 @@ package com.anesop.m4.impl.persistence.mapper;
 
 import com.anesop.m4.impl.persistence.entity.MaterialEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -53,6 +54,24 @@ public interface MaterialMapper extends BaseMapper<MaterialEntity> {
 
     @Select("SELECT * FROM m4_material.material WHERE id = #{id}")
     MaterialEntity selectByMaterialId(@Param("id") UUID id);
+
+    /**
+     * 库存预警阈值维护（V28）：单独更新 lowStockThreshold，避免与耗材主数据更新互相覆盖。
+     *
+     * <p>乐观锁（{@code WHERE version = ?} + {@code version + 1}）；threshold 传 null 表示
+     * 清除阈值（可空=不按阈值预警）。数据库触发器兜底 version 只增。
+     */
+    @Update("""
+            UPDATE m4_material.material
+               SET low_stock_threshold = #{threshold,jdbcType=NUMERIC},
+                   updated_at = #{updatedAt},
+                   updated_by = #{updatedBy},
+                   version = version + 1
+             WHERE id = #{id} AND version = #{version}
+            """)
+    int updateLowStockThreshold(@Param("id") UUID id,
+            @Param("threshold") BigDecimal threshold, @Param("version") int version,
+            @Param("updatedAt") Instant updatedAt, @Param("updatedBy") UUID updatedBy);
 
     /** 启用/停用：带乐观锁版本条件；状态未变化由服务层幂等返回（不调用本方法）。 */
     @Update("""
