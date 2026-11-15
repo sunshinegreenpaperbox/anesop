@@ -6,8 +6,9 @@ info:
     ANESOP 公共支撑契约（第 12 域），收口 FINAL-REPORT §6.2「M0 字典 API/消息中心/文件管理」
     遗留；对应方案书 §2.4.1（M0 公共支撑：字典、消息通知、文件与附件）、§3.9.2（RBAC 与权限
     点三段式 `<模块>:<资源>:<动作>`）、§3.9.3（敏感字段与 PHI 禁令）、§2.4.10（文件/影像
-    存储边界）。契约版本 **0.2.0**（首个版本 0.1.0；0.2.0 增补「我的文件」分页查询、
-    文件名服务端生成口径与业务对象数据范围校验，均为 additive）。
+    存储边界）。契约版本 **0.2.1**（首个版本 0.1.0；0.2.0 增补「我的文件」分页查询、
+    文件名服务端生成口径与业务对象数据范围校验；0.2.1 仅补充消息业务投递的模板编码与
+    接收角色说明，无字段/端点变更，均为 additive）。
 
     硬规则：
     1) **字典全院读、管理仅管理员**：`GET /v1/dicts`、`GET /v1/dicts/{type}` 需要权限点
@@ -47,7 +48,7 @@ info:
        `BUSINESS_RULE_VIOLATION`(422，文件类型/大小/内容被拒绝)、`RATE_LIMITED`(429)。
        错误体不暴露堆栈、SQL 实参、真实文件名以外的内容或文件内容片段。
     所有示例均为 SYNTHETIC 合成数据（无真实患者、人员、文件名与文件内容）。
-  version: 0.2.0
+  version: 0.2.1
   contact:
     name: ANESOP 项目组
   license:
@@ -960,7 +961,10 @@ components:
           $ref: '#/components/schemas/MessageType'
         templateCode:
           type: string
-          description: 模板编码（如 SCHEDULE_CHANGED；前端按编码本地化文案）。
+          description: |
+            模板编码（前端按编码本地化文案）。业务投递（M9-01）使用：`SCHEDULE_CHANGE`（改台）、
+            `EMERGENCY`（急诊加台）、`SCHEDULE_STOP`（停台）、`CRITICAL_ALERT`（严重预警，
+            含未确认）；系统广播/质控/待办等沿用注册表既有编码。
         title:
           type: string
           description: 消息标题（由服务端 MessageTemplates 注册表按模板编码渲染，调用方不可提交任意标题；不含 PHI）。

@@ -320,7 +320,7 @@ no_delete/no_truncate` 触发器拒绝改写（SQLSTATE 55000），更正只能�
 | `resus_type` | varchar(32) | `CPR`/`AIRWAY`/`VASOPRESSOR`/`DEFIBRILLATION`/`OTHER`（【待确认】） |
 | `started_at` / `ended_at` | timestamptz | 抢救时间窗（落在记录单时间窗内，服务层校验 400） |
 | `event_summary` | jsonb 对象 | `{summary, interventions[]}`，不写患者直接标识 |
-| `drugs` | jsonb 数组 | `[{drugName,dose,unit,route,administeredAt}]`（≤50 条） |
+| `drugs` | jsonb 数组 | `[{drugName,dose,unit,route,administeredAt,narcotic?,secondCheckerId?,secondCheckerName?}]`（≤50 条）；M9-01 起字典判麻精，麻精必带第二核对人 |
 | `leader` | jsonb 对象（NOT NULL） | **V16**：抢救负责人 `{userId?, name}`，name 必填（CHECK `ck_resuscitation_leader`）；锁单后禁止新增（Q-2） |
 | `rescuers` | jsonb 数组（NOT NULL） | **V16**：参与人员 `[{userId?, name}]`，≥1 人（CHECK `ck_resuscitation_rescuers`）；姓名只落库、不入日志/审计 |
 | `outcome` | varchar(16) | `SUCCESS`/`PARTIAL`/`FAILED`/`UNKNOWN`（【待确认】） |
@@ -751,22 +751,24 @@ V22 起授权审批人与操作者/被授权人分离；R1/R2、范围 `*` 或 A
 | `remark` | varchar(255) | 备注/口径说明（禁止患者标识与临床自由文本） |
 | `created_at/created_by/updated_at/updated_by` | timestamptz/uuid | 审计字段 |
 
-#### `m0_platform.sys_message`（V27）
+#### `m0_platform.sys_message`（V27；V29 增去重键）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | uuid | 主键（接口 `messageId`） |
 | `recipient_user_id` | uuid | 收件人，FK → `sys_user.id`；查询强制 = 当前用户 |
 | `message_type` | varchar(16) | SYSTEM/SCHEDULE/ALERT/QC/TASK（CHECK） |
-| `template_code` | varchar(64) | 模板编码（前端本地化） |
+| `template_code` | varchar(64) | 模板编码（前端本地化）；业务投递用 `SCHEDULE_CHANGE`/`EMERGENCY`/`SCHEDULE_STOP`/`CRITICAL_ALERT` |
 | `title` | varchar(200) | 标题（模板 + 参数白名单渲染，禁止 PHI） |
-| `params` | jsonb | 模板参数，必须是对象；键白名单 roomNo/deptName/startAt/endAt/count/url |
+| `params` | jsonb | 模板参数，必须是对象；键白名单按模板（roomNo/deptName/startAt/endAt/count/url；业务投递用 scheduleId/roomId/alertId/metric/severity/reasonCode/triggeredAt） |
+| `dedupe_key` | varchar(200) | **V29** 业务投递去重键（`OUTBOX:<outboxId>:<recipient>:<template>`，只含标识）；NULL=不去重（系统广播/历史消息） |
 | `read_at` | timestamptz | 已读时间（NULL=未读；幂等更新，不删除消息） |
 | `created_at` | timestamptz | 创建时间 |
 | `created_by` | uuid | 写入方（系统广播为用户；领域事件可为 NULL） |
 
 索引：`(recipient_user_id, created_at DESC, id DESC)` + 未读部分索引
-`(recipient_user_id) WHERE read_at IS NULL`。
+`(recipient_user_id) WHERE read_at IS NULL` + **V29** 唯一索引 `uk_sys_message_dedupe_key
+(dedupe_key)`（PostgreSQL 唯一索引允许多个 NULL）。
 
 #### `m0_platform.sys_file`（V27）
 
@@ -809,10 +811,10 @@ EXT-06）；**不保存客户端原始文件名**（展示名服务端生成 `fi
 | `RecordEvent`、`CreateRecordEventRequest` | `m2_anes.record_event` | append-only 时间轴、seq、payload jsonb（V13） |
 | `DrugAdministration`、`AdministerDrugRequest` | `m2_anes.drug_administration` | 用药与麻精双人核对（V13） |
 | `FluidRecord`、`RecordFluidRequest`、`IntakeOutputSummary` | `m2_anes.fluid_record` | 出入量明细与汇总（V13，汇总不落库） |
-| `VitalSignSample` | 未落表（M3-M8-01） | 记录单 `vitalSigns` 占位，本期固定空数组 |
+| `VitalSignSample` | `m2_anes.anesthesia_vital`（只读映射，V4/V14） | 记录单 `vitalSigns`（0.11.0/M9-01）：记录时间窗 + 术间设备采样按指标展开（metric/value/unit/measuredAt/quality/qualityFlags），升序、≤2000 条并置 `vitalSignsTruncated`；不落新表 |
 | `AlertRule`、`AlertRuleList`、`UpdateAlertRuleRequest` | `m2_anes.alert_rule` | 规则版本化、阈值/持续时长/严重度（V15） |
 | `Alert`、`AlertList`、`AcknowledgeAlertRequest`、`AlertEvaluationResult` | `m2_anes.alert` | 告警留痕与一次性处置、去重键（V15） |
-| `ResuscitationRecord`、`ResuscitationRecordList`、`CreateResuscitationRequest`、`ResuscitationDrug`、`ResuscitationEventSummary`、`ResuscitationParticipant` | `m2_anes.resuscitation_record` | 抢救记录 append-only、时间窗校验、负责人/参与人员（V16）；锁单后冻结（V17） |
+| `ResuscitationRecord`、`ResuscitationRecordList`、`CreateResuscitationRequest`、`ResuscitationDrug`、`ResuscitationEventSummary`、`ResuscitationParticipant` | `m2_anes.resuscitation_record` | 抢救记录 append-only、时间窗校验、负责人/参与人员（V16）；锁单后冻结（V17）；0.11.0 起 `drugs` 每项经药品字典判定麻精并强制第二核对人（随 drugs jsonb 落库，无新列） |
 | `RecordRevision`、`RecordRevisionSummary`、`RecordRevisionList`、`CreateRevisionRequest`、`RevisionCorrections`、`RevisionDiff` | `m2_anes.record_revision` | 锁单后修订 append-only、版本链签名、差异（V17） |
 | `RecordEffectiveView`、`RecordEffectiveValues`、`RecordEffectiveCorrection` | 读时投影（无新表） | `original` + 最新修订 `corrections` 的当前有效值；详情/打印使用，原行不变（0.8.1） |
 | `PacuRecord` | `m2_anes.pacu_record` | 复苏记录：入室信息、状态机、阈值展示（V18） |

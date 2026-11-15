@@ -3,7 +3,7 @@
 - 报告日期：2026-11-15
 - 施工方式：ANESOP 全自动施工（ANESOP 方案书 V1.0 基线，`docs/plan/BASELINE.md`）
 - 仓库：`anesop`（main 单分支；标签 `m1`–`m6`；HEAD 见文末）
-- 结论摘要：**代码与文档验收（A/B/C/D）在“模拟/合成数据 + 本地可执行项”范围内通过**（M8 迭代已收口主要 P1 遗留）；
+- 结论摘要：**代码与文档验收（A/B/C/D）在“模拟/合成数据 + 本地可执行项”范围内通过**（M8/M9 迭代已收口主要 P1 遗留）；
   真实系统联调（HIS/药房/SPD/设备/CA）、Docker 镜像与生产部署、临床/财务口径签字为
   **外部依赖或人工闸门**，按 EXT 清单与遗留项解除后即可进入试点上线。
 
@@ -21,6 +21,7 @@
 | M6 上线准备 | 2027-06-07 | 2026-11-15 | `m6` |
 | M7 验收 | 2027-07-02 | 2026-11-15 | `m7` |
 | M8 迭代（P1 收口） | — | 2026-11-15 | `m8`（M0 补全/耗材预警/报表锁定/E2E-05） |
+| M9 迭代（P1 收口） | — | 2026-11-15 | `m9`（消息业务投递/体征映射/抢救麻精） |
 
 施工提交 124 个；每个任务独立评审（核心域 blocking 清零后提交）并留存评审建议修复记录。
 
@@ -50,10 +51,10 @@
 
 ### 2.3 数据与契约
 
-- 迁移：`db/migration/V1…V28`（展开-收缩、中文注释、回滚说明；append-only 触发器与校验约束）
+- 迁移：`db/migration/V1…V29`（展开-收缩、中文注释、回滚说明；append-only 触发器与校验约束）
 - 演示种子：`db/seed/demo/V100`（演示管理员）、`V101`（演示药品），仅演示 profile
 - 契约：`packages/contracts/openapi/*.yaml`（12 域）+ baseline + TS/Java 生成物
-- 决策：ADR-0001…0023；决策台账 `docs/decisions.md`
+- 决策：ADR-0001…0025；决策台账 `docs/decisions.md`
 
 ### 2.4 部署、运维与培训
 
@@ -81,7 +82,7 @@
 | 项 | 结论 | 证据 |
 |---|---|---|
 | 构建 | 通过 | `./scripts/mvn.sh -B -f apps/api/pom.xml clean verify` BUILD SUCCESS；`pnpm build` |
-| 测试/覆盖率 | 通过 | 后端 **1364 用例（0 fail/0 skip，含模拟器模块）**；前端 **205 Vitest**（41 文件）；**E2E 49**；核心域覆盖率 m0 93.9/71.6、m1 93.9/71.7、m2 90.7/70.7、m4 92.8/73.4、m5 92.2/73.8、gateway 91/77 |
+| 测试/覆盖率 | 通过 | 后端 **1393 用例（apps/api 1285 + 模拟器 108，0 fail/0 skip）**；前端 **207 Vitest**（41 文件）；**E2E 49**；核心域覆盖率 m0 92.4/77.9、m1 93.7/71.6、m2 91.6/71.9、m4 92.8/73.4、m5 94.8/78.5、gateway 91.6/76.7 |
 | 契约 | 通过 | 12 域 spectral lint 0 error、oasdiff 无破坏、HEAD baseline 检查、生成物漂移检查（含 untracked） |
 | 迁移 | 通过 | 空库迁移 + 升级迁移（Flyway 测试）；逐版本负向约束/触发器测试 |
 | E2E | 通过 | E2E-01/02/03/04/05 + 登录/权限/管理域 49 条（25 个 spec，无 flaky）；E2E-05 覆盖未选/同人核对阻止、选择第二核对人提交、第二核对人登录可见双人信息与两名用户身份（API 拦截，真实规则由 `AnesthesiaRecordApiIntegrationTest` 承接） |
@@ -100,7 +101,7 @@
 ### D. 文档验收
 
 README/快速开始、开发流程、演示、排障、部署/回滚/上线检查、运维应急、培训材料、
-数据字典、ADR-0001…0023、追溯矩阵（`docs/acceptance/TRACEABILITY.md`）、
+数据字典、ADR-0001…0025、追溯矩阵（`docs/acceptance/TRACEABILITY.md`）、
 外部依赖（EXT）、发布准入矩阵、已知缺陷（本报告 §6）。**结论：齐备。**
 
 ## 4. 质量门禁（最终基线）
@@ -144,9 +145,9 @@ bash scripts/seed-demo.sh
 | ~~耗材库存预警~~ | **已完成（M8-M4-02，2026-11-15）** | material 0.2.0（`GET /v1/materials/stock-alerts`：低于阈值/零库存/临期 90 天 + 建议补货量；`PUT /v1/materials/{id}/low-stock-threshold` 独立阈值维护 + 审计 `MATERIAL_THRESHOLD_UPDATE`；DataScope ALL/SITE/DEPT）+ V28（`material.low_stock_threshold`）+ 前端库存预警卡/筛选；阈值来源、按科室粒度与临期天数标【待确认】（m4 README §32 Q-8） |
 | ~~报表数据锁定~~ | **已完成（M8-M4-02，2026-11-15）** | report 0.2.0（`POST/GET /v1/reports/locks` + 详情；`m4:report:lock`）+ V28 `m4_report.report_snapshot`（append-only、唯一 `(report,period,params_hash)`）+ 锁定后同参数查询/导出默认读快照（`source=SNAPSHOT`、导出 `X-Report-Source`、审计 `REPORT_LOCK`/`REPORT_EXPORT`）+ 重复锁定 409 + 前端锁定按钮/快照标识；快照保留期与解锁流程标【待确认】（m4 README §41 Q-9） |
 | ~~E2E-05 麻精双人核对页面流程~~ | **已完成（M8-QA-01，2026-11-15）** | 新增 `apps/web/e2e/m2-narcotic-dual-check.spec.ts` 2 条（未选/同人阻止并提示 → 候选下拉选择第二核对人提交成功 → 第二核对人登录可见双人信息，两名用户身份均出现）；`RecordView` 用药表单增“第二位核对人”下拉（候选来自 `/v1/auth/users`，仅 `m0:user:read` 可加载，无权限降级手工填写；同人前端前置提示）+ 给药人列；真实“存在/在职/非本人/持 `m2:record:write`”规则与失败审计仍由 `AnesthesiaRecordApiIntegrationTest` 覆盖（页面不替代后端校验） |
-| 消息中心投递（M8-M4-01） | 消息仅入站/已读，无业务事件投递 | 接收人/频率口径未定（避免臆造）；建议后续按通知矩阵实现 |
-| 记录单 `vitalSigns` 占位 | 记录页体征未直连采集 | 设备域查询已可用；映射口径待临床确认（ADR-0016 Q-3） |
-| 抢救用药麻精判定 | 抢救记录未强制麻精核对 | 已登记 Q（ADR-0018/0019），临床确认后实现 |
+| ~~消息中心投递（M8-M4-01）~~ | **已完成（M9-01，2026-11-15）** | m1 `NotificationPort.deliver` 改为按默认通知矩阵写 m0 消息中心（`SCHEDULE_CHANGE`/`EMERGENCY`/`SCHEDULE_STOP`/`CRITICAL_ALERT`；SYS_ANESTHESIOLOGIST/SYS_OR_MANAGER 启用用户；m2 CRITICAL 含未确认）；V29 `sys_message.dedupe_key` 唯一去重；无 PHI；证据：`ScheduleChangeApiIntegrationTest`、`AlertRescueApiIntegrationTest`、`MessageCenterNotificationPortTest`；频率/免打扰/升级路径与 SYS_ADMIN 是否纳入标【待确认】（ADR-0025 Q-M9-01/02） |
+| ~~记录单 `vitalSigns` 占位~~ | **已完成（M9-01，2026-11-15）** | anesthesia 0.11.0 additive：`vitalSigns` 按记录时间窗 + 术间设备返回 metric/value/unit/measuredAt/quality/qualityFlags，升序、≤2000 条并置 `vitalSignsTruncated`；m2 内部只读端口查 `anesthesia_vital`（不跨模块 Mapper）；前端体征表 + 质量标记 + 趋势占位；证据：`AnesthesiaRecordApiIntegrationTest#recordVitalSignsAreMappedFromRoomDevicesWithinWindow`、`RecordView.spec`；是否聚合/抽稀标【待确认】（ADR-0025 Q-M9-03） |
+| ~~抢救用药麻精判定~~ | **已完成（M9-01，2026-11-15）** | 抢救 `drugs` 每项经 m4 `DrugDictionaryService` 解析：未收录 400、歧义 422、声明不一致 400；字典麻精必须第二核对人（缺失/同人/不存在/停用/无权限 400，复用记录单资格规则）；第二核对人随 drugs jsonb 落库，审计增 `narcoticCount/secondCheckCount` 且无姓名；前端字典联想 + 核对人；证据：`ResuscitationServiceImplTest`、`AlertRescueApiIntegrationTest#resuscitationDrugNarcoticIsDeterminedByDictionaryAndRequiresSecondChecker`、`RecordView.spec`；历史是否回溯标【待确认】（ADR-0025 Q-M9-04） |
 | 分级授权 R1–R5/ASA 映射、质控指标清单、绩效权重、排程分析/看板口径 | 口径待确认 | ADR-0013…0023 Q 台账；临床/医务/财务签字后固化 |
 | 契约 0.x deprecated 字段/端点 | 1.0.0 前需清理 | ADR-0011：major 升级时删除 |
 
@@ -175,7 +176,10 @@ bash scripts/seed-demo.sh
    真实数据迁移演练、临床/医务/财务口径确认、上线审批（`release.yml`）。
 3. 遗留项（§6.2）建议进入 M8/维护迭代，按优先级：
    ~~M0 字典/消息/文件（已完成 M8-M0-04）~~ → ~~耗材预警（已完成 M8-M4-02）~~ →
-   ~~报表锁定（已完成 M8-M4-02）~~ → ~~E2E-05（已完成 M8-QA-01）~~ → 体征映射/抢救麻精。
+   ~~报表锁定（已完成 M8-M4-02）~~ → ~~E2E-05（已完成 M8-QA-01）~~ →
+   ~~消息业务投递/体征映射/抢救麻精（已完成 M9-01，2026-11-15）~~。
+4. §6.2 剩余项均为**临床/医务/财务口径【待确认】**（分级授权映射、质控指标、绩效权重、
+   排程分析/看板口径）与契约 0.x deprecated 清理，需人工签字/大版本处理，不属自动施工范围。
 
 ## 8. 交接
 

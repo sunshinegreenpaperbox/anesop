@@ -16,7 +16,7 @@ M1 负责围术期排程上游的“手术申请接收与校验”和“术间/�
 - 提供排程/申请所需的患者脱敏摘要（姓名、性别、出生日期/年龄、脱敏住院号、科室/病区/床号），
   **不提供证件号与手机号**（含脱敏值）；
 - 维护术间主数据与日排程台次，提供规则引擎冲突检测（创建/调整事务内复检，409 + conflicts[]）；
-- 停台/改台/急诊加台与变更留痕：原因码白名单、审批矩阵、抢占择期台次、通知 outbox（模拟）。
+- 停台/改台/急诊加台与变更留痕：原因码白名单、审批矩阵、抢占择期台次、通知 outbox → 默认通知矩阵 → m0 站内消息（M9-01）。
 
 非目标：设备依赖与人员资质主数据（M3）、真实短信/企业微信通知（EXT）。排程分析
 （M2-M6-01）为只读聚合，口径与已知限制见 §12。
@@ -184,11 +184,35 @@ COMPLETED / CANCELLED ──stop────────────────
   `SELECT ... FOR UPDATE` 锁定后复检状态/优先级/术间/时段，任一变化返回 409
   `PREEMPT_CONFLICT`，并与并发改台/停台按“advisory → 术间行 → 被抢占行”顺序加锁（B-1）；
   STOP 留痕说明可配置（`anesop.m1.schedule.preempt-reason`），默认中性文案、不含 PHI（S-2）。
-- 通知端口 **SIMULATED**：`NotificationPort` 写 `m1_sched.notification_outbox`（PENDING），
-  `NotificationDispatcher` 每次 drain 1 条（`FOR UPDATE SKIP LOCKED`）→ SENT；失败按 60s×次数
-  退避，3 次后 FAILED（固定文案，不含 PHI）。payload 只含台次/申请/术间/变更标识与原因码，
-  数据库 `ck_notification_outbox_no_phi` 拒绝 PHI 键、`ck_notification_outbox_no_phi_value`
-  拒绝 15 位以上连续数字（身份证/长住院号值级兜底）。真实短信/企业微信为 **EXT**（待院方）。
+- 通知端口 **站内消息中心投递**（M9-01）：`NotificationPort.publish` 写
+  `m1_sched.notification_outbox`（PENDING，与业务事务同提交），`NotificationDispatcher` 每次
+  drain 1 条（`FOR UPDATE SKIP LOCKED`）→ `MessageCenterNotificationPort.deliver` 按默认通知
+  矩阵写 m0 `sys_message` → SENT；失败按 60s×次数退避，3 次后 FAILED（固定文案，不含 PHI）。
+  payload 只含台次/申请/术间/变更标识、时间与原因码，数据库 `ck_notification_outbox_no_phi`
+  拒绝 PHI 键、`ck_notification_outbox_no_phi_value` 拒绝 15 位以上连续数字（身份证/长住院号
+  值级兜底）。真实短信/企业微信仍为 **EXT**（待院方）；可用
+  `anesop.m1.notification.scheduler-enabled=false` 关闭派发做应用回滚。
+
+### 4.4 通知矩阵与站内消息投递（M9-01）【待确认】
+
+> 默认矩阵只固化“事件→角色→站内消息”，**频率、免打扰、未读升级路径均为【待确认】**；
+> 口径见 [ADR-0025](../../adr/0025-消息投递与体征映射口径.md)。SYS_ADMIN 是否纳入临床告警
+> 由院方确认（Q-M9-02），本期不投递。
+
+| 业务事件（outbox event_type） | 模板编码 | 消息类型 | 接收角色（启用用户） | 参数白名单（无 PHI） |
+|---|---|---|---|---|
+| `SCHEDULE_MODIFIED` / `SCHEDULE_PREEMPTED` | `SCHEDULE_CHANGE` | `SCHEDULE` | SYS_ANESTHESIOLOGIST、SYS_OR_MANAGER | scheduleId、roomId、startAt、reasonCode |
+| `SCHEDULE_STOPPED` | `SCHEDULE_STOP` | `SCHEDULE` | 同上 | scheduleId、roomId、reasonCode |
+| `EMERGENCY_SCHEDULED` | `EMERGENCY` | `SCHEDULE` | 同上 | scheduleId、roomId、startAt、reasonCode |
+| `ALERT_CRITICAL`（含未确认，来自 m2） | `CRITICAL_ALERT` | `ALERT` | 同上 | scheduleId、roomId、alertId、metric、severity、triggeredAt |
+
+- 接收人：按角色编码经 m0-api `NotificationRecipientDirectory` 取**启用**用户（`status=1`、
+  未删除），m1 不访问 m0 用户/角色表；角色下无启用用户时只记元数据日志，不重试、不改投。
+- 去重：`sys_message.dedupe_key = OUTBOX:<outboxId>:<recipientUserId>:<templateCode>`（V29
+  唯一索引），同一业务事件+接收人+模板只落一条；重试/并发派发命中唯一键时返回原消息。
+- 无 PHI：只从模板白名单键取值，payload 其他字段丢弃；日志只记事件类型、outbox 标识与接收人数。
+- 事件到消息的时延 = 调度轮询间隔（默认 30s，`anesop.m1.notification.poll-interval-ms`）；
+  **是否要求实时/免打扰/升级【待确认】**（Q-M9-01）。
 
 ## 5. HIS 适配器与 EXT-01
 

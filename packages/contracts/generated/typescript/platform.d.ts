@@ -401,7 +401,11 @@ export interface components {
        */
       messageId: string
       type: components['schemas']['MessageType']
-      /** @description 模板编码（如 SCHEDULE_CHANGED；前端按编码本地化文案）。 */
+      /**
+       * @description 模板编码（前端按编码本地化文案）。业务投递（M9-01）使用：`SCHEDULE_CHANGE`（改台）、
+       *     `EMERGENCY`（急诊加台）、`SCHEDULE_STOP`（停台）、`CRITICAL_ALERT`（严重预警，
+       *     含未确认）；系统广播/质控/待办等沿用注册表既有编码。
+       */
       templateCode: string
       /** @description 消息标题（由服务端 MessageTemplates 注册表按模板编码渲染，调用方不可提交任意标题；不含 PHI）。 */
       title: string

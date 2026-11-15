@@ -49,6 +49,7 @@ db/
 │   ├── …（V23–V26：M4 耗材/报表/质控与 M5 看板权限点，回滚见 §4.18–§4.21）
 │   ├── V27__m0_dict_message_file.sql       # m0_platform 消息/文件元数据 + 字典读索引 + m0 字典/消息/文件权限点（M8-M0-04）
 │   ├── V28__m4_alerts_report_lock.sql      # material.low_stock_threshold + m4_report.report_snapshot + m4:report:lock（M8-M4-02）
+│   ├── V29__m9_message_vitals_rescue.sql   # sys_message.dedupe_key 唯一去重（M9-01；体征/抢救不新增列）
 │   └── ../seed/demo/V101__demo_drug_synthetic.sql # 演示药品 3 条（仅 dev/test/uat）
 │   └── README.md
 └── seed/demo/                           # 仅 dev/test 的独立 Flyway location
@@ -849,6 +850,30 @@ V28 是 **DDL + data-only 混合**迁移（M8-M4-02，收口 FINAL-REPORT §6.2 
 - **为什么快照不建在 m6_stats**：V24 说明曾预留“m6_stats 读模型与锁定表”；本期按模块边界落在
   `m4_report`（报表域归 M4），避免为一张 append-only 快照新建跨里程碑 schema 归属争议；
   若后续绩效域需要独立报表库，再以新迁移搬移（expand-contract），不修改本表语义。
+
+### 4.24 V29（消息业务投递去重键；体征/抢救不新增列）回滚说明
+
+V29 是 **DDL-only** 迁移（M9-01，收口 FINAL-REPORT §6.2 三项遗留中的消息投递部分）：
+- `ALTER TABLE m0_platform.sys_message ADD COLUMN dedupe_key varchar(200)`（可空）；
+- `CREATE UNIQUE INDEX uk_sys_message_dedupe_key ON m0_platform.sys_message (dedupe_key)`；
+- **无新增表/权限点**：消息读取复用 V27 `m0:message:read`，抢救写复用 V15 `m2:rescue:write`。
+
+不改写 V1–V28 既有表结构、列、数据、权限与角色；记录单 `vitalSigns` 与抢救麻精判定是
+**只读映射/服务层校验**，不新增列（第二核对人随既有 `resuscitation_record.drugs` jsonb 落库）。
+
+- **去重语义**：`dedupe_key = OUTBOX:<outboxId>:<recipientUserId>:<templateCode>`，由 m1
+  `MessageCenterNotificationPort` 生成；PostgreSQL 唯一索引允许多个 NULL，系统广播/历史消息
+  不受影响；写入使用 `INSERT ... ON CONFLICT (dedupe_key) DO NOTHING`，命中时回查原消息。
+- **自检**：迁移末尾 DO 块校验列与唯一索引存在，缺失即 fail-fast。
+- **应用回滚**：关闭 `anesop.m1.notification.scheduler-enabled`（回退为仅日志投递）；
+  记录单 `vitalSigns` 回退空数组占位；抢救用药回退为不做字典判定（历史 jsonb 中已写入的
+  secondChecker 字段保留，不删除、不改写）。消息中心读取与已读不受影响。
+- **库层回滚**（需 DBA 审批 + 备份 + 先导出 `dedupe_key` 非空行）：
+  1. `DROP INDEX m0_platform.uk_sys_message_dedupe_key;`
+  2. `ALTER TABLE m0_platform.sys_message DROP COLUMN IF EXISTS dedupe_key;`
+  3. 不删除消息与抢救记录（append-only 留痕）；回滚后重新登录以刷新 JWT（无权限点变化，
+     令牌无需强制失效，但派发调度已关闭）。
+- **保留期**：消息不自动清理（与 V27 一致）；`dedupe_key` 随消息保留，用于重试/审计追溯。
 
 ## 5. 运行方式
 

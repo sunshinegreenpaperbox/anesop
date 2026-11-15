@@ -1572,10 +1572,18 @@ export interface components {
        */
       events: components['schemas']['AnesthesiaEvent'][]
       /**
-       * @description 生命体征序列占位：M3-M8-01 采集接入平台端后填充；本期固定返回空数组，
-       *     前端据此显示“体征待采集接入”，不得伪造体征数值。
+       * @description 记录时间窗内该台次术间设备的标准化体征采样（0.11.0 起由采集落库数据映射，
+       *     不再固定为空）：metric/value/unit/measuredAt/quality/qualityFlags，
+       *     按 measuredAt 升序；最多返回 2000 条，超出时截断并置
+       *     `vitalSignsTruncated=true`。无采集数据或记录未开始（无 startedAt）时为空数组，
+       *     不得伪造体征数值；只读，不含患者标识。
        */
       readonly vitalSigns?: components['schemas']['VitalSignSample'][]
+      /**
+       * @description 体征采样是否因超过 2000 条上限被截断（0.11.0）。前端据此提示“仅显示前 2000 条，
+       *     完整波形请到设备页按窗口查询”。
+       */
+      readonly vitalSignsTruncated?: boolean
       /** @description 三方核查（Time-out 与 Sign-out）是否均已完成；只读摘要，锁单前置条件。 */
       readonly threeWayCheckCompleted?: boolean
       /**
@@ -2505,15 +2513,28 @@ export interface components {
       computedAt: string
     }
     /**
-     * @description 生命体征采样点占位结构（M3-M8-01 采集接入后由平台端写入；本期 GET 记录单返回空数组）。
-     *     不包含任何患者直接标识，时点为服务端校准时间。
+     * @description 标准化生命体征采样点（0.11.0 起由 `GET /v1/anesthesia/records/{recordId}` 从采集落库数据
+     *     映射）：每个采样帧按指标展开为多条（metric/value/unit/measuredAt/quality/qualityFlags）。
+     *     兼容保留 0.10.0 的 heartRate/systolicBp 等整帧字段，映射时对应指标会同时填充；
+     *     不包含任何患者直接标识，时点为设备测量时间（服务端校正在采集侧完成）。
      */
     VitalSignSample: {
       /**
        * Format: date-time
-       * @description 采集时刻（服务端校准）。
+       * @description 采集时刻（设备原始测量时间；服务端校正在采集侧完成）。
        */
       measuredAt: string
+      /**
+       * @description 指标编码：HR/SPO2/NIBP_SYS/NIBP_DIA/ETCO2/TEMP（0.11.0）。
+       * @enum {string}
+       */
+      metric?: 'HR' | 'SPO2' | 'NIBP_SYS' | 'NIBP_DIA' | 'ETCO2' | 'TEMP'
+      /** @description 指标数值（规范单位，0.11.0）。 */
+      value?: number
+      /** @description 规范单位：bpm/%/mmHg/℃（0.11.0）。 */
+      unit?: string
+      /** @description 质量码：0=正常、1=可疑、2=缺失、3=超时（0.11.0，与采集域一致）。 */
+      quality?: number
       /** @description 心率（次/分）。 */
       heartRate?: number | null
       /** @description 收缩压（mmHg）。 */
@@ -2734,10 +2755,24 @@ export interface components {
       /** @description 人员姓名（必填，1–100 字符；只落库，不写入日志/审计原文）。 */
       name: string
     }
-    /** @description 抢救用药明细（结构化，不含患者标识）。 */
+    /**
+     * @description 抢救用药明细（结构化，不含患者标识）。0.11.0（additive）：每项经药品字典解析，
+     *     `narcotic` 由服务端按字典判定（客户端声明仅做一致性校验）；麻精药品必须提供
+     *     `secondCheckerId/secondCheckerName`，核对人不得为给药人本人且须存在/在职/持
+     *     `m2:record:write`，与记录单用药口径一致。
+     */
     ResuscitationDrug: {
-      /** @description 药品名称（院内字典名）。 */
+      /** @description 药品名称（院内字典名；未收录 400）。 */
       drugName: string
+      /**
+       * @description 是否麻精类（0.11.0，只读判定）：客户端可声明，但以药品字典为准；声明与字典不一致
+       *     返回 400（防止误报 false 绕过第二核对）。为空表示仅由服务端判定。
+       */
+      narcotic?: boolean | null
+      /** @description 麻精第二核对人用户标识（0.11.0）；麻精药品必填，非麻精不得填写。 */
+      secondCheckerId?: string | null
+      /** @description 麻精第二核对人姓名（0.11.0）；与 secondCheckerId 同时必填。 */
+      secondCheckerName?: string | null
       /** @description 剂量（必须大于 0）。 */
       dose: number
       /** @description 剂量单位（mg/ug/ml 等）。 */

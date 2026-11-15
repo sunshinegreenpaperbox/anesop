@@ -94,7 +94,8 @@ apps/web/src/modules/m2/
 
 > 0.5.0 为 additive：新增记录单创建/按台次查询、时间轴事件读写、用药读写、输液/出入量
 > 读写与出入量汇总共 9 个 operation、新增 13 个 schema，并在 `AnesthesiaRecord` 增加只读
-> `vitalSigns` 占位数组；未删除或改类型既有定义。0.4.0 的知情同意 8 个 operation 与
+> `vitalSigns` 只读数组（0.11.0/M9-01 起由采集映射，不再固定为空）；未删除或改类型既有
+> 定义。0.4.0 的知情同意 8 个 operation 与
 > 手术申请维度三方核查 2 个 operation 保持不变；记录单(record)维度
 > `/v1/anesthesia/records/{recordId}/three-way-checks` 保持原契约，实现留 M3。
 > 0.8.1（M3-M2-03）新增锁单状态/锁单/修订列表/修订详情/创建修订/当前有效值 6 个 operation 与
@@ -517,8 +518,9 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
 8. 锁单/修订已落地（§14），但 CA 仍为 SIMULATED 占位：无 PDF 生成、可信时间戳、证书链与
    验签链路；锁单后仅禁止事件/用药/出入量追加，抢救记录/告警处置是否也应冻结待临床确认
    （§14.9 Q-3）。
-9. 生命体征为占位：`AnesthesiaRecord.vitalSigns` 本期固定空数组，真实采集/质量标记由
-   M3-M8-01 接入（§12）；设备数据未接入前不得在记录单展示伪造体征。
+9. 生命体征已映射（M9-01，§17）：`AnesthesiaRecord.vitalSigns` 按记录时间窗 + 术间设备返回
+   采集采样（≤2000 条，超出 `vitalSignsTruncated=true`）；无采集数据时为空数组，不伪造体征。
+   是否在记录单聚合/抽稀待临床确认（§17.3 Q-M9-03）。
 10. 用药只记录药品字典名/剂量/途径与麻精核对，不含配伍、输注泵速率、批号/效期与库存联动；
    真实麻精药品「五专」管理已由 M4-M15-01 落地（专册/交接/基数/日结），处方与空安瓿回收
    仍由药事系统/线下流程承接，【待确认】。M2 用药的麻精判定已收口 T-4：服务端按药品字典
@@ -537,7 +539,7 @@ ack/rescue 是 M0“禁止越权授权”校验的必然结果（管理员只能
 | Q-6 | 撤销后重新知情同意 | 撤销释放唯一索引，允许为同一申请 + 模板版本新建记录；原记录保留 | 是否需要“再次知情同意”独立模板/二次告知留痕，待**医务处**确认 |
 | Q-7 | 三方核查完成与问题项 | 最新版本同时有 Time-out/Sign-out 即完成；`issues` 非空不阻断完成 | 问题项未闭环是否阻断锁单、Sign-out 是否必须与 Time-out 同一执行人，待**麻醉科/医务处**确认（M3 锁单前定稿） |
 | Q-8 | 麻精药品判定口径 | `narcotic` **当前由客户端声明**（`AdministerDrugRequest.narcotic`）；服务端只校验核对人资格，无法识别"舒芬太尼填 false"绕过双人核对 | 药品字典 **I-07** 落地后由 M5 按药品编码服务端判定麻精属性，客户端声明仅作兼容输入；过渡期在界面/审计提示风险（麻醉科/药学部/M5） |
-| Q-9 | 临床角色如何获取本台体征 | 记录单 `vitalSigns` 本期固定空数组；设备域体征查询需 `m2:device:read`（仅 SYS_ADMIN/SYS_OR_MANAGER），麻醉医师/护士当前无权按术间读取本台设备体征 | M3-QA/M4 权限细化：临床角色按"本台次/本术间"读取本台设备体征的映射口径（记录单 `vitalSigns` ← `anesthesia_vital`，按记录单台次绑定术间与设备时间窗）待临床与架构确认 |
+| Q-9 | 临床角色如何获取本台体征 | **M9-01 已收口**：记录单 `vitalSigns` 经 m2 内部只读端口按记录时间窗 + 术间设备映射，`m2:record:read` 即可读取；设备域独立查询仍按 `m2:device:read` 收紧 | 是否额外开放按设备/术间的独立体征查询、是否聚合抽稀（§17.3 Q-M9-03）待临床/信息科确认 |
 | Q-10 | 事件时间容差 | 未来/补录容差默认 600 秒（`anesop.m2.record.time-tolerance-seconds`）；超出容差的补录必须填原因 | 院方对"补录时限/原因必填范围"的临床要求（如术后 24h 内补记是否需上级确认）待**麻醉科/医务处**确认；E2E-02 断网补传与并发追加专项由 **M3-QA-01** 承接 |
 
 ### 10.1 知情同意与三方核查复审 Q 登记（M2-M5-01，编号 Q-1…Q-4）
@@ -793,8 +795,9 @@ anesop:
   `[{userId?, name}]` 数组且至少 1 人（≤20）；缺失/空 400。姓名只落库，日志/审计只记
   `leaderUserId` 与 `rescuerCount`，不写姓名原文。
 - 结构化：`eventSummary = {summary, interventions[]}`（摘要 ≤2000 字、干预 ≤50 条）、
-  `drugs = [{drugName,dose,unit,route,administeredAt}]`（≤50 条，剂量 > 0，给药时间须在抢救
-  时间窗内）；表内不存患者标识。
+  `drugs = [{drugName,dose,unit,route,administeredAt,narcotic?,secondCheckerId?,secondCheckerName?}]`
+  （≤50 条，剂量 > 0，给药时间须在抢救时间窗内）；表内不存患者标识。0.11.0/M9-01 起每项经
+  药品字典判定麻精，麻精必须第二核对人（见 §17.3）。
 - 类型/转归枚举为【待确认】临床口径，仅演示。
 
 ### 13.8 审计与无 PHI
@@ -1303,3 +1306,51 @@ anesop:
 | Q-8 | 早于 `endedAt` 的拒绝口径（评审 Q-1 登记） | 服务层按字段校验返回 400（字段 `assessedAt`），数据库触发器 55000；不返回 409 | 是否应改为 409 `STATE_CONFLICT`（“记录未结束/时间不合法”的状态语义）由麻醉科/医务处确认 |
 | Q-9 | 24/48h 窗口本期不校验（评审 Q-2 登记） | 只记录 H24/H48 并校验同类型时间单调；**不校验**随访时间与手术结束的 24/48h 偏离，无超时提醒（与 Q-1 同一议题） | 是否在 M3-QA 上线前置强制窗口容差/超时升级（麻醉科/护理部/M7） |
 | Q-10 | 姓名/住院号脱敏与 DLP（评审 Q-3 登记） | `PhiMasker` 仅识别手机号/身份证号（容忍 `+86`、空格、短横线、括号）；姓名/住院号无固定格式不自动识别 | 是否在 M3-QA 上线前置接入院内 DLP/姓名识别，及阻断策略（信息科/护理部；关联 Q-5） |
+
+## 17. 体征映射与抢救麻精判定（M9-01，契约 0.11.0 + V29）
+
+> 收口 FINAL-REPORT §6.2「记录单 vitalSigns 占位」「抢救用药麻精判定」两项遗留；
+> 口径与备选方案见 [ADR-0025](../../adr/0025-消息投递与体征映射口径.md)。无新增表/列，
+> 复用 V4 `anesthesia_vital`、V14 `device_registry`、V15/V16/V17 抢救记录。
+
+### 17.1 记录单 `vitalSigns` 映射
+
+- 数据源（m2 内部只读端口 `VitalSignReadPort`，不跨模块 Mapper）：
+  `anesthesia_record.room_id`（创建时快照）→ `device_registry.room_id` → 设备在
+  `[started_at, ended_at 或 now]` 内的 `anesthesia_vital` 采样。
+- 输出：每帧按指标展开为 `metric/value/unit/measuredAt/quality/qualityFlags`，按 `measuredAt`
+  升序；最多 **2000** 条，超出置 `vitalSignsTruncated=true`（不静默截断）。未开始（无
+  `startedAt`）或术间为空返回空数组，不伪造数值。
+- 质量：`quality` 原样透传（0 正常/1 可疑/2 缺失/3 超时），`qualityFlags` 来自采集 jsonb；
+  可疑/缺失帧不丢弃，前端以质量标记展示。
+- 兼容：0.11.0 additive 保留 `heartRate/systolicBp/diastolicBp/spo2/etco2/temperature` 整帧字段，
+  映射时对应指标同时填充；`source` 本期不填。
+- 前端：`RecordView` 体征面板（表格 + 质量标记 + 趋势占位），最多渲染前 300 条并提示总数；
+  无图表库时以表格呈现，不替代临床判断。
+- 测试：`AnesthesiaRecordApiIntegrationTest#recordVitalSignsAreMappedFromRoomDevicesWithinWindow`
+  （窗口过滤、质量码/标记、升序、无 PHI）、`#draftRecordWithoutStartedAtHasEmptyVitalSigns`；
+  `RecordView.spec`（体征表/可疑标记/截断提示）。
+
+### 17.2 抢救用药麻精判定
+
+- 每项 `ResuscitationDrug` 经 m4-api `DrugDictionaryService.findByName` 解析（名称/通用名/
+  别名，trim + 忽略大小写）：未收录 **400**；命中多个 **422 `DRUG_AMBIGUOUS`**（fail-closed）。
+- `narcotic` 以字典为准；客户端声明与字典不一致 **400**（防误报 false 绕过第二核对）；
+  非麻精填写核对人 **400**。
+- 字典麻精必须 `secondCheckerId + secondCheckerName`：缺失/同人/不存在/停用/无
+  `m2:record:write` 均 **400**；复用 `SecondCheckerEligibility`（与记录单 `recordDrug` 相同规则）。
+- 第二核对人随 `drugs` jsonb 落库（不新增列），append-only 与时间窗约束不变；审计
+  `RESCUE_RECORD` 增加 `narcoticCount/secondCheckCount`，仍不含姓名与摘要原文。
+- 前端：抢救用药改为字典联想（`/v1/drugs/search`），麻精时显示第二位核对人选择/手工填写
+  （复用记录单候选与提示），提交前提示、服务端最终校验。
+- 测试：`ResuscitationServiceImplTest`（未收录/声明 false 被拒/缺核对/成功留痕/非麻精带核对）、
+  `AlertRescueApiIntegrationTest#resuscitationDrugNarcoticIsDeterminedByDictionaryAndRequiresSecondChecker`
+  （400 三例 + 201 + 审计计数）、`RecordView.spec`（联想过、麻精核对人）。
+
+### 17.3 Q 登记（只登记不改实现）
+
+| 编号 | 事项 | 当前实现 | 待确认点 / 决策人 |
+|---|---|---|---|
+| Q-M9-03 | 体征是否聚合/抽稀 | 返回原始采样点（≤2000，超出截断） | 是否按 1/5 分钟趋势聚合、是否新增独立分页端点（麻醉科/信息科） |
+| Q-M9-04 | 抢救麻精是否回溯历史 | 按提交时字典判定，历史不回溯 | 医务/药学确认；不改写历史 jsonb |
+| Q-M9-05 | 停用药品是否允许新抢救录入 | 字典可解析历史属性，未额外拦截 | 药房/医务：停用药品新录入策略 |

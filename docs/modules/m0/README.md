@@ -289,7 +289,7 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
 > 的字段名与口径已在本文件、`docs/db/README.md`、`docs/data-dictionary/core-entities.md` 统一；
 > V3 只做 expand 加列，写路径由 M2-M0-02（V6）落地；密钥轮换仍待 M1 离线工具，见第 5 节。
 
-## 10. 字典、消息与文件（M8-M0-04，V27，契约 platform.yaml 0.2.0）
+## 10. 字典、消息与文件（M8-M0-04 + M9-01 投递，V27/V29，契约 platform.yaml 0.2.1）
 
 > 本文件第 1–9 节描述认证/权限/用户管理；本节描述 M0 公共支撑补全的三类能力。
 > 口径与取舍见 [ADR-0024](../../adr/0024-字典消息文件口径.md)；表结构见
@@ -327,6 +327,11 @@ bash scripts/contract-check.sh                          # spectral + oasdiff + �
   `code → 类型/固定标题/允许参数键`，**调用方不提交标题**，未登记编码/类型不匹配/参数越界一律
   拒绝（S-4）。参数值 ≤200 字符且不含控制字符，**禁止 PHI**。已读幂等，未读角标 `unreadCount`
   恒为全部未读数；侧边菜单角标与消息中心共享 `useMessageStore`。
+- **业务投递（M9-01）**：m1 通知端口按默认通知矩阵调用 `MessagePublisher`，
+  模板 `SCHEDULE_CHANGE`/`EMERGENCY`/`SCHEDULE_STOP`/`CRITICAL_ALERT`，接收人经
+  `NotificationRecipientDirectory` 按角色取启用用户；同一业务事件+接收人+模板由
+  `sys_message.dedupe_key`（V29 唯一索引）去重。频率/免打扰/升级路径见
+  [ADR-0025](../../adr/0025-消息投递与体征映射口径.md)【待确认】。
 - **文件**：白名单 `application/pdf`、`text/csv`、`text/plain`、`image/png`、`image/jpeg`，
   ≤20 MiB；服务端计算 SHA-256 并按内容寻址落盘（同内容只存一份，元数据每次上传独立）。
   **不持久化客户端原始文件名**：`sys_file` 无文件名列，展示名服务端生成
