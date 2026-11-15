@@ -119,7 +119,16 @@ curl -s http://localhost:8080/actuator/health
 # 预期：{"status":"UP",...}
 ```
 
-`dev` profile 会加载 `db/migration` + `db/seed/demo`，并允许 `demo_admin` 与进程内 JWT 密钥。
+> 本机没有 PostgreSQL、也没有 Docker 时，可用仓库内已解压的 PG16 一键启动演示环境
+> （PG 127.0.0.1:55432 + API 8080 + 演示种子）：
+>
+> ```bash
+> bash scripts/demo-local.sh start     # 首次会 initdb + seed-demo
+> bash scripts/demo-local.sh status    # PG/API 健康
+> bash scripts/demo-local.sh stop
+> ```
+>
+> `dev` profile 会加载 `db/migration` + `db/seed/demo`，并允许 `demo_admin` 与进程内 JWT 密钥。
 `prod` profile 关闭文档、只加载 `db/migration`，缺失 `ANESOP_JWT_SECRET` 会拒绝启动。
 
 ## 6. 最小演示：初始化 → 登录 → 改密（可选，需 PG）
