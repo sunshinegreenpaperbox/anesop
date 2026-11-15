@@ -11,8 +11,8 @@
 | ID | 任务 | 写域 | 依赖 | 状态 |
 |---|---|---|---|---|
 | M8-M0-04 | M0 公共支撑补全：字典 API、消息中心、文件管理 | platform.yaml（新域）、m0 模块、V27、前端 m0 | — | **Done（2026-11-15）** |
-| M8-M4-01 | 耗材库存预警（阈值配置 + 低库存提醒 + 消息中心投递） | m4 模块、V28、material.yaml | M8-M0-04 | Ready |
-| M8-M4-02 | 报表数据锁定/快照（运营口径确认后） | m4 模块、V28+、report.yaml | 院方口径签字 | Blocked（口径待确认） |
+| M8-M4-01 | 耗材库存预警（阈值配置 + 低库存提醒） | m4 模块、V28、material.yaml | M8-M0-04 | **Done（2026-11-15，并入 M8-M4-02 执行；页面预警，不投递消息中心）** |
+| M8-M4-02 | 报表数据锁定/快照（锁定后查询/导出口径） | m4 模块、V28、report.yaml | 院方口径签字 | **Done（2026-11-15）** |
 | M8-QA-01 | E2E-05 麻精双人核对页面流程 | `apps/web/e2e/**`、m4 页面 | M8-M0-04 | Ready |
 | M8-M2-01 | 记录页 `vitalSigns` 直连设备域查询 | m2 模块、anesthesia.yaml | ADR-0016 Q-3 | Blocked（映射口径待临床确认） |
 | M8-M2-02 | 抢救用药麻精判定（强制双人核对） | m2 模块、anesthesia.yaml | ADR-0018/0019 Q | Blocked（临床确认） |
@@ -58,15 +58,36 @@
 
 ## 后续任务要点
 
-### M8-M4-01 耗材库存预警
-- 目标：可配置低库存阈值（按耗材/科室）、低于阈值生成站内消息（复用 `MessagePublisher`，
-  模板 `MATERIAL_LOW_STOCK`，参数 `count`/`deptName`，严禁患者标识），并记录审计。
-- 验收：阈值边界、只发一次（去重键）、消息仅本人/角色可见、权限（`m4:material:read`）、
-  库存不产生负值；V28 迁移可回滚。
+### M8-M4-01 耗材库存预警（Done，并入 M8-M4-02 执行）
+- 交付：`material.yaml` 0.2.0（`GET /v1/materials/stock-alerts`、`PUT /v1/materials/{id}/low-stock-threshold`、
+  `lowStockThreshold`/`MaterialStockAlert(StockAlertType)`/`LowStockThresholdRequest`）、V28
+  （`m4_material.material.low_stock_threshold` numeric(12,2) 可空）、`MaterialAlertServiceImpl`
+  + `MaterialMapper.updateLowStockThreshold` + `MaterialStockMapper.selectStockAlerts`（SQL `HAVING`
+  先过滤再 LIMIT）、`MaterialController`/`MaterialStockController` 端点、审计
+  `MATERIAL_THRESHOLD_UPDATE`、DataScope ALL/SITE/DEPT（SELF/ROOM 403）、前端库存预警卡与类型筛选。
+- 口径：低库存=可用量**严格低于**阈值；零库存=合计 0；临期=效期 ≤ 今天+90 天（含已过期）；
+  建议补货量 `max(0, 阈值−可用量)`，阈值缺失为 null。阈值来源、按科室粒度、临期天数【待确认】
+  （m4 README §32 Q-8）。
+- 边界：**未**做 MessagePublisher 站内消息投递（原任务卡设想的 `MATERIAL_LOW_STOCK` 模板）。
+  原因：消息中心去重键/接收人规则（科室库管 vs 耗材管理员）与提醒频率属院方口径；本期以
+  页面预警 + 可查询端点收口，投递留待口径确认后另开任务（不臆造接收人/频率）。
+- 验收：阈值边界/零库存/临期/DataScope/403/审计 单测 16 + 集成 1；「M4 耗材库存预警边界与
+  DataScope」证据见 `M4MaterialApiIntegrationTest#stockAlertsCoverThresholdZeroStockNearExpiryAndDataScope`。
 
-### M8-M4-02 报表数据锁定/快照
-- 前置：院方确认“报表冻结时点/重算口径/审计要求”（当前 Blocked，不得先写实现）。
-- 方向：按周期生成快照表（只读），导出带口径版本与快照 ID；不修改既有 report-1.0.0 口径。
+### M8-M4-02 报表数据锁定/快照（Done）
+- 交付：`report.yaml` 0.2.0（`POST /v1/reports/locks`、`GET /v1/reports/locks`、
+  `GET /v1/reports/locks/{lockId}`、`ReportLock/ReportLockList/ReportLockRequest`、
+  `WorkloadReport/MultiReport` 增 `source/lockId/lockedAt`、导出响应头 `X-Report-Source`）、
+  V28 `m4_report.report_snapshot`（append-only、唯一 `(report, period, params_hash)`、params/payload
+  jsonb + sha256）、`m4:report:lock`（SYS_ADMIN/SYS_OR_MANAGER/SYS_QC_MANAGER）、
+  `ReportSnapshotCodec`/`ReportSnapshotEntity`/`ReportSnapshotMapper`、`ReportServiceImpl` 实现
+  `ReportLockService`（锁定 + 列表/详情 + 查询/导出默认读快照）、前端锁定按钮与快照标识。
+- 语义：期间 `YYYY-MM` 或 `YYYY-MM-DD~YYYY-MM-DD`（也可 from+to，二选一）；参数指纹含数据范围
+  指纹（不同范围不共用快照），分页不参与；重复锁定 409；快照不可覆盖/删除（55000）；锁定/导出
+  审计 `REPORT_LOCK`/`REPORT_EXPORT(source)`。快照保留期与解锁/重出数【待确认】（m4 README §41 Q-9）。
+- 验收：`ReportLockServiceImplTest` 18 例 + `M4ReportApiIntegrationTest#reportLockFreezesSnapshotAndExportReadsSnapshot`
+  （锁定后源数据变化仍为 3 台次/215 分钟、导出 `X-Report-Source=SNAPSHOT`、重复 409、append-only
+  55000、审计、无 lock 权限 403、V28 权限与 3 条授权）+ 前端 Vitest 1 + E2E 1。
 
 ### M8-QA-01 E2E-05 麻精双人核对页面流程
 - 目标：双人登录/切换、核对签字、拒绝与撤销分支；复用 `M4NarcoticApiIntegrationTest` 的
