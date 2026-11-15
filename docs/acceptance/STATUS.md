@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M2/M3/M4 达成，M5 达成（5/5）**；下一步 M6 上线准备
-- 当前 Round：37（2026-11-15，M5-QA-01 性能与安全专项）
-- 最近提交：`feat(m5)` M5-M19-02 安全加固（M5-QA-01 为当前未提交工作）
+- 当前里程碑：**M2/M3/M4 达成**；M5 进行中（5/5 完成，待收口 tag m5）
+- 当前 Round：37（2026-11-15，M5 收口）
+- 最近提交：`test(m5)` M5-QA-01 性能/并发/稳定性专项
 - 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6；M5 5/5**
-- 进行中：—（M5-QA-01 完成，待 Review）
+- 进行中：M6 上线准备（部署清单/数据初始化/培训/演练）
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：tag m5 → M6 上线准备 → M7 验收与 FINAL-REPORT
+- 下一步：M6 上线准备 → M7 验收与 FINAL-REPORT
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
