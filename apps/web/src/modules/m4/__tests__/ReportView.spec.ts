@@ -176,6 +176,59 @@ describe('ReportView 工作量与多维报表（M4-M16-01）', () => {
     expect(wrapper.text()).toContain('无时长台次')
   })
 
+  it('锁定报表后展示快照标识（source=SNAPSHOT）', async () => {
+    seedAuthenticatedUser(
+      syntheticUser({
+        permissions: ['m4:report:read', 'm4:report:export', 'm4:report:lock'],
+        roles: ['SYS_QC_MANAGER'],
+      }),
+    )
+    const queue = createFetchQueue([
+      jsonResponse(workloadBody()),
+      jsonResponse(multiBody()),
+      jsonResponse(
+        {
+          lockId: '5a000000-0000-4000-8000-000000000001',
+          report: 'workload',
+          period: '2026-12-01~2026-12-31',
+          from: '2026-12-01',
+          to: '2026-12-31',
+          params: { report: 'workload', from: '2026-12-01', to: '2026-12-31' },
+          paramsHash: 'a'.repeat(64),
+          payloadHash: 'b'.repeat(64),
+          dataScope: 'ALL',
+          rowCount: 2,
+          lockedBy: '10000000-0000-4000-8000-000000000001',
+          lockedByName: '演示管理员（合成）',
+          lockedAt: '2026-12-01T09:30:00+08:00',
+        },
+        201,
+      ),
+      jsonResponse(
+        workloadBody({
+          source: 'SNAPSHOT',
+          lockId: '5a000000-0000-4000-8000-000000000001',
+          lockedAt: '2026-12-01T09:30:00+08:00',
+        }),
+      ),
+      jsonResponse(multiBody()),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountView()
+    await settle()
+    expect(wrapper.find('[data-testid="report-snapshot"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="report-lock"]').trigger('click')
+    await settle()
+
+    const lockCall = queue.calls.find((call) => call.url.includes('/v1/reports/locks'))
+    expect(lockCall?.init?.method).toBe('POST')
+    expect(String(lockCall?.init?.body)).toContain('"report":"workload"')
+    expect(wrapper.find('[data-testid="report-snapshot"]').text()).toContain('快照')
+    expect(wrapper.find('[data-testid="report-snapshot"]').text()).toContain('2026-12-01')
+  })
+
   it('无 m4:report:read 时展示权限态且不发请求', async () => {
     seedAuthenticatedUser(syntheticUser({ permissions: ['m4:material:read'] }))
     const queue = createFetchQueue([])

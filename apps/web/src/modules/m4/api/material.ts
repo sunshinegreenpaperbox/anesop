@@ -1,7 +1,7 @@
 import type { components as materialComponents } from '@anesop/contracts/material'
 import { http } from '../../../api/http'
 
-/** 耗材、UDI 追溯与 SPD 适配器（material.yaml 0.1.0 生成类型，禁止手写重复模型）。 */
+/** 耗材、UDI 追溯与 SPD 适配器（material.yaml 0.2.0 生成类型，禁止手写重复模型）。 */
 export type Material = materialComponents['schemas']['Material']
 export type MaterialList = materialComponents['schemas']['MaterialList']
 export type CreateMaterialRequest = materialComponents['schemas']['CreateMaterialRequest']
@@ -20,6 +20,10 @@ export type RegisterUdiInstanceRequest = materialComponents['schemas']['Register
 export type UseUdiInstanceRequest = materialComponents['schemas']['UseUdiInstanceRequest']
 export type SpdAdapterStatus = materialComponents['schemas']['SpdAdapterStatus']
 export type SpdSyncResult = materialComponents['schemas']['SpdSyncResult']
+export type MaterialStockAlert = materialComponents['schemas']['MaterialStockAlert']
+export type MaterialStockAlertList = materialComponents['schemas']['MaterialStockAlertList']
+export type StockAlertType = materialComponents['schemas']['StockAlertType']
+export type LowStockThresholdRequest = materialComponents['schemas']['LowStockThresholdRequest']
 export type MovementType = CreateStockMovementRequest['movementType']
 export type UdiStatus = UdiInstance['status']
 
@@ -35,6 +39,13 @@ export const movementTypeLabels: Record<string, string> = {
   OUT: '出库',
   RETURN: '退回',
   ADJUST: '盘点调整',
+}
+
+/** 库存预警类型中文标签（0.2.0：低阈值 / 零库存 / 临期 90 天）。 */
+export const alertTypeLabels: Record<StockAlertType, string> = {
+  LOW_STOCK: '低库存',
+  ZERO_STOCK: '零库存',
+  NEAR_EXPIRY: '临期（≤90 天）',
 }
 
 /** UDI 状态中文标签。 */
@@ -134,6 +145,36 @@ export function listStockMovements(params: {
 
 export function createStockMovement(payload: CreateStockMovementRequest): Promise<StockMovement> {
   return http.post<StockMovement>('/v1/materials/stock-movements', payload)
+}
+
+/* ---------------------------------------------------------------------------
+ * 库存预警与阈值（material.yaml 0.2.0；m4:material:read / m4:material:write）
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 库存预警（材料 × 科室；低于阈值 / 零库存 / 临期 90 天，含建议补货量）。
+ *
+ * 数据范围 ALL/SITE/DEPT；SELF/ROOM 403（服务端 fail-closed）。
+ */
+export function listStockAlerts(params: {
+  departmentId?: string
+  alertType?: StockAlertType
+  limit?: number
+}): Promise<MaterialStockAlertList> {
+  const query = new URLSearchParams()
+  if (params.departmentId) query.set('departmentId', params.departmentId)
+  if (params.alertType) query.set('alertType', params.alertType)
+  if (params.limit) query.set('limit', String(params.limit))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return http.get<MaterialStockAlertList>(`/v1/materials/stock-alerts${suffix}`)
+}
+
+/** 维护库存预警阈值（乐观锁；threshold 为 null 表示清除阈值 = 不按阈值预警）。 */
+export function updateLowStockThreshold(
+  materialId: string,
+  payload: LowStockThresholdRequest,
+): Promise<Material> {
+  return http.put<Material>(`/v1/materials/${materialId}/low-stock-threshold`, payload)
 }
 
 /* ---------------------------------------------------------------------------

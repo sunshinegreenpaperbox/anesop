@@ -4,20 +4,24 @@ import { ElMessage } from 'element-plus'
 import { ApiError } from '../../../api/http'
 import { useAuthStore } from '../../../stores/auth'
 import {
+  alertTypeLabels,
   createStockMovement,
   getSpdAdapterStatus,
   listMaterialDepartments,
   listMaterialStock,
   listMaterials,
+  listStockAlerts,
   listStockMovements,
   movementTypeLabels,
   syncSpdAdapter,
   type CreateStockMovementRequest,
   type DepartmentOption,
   type Material,
+  type MaterialStockAlert,
   type MaterialStockLevel,
   type MovementType,
   type SpdAdapterStatus,
+  type StockAlertType,
   type StockMovement,
 } from '../api/material'
 
@@ -28,6 +32,8 @@ import {
  * - 数量不足 409（服务端 details 给可用量），效期/高值裸数量规则 422；
  * - 高值耗材入库走 UDI 追溯页逐件登记，本页普通出入库不处理高值；
  * - SPD 适配器（EXT-03）为模拟，同步失败降级但本地库存继续可用。
+ * - 库存预警（material.yaml 0.2.0）：低库存（严格低于阈值）/零库存/临期 90 天，
+ *   服务端按科室数据范围过滤并提供建议补货量；本页展示预警标签并支持按类型筛选。
  */
 
 const auth = useAuthStore()
@@ -37,6 +43,8 @@ const materials = ref<Material[]>([])
 const departmentId = ref('')
 const stockRows = ref<MaterialStockLevel[]>([])
 const movements = ref<StockMovement[]>([])
+const alerts = ref<MaterialStockAlert[]>([])
+const alertType = ref<'' | StockAlertType>('')
 const spdStatus = ref<SpdAdapterStatus | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
@@ -103,17 +111,46 @@ async function loadStock(): Promise<void> {
   loading.value = true
   error.value = null
   try {
-    const [stock, movementList] = await Promise.all([
+    const [stock, movementList, alertList] = await Promise.all([
       listMaterialStock({ departmentId: departmentId.value, limit: 100 }),
       listStockMovements({ departmentId: departmentId.value, limit: 100 }),
+      listStockAlerts({ departmentId: departmentId.value, limit: 200 }),
     ])
     stockRows.value = stock.items
     movements.value = movementList.items
+    alerts.value = alertList.items
   } catch (cause) {
     handleError(cause)
   } finally {
     loading.value = false
   }
+}
+
+/** 按类型筛选预警（服务端过滤，避免前端截断造成漏报）。 */
+async function loadAlerts(): Promise<void> {
+  if (!departmentId.value) return
+  try {
+    const alertList = await listStockAlerts({
+      departmentId: departmentId.value,
+      alertType: alertType.value || undefined,
+      limit: 200,
+    })
+    alerts.value = alertList.items
+  } catch (cause) {
+    handleError(cause)
+  }
+}
+
+/** 预警类型中文标签（未知类型回退原值，避免新增类型时显示空白）。 */
+function alertLabel(value: string): string {
+  return alertTypeLabels[value as StockAlertType] ?? value
+}
+
+/** 预警标签颜色：零库存最严重、低库存次之、临期提示。 */
+function alertTagType(value: StockAlertType): 'danger' | 'warning' | 'info' {
+  if (value === 'ZERO_STOCK') return 'danger'
+  if (value === 'LOW_STOCK') return 'warning'
+  return 'info'
 }
 
 async function loadSpd(): Promise<void> {
@@ -238,6 +275,72 @@ onMounted(init)
       data-testid="stock-error"
     />
     <p v-if="lastResult" class="hint" data-testid="stock-result">{{ lastResult }}</p>
+
+    <section class="card" data-testid="alert-card">
+      <div class="alert-header">
+        <h2>库存预警</h2>
+        <el-select
+          v-model="alertType"
+          data-testid="alert-filter"
+          size="small"
+          style="width: 170px"
+          @change="loadAlerts"
+        >
+          <el-option label="全部预警" value="" />
+          <el-option
+            v-for="(label, value) in alertTypeLabels"
+            :key="value"
+            :label="label"
+            :value="value"
+          />
+        </el-select>
+      </div>
+      <p class="hint">
+        低库存 = 可用量严格低于阈值（阈值可空 = 不按阈值预警）；零库存 = 科室可用量合计 0； 临期 =
+        存在数量 &gt; 0 且效期 ≤ 90 天的批次。建议补货量 = max(0, 阈值 − 可用量)，
+        阈值缺失时不给出补货量（阈值来源【待确认】）。
+      </p>
+      <el-table :data="alerts" data-testid="alert-table" size="small" border style="width: 100%">
+        <el-table-column prop="materialCode" label="编码" width="150" />
+        <el-table-column prop="materialName" label="名称" min-width="170" />
+        <el-table-column prop="departmentName" label="科室" min-width="140" />
+        <el-table-column prop="availableQuantity" label="可用量" width="90" />
+        <el-table-column label="阈值" width="90">
+          <template #default="{ row }">
+            {{ row.lowStockThreshold === null ? '未配置' : row.lowStockThreshold }}
+          </template>
+        </el-table-column>
+        <el-table-column label="建议补货" width="100">
+          <template #default="{ row }">
+            {{ row.suggestedQuantity === null ? '—' : row.suggestedQuantity }}
+          </template>
+        </el-table-column>
+        <el-table-column label="预警类型" min-width="190">
+          <template #default="{ row }">
+            <el-tag
+              v-for="item in row.alertTypes"
+              :key="item"
+              :type="alertTagType(item)"
+              size="small"
+              class="alert-tag"
+            >
+              {{ alertLabel(item) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="最近效期" width="150">
+          <template #default="{ row }">
+            <span v-if="row.nearestExpiryDate">
+              {{ row.nearestExpiryDate }}（{{ row.daysToExpiry }} 天）
+            </span>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <span data-testid="alert-empty">暂无库存预警</span>
+        </template>
+      </el-table>
+    </section>
 
     <div class="grid">
       <section class="card" data-testid="spd-card">
@@ -424,6 +527,15 @@ onMounted(init)
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.alert-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.alert-tag {
+  margin-right: 4px;
 }
 h2 {
   font-size: 15px;

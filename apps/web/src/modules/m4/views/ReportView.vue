@@ -7,6 +7,7 @@ import {
   exportReportCsv,
   getMultiReport,
   getWorkloadReport,
+  lockReport,
   metricLabels,
   validateRange,
   MAX_RANGE_DAYS,
@@ -47,11 +48,23 @@ const multi = ref<MultiReport | null>(null)
 const loading = ref(false)
 const error = ref<ApiError | null>(null)
 const exporting = ref<'workload' | 'multi' | null>(null)
+const locking = ref(false)
 const page = ref(1)
 const size = 20
 
 const canRead = computed(() => auth.hasPermission('m4:report:read'))
 const canExport = computed(() => auth.hasPermission('m4:report:export'))
+const canLock = computed(() => auth.hasPermission('m4:report:lock'))
+/** 快照标识：命中报表锁定快照时展示 lockId/锁定时间（source=SNAPSHOT）。 */
+const snapshot = computed(() => {
+  const locked = workload.value?.source === 'SNAPSHOT' ? workload.value : null
+  if (locked) return { lockId: locked.lockId ?? '', lockedAt: locked.lockedAt ?? '' }
+  const multiLocked = multi.value?.source === 'SNAPSHOT' ? multi.value : null
+  if (multiLocked) {
+    return { lockId: multiLocked.lockId ?? '', lockedAt: multiLocked.lockedAt ?? '' }
+  }
+  return null
+})
 const dimensions = computed(() =>
   (Object.keys(dimensionLabels) as ReportDimension[]).map((value) => ({
     value,
@@ -201,6 +214,40 @@ function downloadBlob(blob: Blob, fileName: string): void {
   }
 }
 
+/**
+ * 锁定当前工作量报表（m4:report:lock）：生成 append-only 快照，之后同参数查询/导出默认读快照。
+ * 同参数重复锁定 409（快照不可覆盖），提示联系管理员处理解锁/重出数流程【待确认】。
+ */
+async function lockCurrent(): Promise<void> {
+  const invalid = validateRange(dateRange.value?.[0] ?? '', dateRange.value?.[1] ?? '')
+  if (invalid) {
+    ElMessage.warning(invalid)
+    return
+  }
+  locking.value = true
+  try {
+    const lock = await lockReport({
+      report: 'workload',
+      range: currentRange(),
+      dimension: dimension.value,
+    })
+    ElMessage.success(
+      `已锁定 ${lock.period}（快照 ${lock.lockId.slice(0, 8)}），同参数查询/导出改用快照`,
+    )
+    await loadAll()
+  } catch (caught) {
+    const apiError = toApiError(caught)
+    if (apiError.status === 409) {
+      ElMessage.warning('该报表参数组合已锁定，不能重复锁定（如需重出数请联系管理员）')
+    } else {
+      error.value = apiError
+      ElMessage.error(apiError.message)
+    }
+  } finally {
+    locking.value = false
+  }
+}
+
 async function exportWorkload(): Promise<void> {
   const invalid = validateRange(dateRange.value?.[0] ?? '', dateRange.value?.[1] ?? '')
   if (invalid) {
@@ -262,7 +309,7 @@ onMounted(async () => {
         <p class="report__hint">
           口径 report-1.0.0 · 时区 Asia/Shanghai · 只读聚合（台次/麻醉时长/加权台次/术式分布）。
           跨度上限 {{ MAX_RANGE_DAYS }} 天；数据范围按科室/术间/本人裁剪；绩效权重与难度系数由院方
-          另定【待确认】，系统只出数。
+          另定【待确认】，系统只出数。锁定后同参数查询/导出默认使用快照（追加写、不可覆盖）。
         </p>
       </div>
     </header>
@@ -345,6 +392,23 @@ onMounted(async () => {
           <el-button data-testid="query-button" type="primary" :loading="loading" @click="loadAll">
             查询
           </el-button>
+          <el-button
+            v-if="canLock"
+            data-testid="report-lock"
+            :loading="locking"
+            @click="lockCurrent"
+          >
+            锁定当前报表
+          </el-button>
+          <el-tag
+            v-if="snapshot"
+            data-testid="report-snapshot"
+            type="warning"
+            size="small"
+            :title="snapshot.lockId"
+          >
+            快照{{ snapshot.lockedAt ? ` · ${snapshot.lockedAt}` : '' }}
+          </el-tag>
           <template v-if="canExport">
             <el-button
               data-testid="export-workload"

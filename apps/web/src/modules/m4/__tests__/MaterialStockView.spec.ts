@@ -96,12 +96,33 @@ function materialBody() {
   }
 }
 
+function stockAlert(overrides: Record<string, unknown> = {}) {
+  return {
+    materialId: MATERIAL_ID,
+    materialCode: 'MAT-CVC-001',
+    materialName: '中心静脉导管（演示）',
+    unit: '套',
+    departmentId: DEPT,
+    departmentName: '麻醉科（演示）',
+    availableQuantity: 2,
+    lowStockThreshold: 10,
+    suggestedQuantity: 8,
+    alertTypes: ['LOW_STOCK'],
+    batchCount: 1,
+    nearestExpiryDate: '2027-12-31',
+    daysToExpiry: 411,
+    nearExpiryBatchCount: 0,
+    ...overrides,
+  }
+}
+
 function referenceResponses() {
   return [
     jsonResponse({ items: [{ departmentId: DEPT, code: 'DEPT-ANES', name: '麻醉科（演示）' }] }),
     jsonResponse(materialBody()),
     jsonResponse({ items: [stockLevel()] }),
     jsonResponse({ items: [movement()] }),
+    jsonResponse({ items: [stockAlert()], total: 1 }),
     jsonResponse(spdStatus()),
   ]
 }
@@ -194,6 +215,55 @@ describe('MaterialStockView 耗材出入库与 SPD（M4-M14-01）', () => {
 
     expect(wrapper.find('[data-testid="stock-result"]').text()).toContain('可用 3')
     expect(wrapper.find('[data-testid="stock-error"]').exists()).toBe(true)
+  })
+
+  it('展示库存预警标签与建议补货量', async () => {
+    const queue = createFetchQueue(referenceResponses())
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountView()
+    await settle()
+
+    const table = wrapper.find('[data-testid="alert-table"]')
+    expect(table.text()).toContain('低库存')
+    expect(table.text()).toContain('8')
+    expect(table.text()).toContain('麻醉科（演示）')
+    expect(queue.calls.some((call) => call.url.includes('/v1/materials/stock-alerts'))).toBe(true)
+  })
+
+  it('按预警类型筛选（服务端 alertType）并渲染零库存/临期标签', async () => {
+    const queue = createFetchQueue([
+      ...referenceResponses(),
+      jsonResponse({
+        items: [
+          stockAlert({
+            availableQuantity: 0,
+            suggestedQuantity: 10,
+            alertTypes: ['LOW_STOCK', 'ZERO_STOCK'],
+            daysToExpiry: -2,
+            nearestExpiryDate: '2027-12-30',
+            nearExpiryBatchCount: 1,
+          }),
+        ],
+        total: 1,
+      }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountView()
+    await settle()
+    wrapper
+      .find('[data-testid="alert-filter"]')
+      .findComponent({ name: 'ElSelect' })
+      .vm.$emit('update:modelValue', 'NEAR_EXPIRY')
+    wrapper
+      .find('[data-testid="alert-filter"]')
+      .findComponent({ name: 'ElSelect' })
+      .vm.$emit('change', 'NEAR_EXPIRY')
+    await settle()
+
+    expect(queue.calls.some((call) => call.url.includes('alertType=NEAR_EXPIRY'))).toBe(true)
+    expect(wrapper.find('[data-testid="alert-table"]').text()).toContain('零库存')
   })
 
   it('触发 SPD 模拟同步并刷新状态', async () => {

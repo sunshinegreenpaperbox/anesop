@@ -30,6 +30,13 @@ const QC: SyntheticUser = {
   mustChangePassword: false,
 }
 
+const LOCKER: SyntheticUser = {
+  ...QC,
+  userId: '1000000000000000007',
+  username: 'synth_report_locker',
+  permissions: ['m4:report:read', 'm4:report:export', 'm4:report:lock'],
+}
+
 const NO_REPORT: SyntheticUser = {
   ...QC,
   userId: '1000000000000000006',
@@ -204,6 +211,70 @@ test.describe('M4-M16-01 工作量与多维报表', () => {
       `[M4-M16-01][e2e] role=SYS_QC_MANAGER workloadCalls=${workloadUrls.length} ` +
         `multiCalls=${multiUrls.length} export=${exportUrls[0]}`,
     )
+  })
+
+  test('锁定当前报表 → 同参数查询返回快照标识', async ({ page }) => {
+    await seedSession(page, LOCKER)
+    let locked = false
+    const lockBodies: string[] = []
+    await page.route(/\/api\/v1\/reports\/locks$/, (route) => {
+      lockBodies.push(route.request().postData() ?? '')
+      locked = true
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          lockId: '5a000000-0000-4000-8000-0000000000e1',
+          report: 'workload',
+          period: '2031-03-01~2031-03-31',
+          from: '2031-03-01',
+          to: '2031-03-31',
+          params: { report: 'workload', from: '2031-03-01', to: '2031-03-31' },
+          paramsHash: 'a'.repeat(64),
+          payloadHash: 'b'.repeat(64),
+          dataScope: 'ALL',
+          rowCount: 2,
+          lockedBy: '1000000000000000007',
+          lockedByName: '演示质控专员（合成）',
+          lockedAt: '2031-04-01T09:30:00+08:00',
+        }),
+      })
+    })
+    await page.route(/\/api\/v1\/reports\/workload\?/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          locked
+            ? {
+                ...WORKLOAD,
+                source: 'SNAPSHOT',
+                lockId: '5a000000-0000-4000-8000-0000000000e1',
+                lockedAt: '2031-04-01T09:30:00+08:00',
+              }
+            : { ...WORKLOAD, source: 'LIVE' },
+        ),
+      }),
+    )
+    await page.route(/\/api\/v1\/reports\/multi\?/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...MULTI, source: 'LIVE' }),
+      }),
+    )
+
+    await page.goto('/m4/reports')
+    await expect(page.getByTestId('report-lock')).toBeVisible()
+    await expect(page.getByTestId('report-snapshot')).toHaveCount(0)
+
+    await page.getByTestId('report-lock').click()
+    await expect(page.getByText('同参数查询/导出改用快照')).toBeVisible()
+    expect(lockBodies).toHaveLength(1)
+    expect(lockBodies[0]).toContain('"report":"workload"')
+    await expect(page.getByTestId('report-snapshot')).toContainText('快照')
+    await expect(page.getByTestId('report-snapshot')).toContainText('2031-04-01')
+    console.log(`[M8-M4-02][e2e] report lock snapshot body=${lockBodies[0]}`)
   })
 
   test('无 m4:report:read 时守卫跳转 403 页面', async ({ page }) => {

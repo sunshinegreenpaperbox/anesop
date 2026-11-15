@@ -201,6 +201,10 @@ test.describe('M4 耗材/UDI/SPD', () => {
           ],
         })
       }
+      if (path.endsWith('/materials/stock-alerts')) {
+        // 0.2.0 库存预警：E2E 只验证页面加载不阻塞，预警口径由单测/集成覆盖。
+        return json(route, { items: [], total: 0 })
+      }
       if (path.endsWith('/materials/spd-adapter/status')) {
         return json(route, {
           adapterCode: 'EXT-03',

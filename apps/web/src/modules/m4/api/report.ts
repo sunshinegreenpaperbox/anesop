@@ -1,13 +1,17 @@
 import type { components } from '@anesop/contracts/report'
-import { request } from '../../../api/http'
+import { http, request } from '../../../api/http'
 
-/** 工作量/多维报表（report.yaml 0.1.0 生成类型，禁止手写重复模型）。 */
+/** 工作量/多维报表（report.yaml 0.2.0 生成类型，禁止手写重复模型）。 */
 export type WorkloadReport = components['schemas']['WorkloadReport']
 export type WorkloadBucket = components['schemas']['WorkloadBucket']
 export type SurgeryDistribution = components['schemas']['SurgeryDistribution']
 export type MultiReport = components['schemas']['MultiReport']
 export type MultiRow = components['schemas']['MultiRow']
 export type ReportTotals = components['schemas']['ReportTotals']
+export type ReportLock = components['schemas']['ReportLock']
+export type ReportLockList = components['schemas']['ReportLockList']
+export type ReportLockRequest = components['schemas']['ReportLockRequest']
+export type ReportSource = 'LIVE' | 'SNAPSHOT'
 
 /** 维度白名单（DEPT=申请科室、STAFF=麻醉医师、SURGERY=术式、ROOM=术间）。 */
 export type ReportDimension = 'DEPT' | 'STAFF' | 'SURGERY' | 'ROOM'
@@ -115,6 +119,43 @@ export async function exportReportCsv(input: ReportExportInput): Promise<Blob> {
     headers: { Accept: 'text/csv' },
   })
   return new Blob([text], { type: 'text/csv;charset=utf-8' })
+}
+
+/** 报表锁定请求：期间由 from/to 给出（与查询参数一致，保证同参数命中快照）。 */
+export interface ReportLockInput {
+  report: 'workload' | 'multi'
+  range: ReportRange
+  dimension?: ReportDimension
+  dimensions?: ReportDimension[]
+  metrics?: ReportMetricCode[]
+}
+
+/** 锁定报表并生成快照（m4:report:lock；同参数重复锁定 409）。 */
+export function lockReport(input: ReportLockInput): Promise<ReportLock> {
+  const payload: ReportLockRequest = {
+    report: input.report,
+    from: input.range.from,
+    to: input.range.to,
+  }
+  if (input.range.deptId) payload.deptId = input.range.deptId
+  if (input.dimension) payload.dimension = input.dimension
+  if (input.dimensions && input.dimensions.length > 0) payload.dimensions = input.dimensions
+  if (input.metrics && input.metrics.length > 0) payload.metrics = input.metrics
+  return http.post<ReportLock>('/v1/reports/locks', payload)
+}
+
+/** 锁定列表（元数据，不含快照数据；m4:report:read）。 */
+export function listReportLocks(
+  params: {
+    report?: 'workload' | 'multi'
+    limit?: number
+  } = {},
+): Promise<ReportLockList> {
+  const query = new URLSearchParams()
+  if (params.report) query.set('report', params.report)
+  if (params.limit) query.set('limit', String(params.limit))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return request<ReportLockList>(`/v1/reports/locks${suffix}`)
 }
 
 /** 导出文件名（与服务端 Content-Disposition 保持同一命名规则）。 */
