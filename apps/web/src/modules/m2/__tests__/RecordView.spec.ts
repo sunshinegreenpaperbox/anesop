@@ -269,7 +269,7 @@ describe('RecordView 麻醉记录单', () => {
     ])
     expect(wrapper.find('[data-testid="record-context"]').text()).toContain('演示患者')
     expect(wrapper.find('[data-testid="record-status"]').text()).toBe('进行中')
-    expect(wrapper.find('[data-testid="vital-placeholder"]').text()).toContain('体征待采集接入')
+    expect(wrapper.find('[data-testid="vital-placeholder"]').text()).toContain('暂无体征采样')
     expect(wrapper.find('[data-testid="io-intake"]').text()).toBe('1500 ml')
     expect(wrapper.find('[data-testid="io-output"]').text()).toBe('400 ml')
     expect(wrapper.find('[data-testid="io-balance"]').text()).toBe('1100 ml')
@@ -476,6 +476,8 @@ describe('RecordView 麻醉记录单', () => {
       jsonResponse(summary),
       jsonResponse(effective),
       jsonResponse({ items: [] }),
+      jsonResponse({ items: [dictionaryDrug('肾上腺素（演示）', false)] }),
+      jsonResponse({ items: [dictionaryDrug('肾上腺素（演示）', false)] }),
       jsonResponse(resuscitation, 201),
       jsonResponse({ items: [record] }),
       jsonResponse({ items: [event] }),
@@ -501,6 +503,7 @@ describe('RecordView 麻醉记录单', () => {
       .setValue('演示负责人（合成）,演示护士（合成）')
     await wrapper.find('[data-testid="resus-drug-name"]').setValue('肾上腺素（演示）')
     await wrapper.find('[data-testid="resus-add-drug"]').trigger('click')
+    await flushPromises()
     await wrapper.find('[data-testid="submit-resuscitation"]').trigger('click')
     await settle()
 
@@ -519,7 +522,119 @@ describe('RecordView 麻醉记录单', () => {
     })
     const drugs = body.drugs as Array<Record<string, unknown>>
     expect(drugs).toHaveLength(1)
-    expect(drugs[0]).toMatchObject({ drugName: '肾上腺素（演示）', dose: 1, unit: 'mg' })
+    expect(drugs[0]).toMatchObject({
+      drugName: '肾上腺素（演示）',
+      dose: 1,
+      unit: 'mg',
+      narcotic: false,
+    })
+    expect(drugs[0]).not.toHaveProperty('secondCheckerId')
+  }, 30_000)
+
+  it('抢救麻精用药必须选择第二位核对人并随明细提交', async () => {
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({}) as never)
+    const queue = createFetchQueue([
+      ...loadedResponses(),
+      jsonResponse({ items: [dictionaryDrug('舒芬太尼（演示）', true)] }),
+      jsonResponse({ items: [dictionaryDrug('舒芬太尼（演示）', true)] }),
+      jsonResponse(resuscitation, 201),
+      jsonResponse({ items: [record] }),
+      jsonResponse({ items: [event] }),
+      jsonResponse({ items: [drug] }),
+      jsonResponse({ items: [fluid] }),
+      jsonResponse(summary),
+      jsonResponse(effective),
+      jsonResponse({ items: [alert] }),
+      jsonResponse({ items: [resuscitation] }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+    seedAuthenticatedUser(
+      syntheticUser({
+        permissions: ['m2:record:read', 'm2:record:write', 'm2:rescue:write', 'm2:alert:read'],
+      }),
+    )
+
+    const wrapper = mountView()
+    await settle()
+    await wrapper.find('[data-testid="resus-summary"]').setValue('演示：抢救用药（合成）')
+    await wrapper
+      .find('[data-testid="resus-rescuers"]')
+      .setValue('演示负责人（合成）,演示护士（合成）')
+    await wrapper.find('[data-testid="resus-drug-name"]').setValue('舒芬太尼（演示）')
+    await wrapper.find('[data-testid="resus-add-drug"]').trigger('click')
+    await flushPromises()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('第二位核对人'))
+    expect(wrapper.find('[data-testid="resus-second-checker-id"]').exists()).toBe(true)
+
+    await wrapper
+      .find('[data-testid="resus-second-checker-id"]')
+      .setValue('10000000-0000-4000-8000-000000000002')
+    await wrapper.find('[data-testid="resus-second-checker-name"]').setValue('演示核对护士（合成）')
+    await wrapper.find('[data-testid="resus-add-drug"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="submit-resuscitation"]').trigger('click')
+    await flushPromises()
+
+    const postCall = queue.calls.find(
+      (call) => call.url.endsWith('/resuscitations') && call.init?.method === 'POST',
+    )
+    const body = JSON.parse(String(postCall?.init?.body)) as {
+      drugs: Array<Record<string, unknown>>
+    }
+    expect(body.drugs).toHaveLength(1)
+    expect(body.drugs[0]).toMatchObject({
+      drugName: '舒芬太尼（演示）',
+      narcotic: true,
+      secondCheckerId: '10000000-0000-4000-8000-000000000002',
+      secondCheckerName: '演示核对护士（合成）',
+    })
+  }, 30_000)
+
+  it('体征采样按指标展示并标记可疑/截断', async () => {
+    const recordWithVitals = {
+      ...record,
+      vitalSigns: [
+        {
+          measuredAt: '2026-12-01T09:00:00+08:00',
+          metric: 'HR' as const,
+          value: 72,
+          unit: 'bpm',
+          quality: 0,
+          qualityFlags: [],
+        },
+        {
+          measuredAt: '2026-12-01T09:00:10+08:00',
+          metric: 'SPO2' as const,
+          value: 96,
+          unit: '%',
+          quality: 1,
+          qualityFlags: ['SIGNAL_LOSS'],
+        },
+      ],
+      vitalSignsTruncated: true,
+    }
+    const queue = createFetchQueue([
+      jsonResponse({ items: [recordWithVitals] }),
+      jsonResponse({ items: [event] }),
+      jsonResponse({ items: [drug] }),
+      jsonResponse({ items: [fluid] }),
+      jsonResponse(summary),
+      jsonResponse(effective),
+      jsonResponse({ items: [alert] }),
+      jsonResponse({ items: [resuscitation] }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountView()
+    await settle()
+
+    const panel = wrapper.find('[data-testid="vital-panel"]')
+    expect(panel.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="vital-list"]').text()).toContain('心率')
+    expect(wrapper.find('[data-testid="vital-list"]').text()).toContain('可疑')
+    expect(wrapper.find('[data-testid="vital-list"]').text()).toContain('SIGNAL_LOSS')
+    expect(wrapper.find('[data-testid="vital-truncated"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="vital-placeholder"]').text()).toContain('已截断')
   }, 30_000)
 
   it('无 alert:ack 时不显示确认/忽略按钮', async () => {

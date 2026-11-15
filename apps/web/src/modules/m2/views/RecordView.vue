@@ -137,7 +137,12 @@ const resusDrugForm = reactive({
   dose: 1,
   unit: 'mg',
   route: 'IV',
+  narcotic: false,
+  secondCheckerId: '',
+  secondCheckerName: '',
 })
+/* M9-01：抢救用药接药品字典联想；麻精判定以服务端字典为准，前端只做提前提示。 */
+const resusDrugDictionaryMatch = ref<DrugDictionaryItem | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const evaluating = ref(false)
@@ -351,6 +356,45 @@ const signatureHashShort = computed(() => {
   const value = record.value?.signatureHash
   return value && value.length > 16 ? `${value.slice(0, 16)}…` : (value ?? '—')
 })
+/** 体征展示上限（契约最多 2000 条；页面只渲染前 300 条，避免长记录卡顿）。 */
+const VITAL_DISPLAY_LIMIT = 300
+const vitalMetricLabels: Record<string, string> = {
+  HR: '心率',
+  SPO2: '血氧饱和度',
+  NIBP_SYS: '收缩压',
+  NIBP_DIA: '舒张压',
+  ETCO2: '呼气末二氧化碳',
+  TEMP: '体温',
+}
+const vitalSamples = computed(() => (record.value?.vitalSigns ?? []).slice(0, VITAL_DISPLAY_LIMIT))
+
+function vitalMetricLabel(metric: string | undefined): string {
+  if (!metric) return '—'
+  return vitalMetricLabels[metric] ?? metric
+}
+
+function qualityLabel(quality: number | undefined): string {
+  switch (quality) {
+    case 0:
+      return '正常'
+    case 1:
+      return '可疑'
+    case 2:
+      return '缺失'
+    case 3:
+      return '超时'
+    default:
+      return '—'
+  }
+}
+
+function qualityTagType(quality: number | undefined): 'success' | 'warning' | 'danger' | 'info' {
+  if (quality === 0 || quality === undefined) return 'success'
+  if (quality === 1) return 'warning'
+  if (quality >= 2) return 'danger'
+  return 'info'
+}
+
 const errorTitle = computed(() => {
   if (!error.value) return ''
   if (error.value.status === 403) return '无权访问麻醉记录（需要 m2:record:read）'
@@ -692,7 +736,56 @@ function severityTagType(severity: string): 'info' | 'warning' | 'danger' {
   return 'info'
 }
 
-function addResusDrug(): void {
+function applyResusDictionaryDrug(drug: DrugDictionaryItem): void {
+  resusDrugForm.drugName = drug.name
+  resusDrugForm.narcotic = drug.narcotic
+  resusDrugForm.unit = drug.unit || resusDrugForm.unit
+  resusDrugDictionaryMatch.value = drug
+}
+
+function handleResusDrugSelect(item: { value: string; drug: DrugDictionaryItem }): void {
+  applyResusDictionaryDrug(item.drug)
+}
+
+function handleResusDrugInput(value: string): void {
+  if (
+    !resusDrugDictionaryMatch.value ||
+    normalizedDrugName(resusDrugDictionaryMatch.value.name) !== normalizedDrugName(value)
+  ) {
+    resusDrugDictionaryMatch.value = null
+    resusDrugForm.narcotic = false
+  }
+}
+
+/** 选择候选核对人后回填姓名（抢救用药复用记录单核对人候选与同一服务端资格校验）。 */
+function applyResusCheckerCandidate(userId: string): void {
+  resusDrugForm.secondCheckerId = userId
+  resusDrugForm.secondCheckerName =
+    checkerCandidates.value.find((item) => item.userId === userId)?.displayName ?? ''
+}
+
+/** 抢救用药提交前解析字典（0/多候选都拒绝，交服务端复核）。 */
+async function resolveResusDictionaryDrug(): Promise<DrugDictionaryItem | null> {
+  const keyword = resusDrugForm.drugName.trim()
+  if (!keyword) return null
+  const cached = resusDrugDictionaryMatch.value
+  if (cached && normalizedDrugName(cached.name) === normalizedDrugName(keyword)) {
+    return cached
+  }
+  const items = await searchDrugDictionary(keyword)
+  const exact = items.filter((drug) =>
+    [drug.name, drug.genericName ?? '', ...(drug.aliases ?? [])].some(
+      (candidate) => normalizedDrugName(candidate) === normalizedDrugName(keyword),
+    ),
+  )
+  if (exact.length === 1) {
+    resusDrugDictionaryMatch.value = exact[0]
+    return exact[0]
+  }
+  return null
+}
+
+async function addResusDrug(): Promise<void> {
   if (!resusDrugForm.drugName.trim()) {
     ElMessage.warning('请填写抢救用药名称')
     return
@@ -701,13 +794,49 @@ function addResusDrug(): void {
     ElMessage.warning('剂量必须大于 0')
     return
   }
+  let dictionary: DrugDictionaryItem | null = null
+  try {
+    dictionary = await resolveResusDictionaryDrug()
+  } catch (cause) {
+    handleError(cause)
+    return
+  }
+  if (!dictionary) {
+    ElMessage.warning('药品未收录于药品字典或有多个同名药品，无法判定麻精属性；请从联想中选择')
+    return
+  }
+  resusDrugForm.narcotic = dictionary.narcotic
+  if (dictionary.narcotic) {
+    const checkerId = resusDrugForm.secondCheckerId.trim()
+    const checkerName = resusDrugForm.secondCheckerName.trim()
+    if (!checkerId || !checkerName) {
+      ElMessage.warning('麻精药品必须双人核对：请选择第二位核对人（不得为给药人本人）')
+      return
+    }
+    if (checkerId === currentUserId.value) {
+      ElMessage.warning('麻精药品双人核对：第二位核对人不得为给药人本人，请选择其他在职用户')
+      return
+    }
+  }
+  const narcotic = dictionary.narcotic
   resusDrugs.value.push({
-    drugName: resusDrugForm.drugName.trim(),
+    drugName: dictionary.name,
     dose: resusDrugForm.dose,
-    unit: resusDrugForm.unit.trim() || 'mg',
+    unit: resusDrugForm.unit.trim() || dictionary.unit || 'mg',
     route: resusDrugForm.route.trim() || undefined,
+    narcotic,
+    ...(narcotic
+      ? {
+          secondCheckerId: resusDrugForm.secondCheckerId.trim(),
+          secondCheckerName: resusDrugForm.secondCheckerName.trim(),
+        }
+      : {}),
   })
   resusDrugForm.drugName = ''
+  resusDrugForm.narcotic = false
+  resusDrugForm.secondCheckerId = ''
+  resusDrugForm.secondCheckerName = ''
+  resusDrugDictionaryMatch.value = null
 }
 
 function removeResusDrug(index: number): void {
@@ -762,6 +891,11 @@ async function submitResuscitation(): Promise<void> {
     resusForm.interventions = ''
     resusForm.rescuers = ''
     resusDrugs.value = []
+    resusDrugForm.drugName = ''
+    resusDrugForm.narcotic = false
+    resusDrugForm.secondCheckerId = ''
+    resusDrugForm.secondCheckerName = ''
+    resusDrugDictionaryMatch.value = null
     await refresh()
   } catch (cause) {
     handleError(cause)
@@ -1108,12 +1242,60 @@ onUnmounted(stopAlertPolling)
           <span data-testid="vital-placeholder">
             {{
               (record.vitalSigns?.length ?? 0) === 0
-                ? '体征待采集接入（M3-M8-01）'
-                : `${record.vitalSigns?.length} 条`
+                ? '暂无体征采样（未开始或未接入采集）'
+                : `${record.vitalSigns?.length} 条${record.vitalSignsTruncated ? '（已截断）' : ''}`
             }}
           </span>
         </el-descriptions-item>
       </el-descriptions>
+
+      <!-- 生命体征（M9-01：采集落库映射；无图表库时以表格 + 质量标记展示） -->
+      <section class="record__panel" data-testid="vital-panel">
+        <h2 class="record__panel-title">生命体征（采集映射）</h2>
+        <p class="record__hint">
+          按记录时间窗与该台次术间设备采样映射，按时间升序；质量码与标记原样展示（可疑/缺失帧不丢弃）。
+          趋势图占位：未引入图表库时以表格与质量标记呈现，接入图表库后再替换，不替代临床判断。
+        </p>
+        <el-alert
+          v-if="record.vitalSignsTruncated"
+          data-testid="vital-truncated"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="体征采样超过 2000 条上限，仅显示前 2000 条；完整波形请到设备页按窗口查询"
+        />
+        <p v-if="vitalSamples.length === 0" class="record__hint" data-testid="vital-empty">
+          暂无体征采样：记录未开始、术间未绑定设备，或采集端尚未上报。
+        </p>
+        <template v-else>
+          <p class="record__hint" data-testid="vital-trend-placeholder">
+            趋势占位：共 {{ record.vitalSigns?.length ?? 0 }} 条，本页显示前
+            {{ vitalSamples.length }} 条。
+          </p>
+          <el-table :data="vitalSamples" data-testid="vital-list" size="small" border>
+            <el-table-column label="测量时间" prop="measuredAt" width="220" />
+            <el-table-column label="指标" width="150">
+              <template #default="{ row }">{{ vitalMetricLabel(row.metric) }}</template>
+            </el-table-column>
+            <el-table-column label="数值" width="110">
+              <template #default="{ row }">{{ row.value ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="单位" prop="unit" width="90" />
+            <el-table-column label="质量" width="100">
+              <template #default="{ row }">
+                <el-tag :type="qualityTagType(row.quality)" size="small">
+                  {{ qualityLabel(row.quality) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="质量标记">
+              <template #default="{ row }">
+                {{ (row.qualityFlags ?? []).join(' / ') || '—' }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </section>
 
       <!-- 术中告警（权限隔离：无 alert:read 时不请求、不渲染） -->
       <section v-if="canAlertRead" class="record__panel" data-testid="alert-panel">
@@ -1636,12 +1818,23 @@ onUnmounted(stopAlertPolling)
           </el-form-item>
           <el-form-item label="抢救用药">
             <div class="record__drug-row">
-              <el-input
+              <el-autocomplete
                 v-model="resusDrugForm.drugName"
                 data-testid="resus-drug-name"
-                placeholder="药品名称"
+                :fetch-suggestions="fetchDrugSuggestions"
+                :debounce="0"
+                placeholder="输入药品名称/通用名/别名，选择字典项"
                 maxlength="200"
-              />
+                style="width: 260px"
+                @select="handleResusDrugSelect"
+                @input="handleResusDrugInput"
+              >
+                <template #default="{ item }">
+                  <span>{{ item.value }}</span>
+                  <span class="record__hint">{{ item.drug.narcotic ? '麻精' : '非麻精' }}</span>
+                </template>
+              </el-autocomplete>
+              <el-tag v-if="resusDrugForm.narcotic" type="danger" size="small">麻精</el-tag>
               <el-input-number
                 v-model="resusDrugForm.dose"
                 data-testid="resus-drug-dose"
@@ -1656,9 +1849,47 @@ onUnmounted(stopAlertPolling)
               />
               <el-button data-testid="resus-add-drug" @click="addResusDrug">添加</el-button>
             </div>
+            <div v-if="resusDrugForm.narcotic" class="record__drug-row">
+              <el-select
+                v-if="checkerCandidates.length > 0"
+                v-model="resusDrugForm.secondCheckerId"
+                data-testid="resus-second-checker"
+                filterable
+                placeholder="第二位核对人（麻精必填）"
+                style="width: 260px"
+                @change="applyResusCheckerCandidate"
+              >
+                <el-option
+                  v-for="item in checkerCandidates"
+                  :key="item.userId"
+                  :label="`${item.displayName}（${item.username}）`"
+                  :value="item.userId"
+                />
+              </el-select>
+              <el-input
+                v-else
+                v-model="resusDrugForm.secondCheckerId"
+                data-testid="resus-second-checker-id"
+                placeholder="核对人用户标识（UUID）"
+                maxlength="64"
+                style="width: 260px"
+              />
+              <el-input
+                v-model="resusDrugForm.secondCheckerName"
+                data-testid="resus-second-checker-name"
+                placeholder="核对人姓名"
+                maxlength="64"
+                style="width: 180px"
+              />
+              <span class="record__hint">服务端校验存在/在职/非本人/持 m2:record:write</span>
+            </div>
             <ul v-if="resusDrugs.length > 0" class="record__drug-list">
               <li v-for="(item, index) in resusDrugs" :key="`${item.drugName}-${index}`">
                 {{ item.drugName }} {{ item.dose }} {{ item.unit }}
+                <el-tag v-if="item.narcotic" type="danger" size="small">麻精</el-tag>
+                <span v-if="item.secondCheckerName" class="record__hint">
+                  核对：{{ item.secondCheckerName }}
+                </span>
                 <el-button link type="danger" @click="removeResusDrug(index)">移除</el-button>
               </li>
             </ul>
