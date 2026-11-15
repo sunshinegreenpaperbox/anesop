@@ -14,10 +14,13 @@ import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m0.api.platform.M0ValidationException;
 import com.anesop.m0.api.platform.MessagePublisher;
 import com.anesop.m0.api.platform.MessageTemplates;
+import com.anesop.m0.api.platform.NotificationRecipientDirectory;
 import com.anesop.m0.api.security.AuthPrincipal;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m0.impl.persistence.mapper.SysMessageMapper;
+import com.anesop.m0.impl.persistence.mapper.SysUserMapper;
 import com.anesop.m0.impl.platform.MessageServiceImpl;
+import com.anesop.m0.impl.platform.NotificationRecipientDirectoryImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
@@ -223,8 +226,55 @@ class PlatformMessageServiceTest {
         assertThat(message.getParams()).containsOnlyKeys("deptName", "count");
         assertThat(MessageTemplates.all()).containsKeys("SYSTEM_BROADCAST", "SCHEDULE_CHANGED",
                 "SCHEDULE_STOPPED", "ALERT_CRITICAL", "QC_REVIEW_DUE", "TASK_ASSIGNED",
-                "MATERIAL_LOW_STOCK");
+                "MATERIAL_LOW_STOCK", "SCHEDULE_CHANGE", "EMERGENCY", "SCHEDULE_STOP",
+                "CRITICAL_ALERT");
         assertThat(MessageTemplates.find("UNKNOWN")).isEmpty();
+    }
+
+    @Test
+    void sameBusinessEventRecipientAndTemplateIsDeduplicated() {
+        MessagePublisher.MessageCommand first = new MessagePublisher.MessageCommand(ALICE,
+                MessageType.SCHEDULE, "SCHEDULE_CHANGE",
+                Map.of("scheduleId", "80000000-0000-4000-8000-000000000001"), "OUTBOX:evt-1:alice:SC");
+        MessagePublisher.MessageCommand duplicate = new MessagePublisher.MessageCommand(ALICE,
+                MessageType.SCHEDULE, "SCHEDULE_CHANGE",
+                Map.of("scheduleId", "80000000-0000-4000-8000-000000000001"), "OUTBOX:evt-1:alice:SC");
+        MessagePublisher.MessageCommand otherEvent = new MessagePublisher.MessageCommand(ALICE,
+                MessageType.SCHEDULE, "SCHEDULE_CHANGE",
+                Map.of("scheduleId", "80000000-0000-4000-8000-000000000001"), "OUTBOX:evt-2:alice:SC");
+
+        UUID firstId = service.publish(first);
+        UUID duplicateId = service.publish(duplicate);
+        service.publish(otherEvent);
+
+        assertThat(duplicateId).as("同一去重键返回原消息，不新增").isEqualTo(firstId);
+        assertThat(service.list(ALICE_PRINCIPAL, 1, 20, false).getItems()).hasSize(2);
+    }
+
+    @Test
+    void dedupeKeyRejectsPhiLikeValue() {
+        MessagePublisher.MessageCommand command = new MessagePublisher.MessageCommand(ALICE,
+                MessageType.SCHEDULE, "SCHEDULE_CHANGE", Map.of(), "患者张三");
+
+        assertThatThrownBy(() -> service.publish(command))
+                .isInstanceOf(M0ValidationException.class)
+                .hasMessageContaining("去重键");
+    }
+
+    @Test
+    void notificationRecipientDirectoryReturnsOnlyEnabledUsersOfRole() {
+        assignRole(ALICE, "SYS_ANESTHESIOLOGIST");
+        assignRole(BOB, "SYS_OR_MANAGER");
+        jdbc.update("UPDATE m0_platform.sys_user SET status = 0 WHERE id = ?::uuid",
+                BOB.toString());
+        NotificationRecipientDirectory directory =
+                new NotificationRecipientDirectoryImpl(session.getMapper(SysUserMapper.class));
+
+        assertThat(directory.enabledUserIdsByRole("SYS_ANESTHESIOLOGIST")).containsExactly(ALICE);
+        assertThat(directory.enabledUserIdsByRole("SYS_OR_MANAGER"))
+                .as("停用用户不接收通知").isEmpty();
+        assertThat(directory.enabledUserIdsByRole("SYS_SURGEON")).isEmpty();
+        assertThat(directory.enabledUserIdsByRole("bad role")).isEmpty();
     }
 
     @Test
@@ -255,6 +305,13 @@ class PlatformMessageServiceTest {
     private static MessagePublisher.MessageCommand command(UUID recipient, MessageType type,
             String templateCode, Map<String, String> params) {
         return new MessagePublisher.MessageCommand(recipient, type, templateCode, params);
+    }
+
+    private static void assignRole(UUID userId, String roleCode) {
+        jdbc.update("""
+                INSERT INTO m0_platform.sys_user_role (user_id, role_id)
+                SELECT ?::uuid, r.id FROM m0_platform.sys_role r WHERE r.code = ?
+                """, userId.toString(), roleCode);
     }
 
     private static void insertUser(UUID id, String username) {

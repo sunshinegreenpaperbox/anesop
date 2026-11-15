@@ -835,8 +835,16 @@ public class SchedulingServiceImpl implements SchedulingService {
      */
     private static Map<String, Object> changePayload(ScheduleEntity schedule,
             ScheduleChangeRequestEntity change, Map<String, Object> extra) {
-        return changePayload(schedule.getId(), schedule.getApplicationId(), schedule.getRoomId(),
-                change, extra);
+        Map<String, Object> payload = changePayload(schedule.getId(), schedule.getApplicationId(),
+                schedule.getRoomId(), change, extra);
+        // M9-01：通知模板只允许台次/术间/时间/原因码（无 PHI）；时间取服务端排程时刻。
+        if (schedule.getStartAt() != null) {
+            payload.put("startAt", schedule.getStartAt().toString());
+        }
+        if (schedule.getEndAt() != null) {
+            payload.put("endAt", schedule.getEndAt().toString());
+        }
+        return payload;
     }
 
     private static Map<String, Object> changePayload(UUID scheduleId, UUID applicationId,

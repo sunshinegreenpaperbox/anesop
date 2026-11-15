@@ -2,6 +2,8 @@ package com.anesop.m2.impl.alert;
 
 import com.anesop.m0.api.audit.AuditWriter;
 import com.anesop.m0.api.security.AuthPrincipal;
+import com.anesop.m1.api.notification.NotificationEvent;
+import com.anesop.m1.api.notification.NotificationPort;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m2.impl.config.AlertProperties;
 import com.anesop.m2.impl.persistence.entity.AlertEntity;
@@ -68,6 +70,7 @@ public class AlertEvaluator {
     private final AlertRuleEngine engine;
     private final AlertProperties properties;
     private final AuditWriter auditWriter;
+    private final NotificationPort notificationPort;
     private final Clock clock;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
@@ -75,7 +78,8 @@ public class AlertEvaluator {
     public AlertEvaluator(AlertMapper alertMapper, AlertRuleMapper ruleMapper,
             AlertWatermarkMapper watermarkMapper, AnesthesiaVitalMapper vitalMapper,
             DeviceRegistryMapper registryMapper, AlertRuleEngine engine,
-            AlertProperties properties, AuditWriter auditWriter, Clock clock) {
+            AlertProperties properties, AuditWriter auditWriter, NotificationPort notificationPort,
+            Clock clock) {
         this.alertMapper = alertMapper;
         this.ruleMapper = ruleMapper;
         this.watermarkMapper = watermarkMapper;
@@ -84,6 +88,7 @@ public class AlertEvaluator {
         this.engine = engine;
         this.properties = properties;
         this.auditWriter = auditWriter;
+        this.notificationPort = notificationPort;
         this.clock = clock;
     }
 
@@ -125,6 +130,7 @@ public class AlertEvaluator {
             if (inserted == 1) {
                 created++;
                 auditTriggered(record, entity, trigger);
+                notifyCritical(record, entity);
             }
         }
         Instant evaluatedThrough = maxMeasuredAt(samples);
@@ -179,6 +185,32 @@ public class AlertEvaluator {
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         return entity;
+    }
+
+    /**
+     * 严重告警投递站内消息（M9-01）：只对 severity=CRITICAL 且**新落库**的告警发一次
+     * {@code ALERT_CRITICAL} 事件（未确认告警同样投递；已存在告警由去重键拦截）。
+     *
+     * <p>载荷只有记录/台次/术间/告警标识、指标、严重度与触发时间，不含患者标识与数值以外
+     * 的临床文本；接收角色由 m1 默认通知矩阵决定（SYS_ANESTHESIOLOGIST/SYS_OR_MANAGER）。
+     * 投递失败不吞异常：由调用方事务回滚，下一次采集/评估重试（不产生“有告警无通知”的静默丢失）。
+     */
+    private void notifyCritical(AnesthesiaRecordEntity record, AlertEntity alert) {
+        if (!"CRITICAL".equals(alert.getSeverity())) {
+            return;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("alertId", alert.getId().toString());
+        payload.put("recordId", record.getId().toString());
+        payload.put("scheduleId", record.getScheduleId() == null ? null
+                : record.getScheduleId().toString());
+        payload.put("roomId", record.getRoomId() == null ? null : record.getRoomId().toString());
+        payload.put("metric", alert.getMetric());
+        payload.put("severity", alert.getSeverity());
+        payload.put("triggeredAt", alert.getTriggeredAt() == null ? null
+                : alert.getTriggeredAt().toString());
+        payload.values().removeIf(java.util.Objects::isNull);
+        notificationPort.publish(new NotificationEvent("ALERT_CRITICAL", payload));
     }
 
     private void auditTriggered(AnesthesiaRecordEntity record, AlertEntity alert,

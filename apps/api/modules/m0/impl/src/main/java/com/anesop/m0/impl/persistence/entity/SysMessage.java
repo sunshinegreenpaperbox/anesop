@@ -33,6 +33,12 @@ public class SysMessage {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String params;
 
+    /**
+     * 业务投递去重键（V29，M9-01）：OUTBOX:<outboxId>:<recipient>:<templateCode>，无 PHI。
+     * 唯一索引保证同一业务事件+接收人+模板只落一条；NULL 表示不去重。
+     */
+    private String dedupeKey;
+
     private Instant readAt;
 
     private Instant createdAt;
@@ -85,6 +91,14 @@ public class SysMessage {
 
     public void setParams(String params) {
         this.params = params;
+    }
+
+    public String getDedupeKey() {
+        return dedupeKey;
+    }
+
+    public void setDedupeKey(String dedupeKey) {
+        this.dedupeKey = dedupeKey;
     }
 
     public Instant getReadAt() {

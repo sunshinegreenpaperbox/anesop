@@ -872,8 +872,9 @@ class RecordLockRevisionApiIntegrationTest extends AbstractApiIntegrationTest {
         body.put("eventSummary", Map.of(
                 "summary", "演示：胸外按压后恢复自主循环（合成）",
                 "interventions", List.of("胸外按压")));
+        // M9-01：抢救用药经药品字典判定；演示字典内的非麻精药品（避免误触发第二核对）。
         body.put("drugs", List.of(Map.of(
-                "drugName", "肾上腺素（演示）",
+                "drugName", "丙泊酚（演示）",
                 "dose", 1,
                 "unit", "mg",
                 "route", "IV",

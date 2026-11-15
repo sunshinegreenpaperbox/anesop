@@ -16,6 +16,7 @@ import com.anesop.contracts.scheduling.model.EmergencyAddRequest;
 import com.anesop.m0.api.security.AuthPrincipal;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m1.api.notification.NotificationEvent;
+import com.anesop.m1.api.notification.NotificationMessage;
 import com.anesop.m1.api.notification.NotificationPort;
 import com.anesop.m1.api.schedule.SchedulingConflictException;
 import com.anesop.m1.api.schedule.SchedulingService;
@@ -106,8 +107,9 @@ class ScheduleChangeApiIntegrationTest extends AbstractApiIntegrationTest {
                 "麻醉科（合成）");
         insertPatient(PATIENT_C, "SYNTH-HIS-P-9203", "演示患者丙", SyntheticAccounts.DEMO_OR_ORG_ID,
                 "手术室（合成）");
-        // 通知端口确实为模拟实现（不接真实短信/企业微信）。
+        // 通知端口为站内消息中心投递（M9-01）；短信/企业微信仍为 EXT。
         assertThat(notificationPort).isNotNull();
+        jdbcTemplate.update("DELETE FROM m0_platform.sys_message");
     }
 
     /**
@@ -181,6 +183,68 @@ class ScheduleChangeApiIntegrationTest extends AbstractApiIntegrationTest {
                 "SELECT status FROM m1_sched.notification_outbox", String.class)).isEqualTo("SENT");
         System.out.printf("[M2-M2-02][stop] schedule=%s change=STOP/APPROVED audit=SCHEDULE_STOP "
                 + "outbox=SCHEDULE_STOPPED→SENT%n", scheduleId);
+    }
+
+    @Test
+    void stopDeliversDeduplicatedMessagesToRoleUsersAndIsVisibleUnread() throws Exception {
+        String admin = login(SyntheticAccounts.DEMO_ADMIN_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        String applicationId = createApplication(admin, "SYNTH-M9-01-APP-0001", PATIENT_A,
+                "演示术者");
+        String scheduleId = createSchedule(admin, applicationId, OR_01,
+                "2026-12-03T08:00:00+08:00", "2026-12-03T10:00:00+08:00", 1);
+        mockMvc.perform(post("/v1/scheduling/schedules/" + scheduleId + "/stop")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "reasonCode", "PATIENT_CONDITION",
+                                "reason", "演示停台原因（合成数据）",
+                                "version", 1))))
+                .andExpect(status().isOk());
+
+        assertThat(notificationDispatcher.drainAll(20)).isEqualTo(1);
+
+        List<Map<String, Object>> messages = jdbcTemplate.queryForList("""
+                SELECT recipient_user_id, template_code, params::text AS params, dedupe_key
+                FROM m0_platform.sys_message WHERE template_code = 'SCHEDULE_STOP'
+                """);
+        assertThat(messages).isNotEmpty();
+        assertThat(messages).extracting(row -> row.get("recipient_user_id").toString())
+                .contains(SyntheticAccounts.DEMO_SELF_ID, SyntheticAccounts.DEMO_DEPT_ID)
+                .doesNotContain(SyntheticAccounts.DEMO_ADMIN_ID,
+                        SyntheticAccounts.SURGEON_ID);
+        for (Map<String, Object> message : messages) {
+            assertThat((String) message.get("params")).contains("scheduleId")
+                    .doesNotContain("演示患者甲", "SYNTH-HIS-P-9201", "patientName", "diagnosis",
+                            "inpatientNo");
+            assertThat((String) message.get("dedupe_key")).startsWith("OUTBOX:");
+        }
+
+        // 去重：同一 outbox 事件再次投递（模拟重试/并发派发）不新增消息。
+        UUID outboxId = jdbcTemplate.queryForObject("""
+                SELECT id FROM m1_sched.notification_outbox WHERE event_type = 'SCHEDULE_STOPPED'
+                """, UUID.class);
+        String payload = jdbcTemplate.queryForObject("""
+                SELECT payload::text FROM m1_sched.notification_outbox WHERE id = ?::uuid
+                """, String.class, outboxId.toString());
+        int before = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_message WHERE template_code = 'SCHEDULE_STOP'",
+                Integer.class);
+        assertThat(notificationPort.deliver(new NotificationMessage(outboxId, "SCHEDULE_STOPPED",
+                payload))).isTrue();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m0_platform.sys_message WHERE template_code = 'SCHEDULE_STOP'",
+                Integer.class)).isEqualTo(before);
+
+        // 消息中心可见未读（仅本人）。
+        String anes = login(SyntheticAccounts.DEMO_SELF_USERNAME,
+                SyntheticAccounts.DEMO_SELF_PASSWORD);
+        mockMvc.perform(get("/v1/messages?page=1&size=20&unreadOnly=true")
+                        .header("Authorization", "Bearer " + anes))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].templateCode").value("SCHEDULE_STOP"))
+                .andExpect(jsonPath("$.items[0].read").value(false))
+                .andExpect(jsonPath("$.unreadCount").value(org.hamcrest.Matchers.greaterThan(0)));
     }
 
     @Test

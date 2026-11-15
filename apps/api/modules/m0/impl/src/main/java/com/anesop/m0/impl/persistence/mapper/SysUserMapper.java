@@ -74,6 +74,24 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
     List<UUID> selectAllActiveUserIds();
 
     /**
+     * 某角色下的启用用户标识（M9-01 通知接收人目录）：未删除且 status=1，升序。
+     *
+     * <p>只返回主键，不返回姓名/工号/手机号；角色→用户走 V1
+     * {@code idx_sys_user_role_role_id} 反向索引。调用方不得据此跨模块访问用户表。
+     */
+    @Select("""
+            SELECT u.id
+            FROM m0_platform.sys_user u
+            JOIN m0_platform.sys_user_role ur ON ur.user_id = u.id
+            JOIN m0_platform.sys_role r ON r.id = ur.role_id
+            WHERE r.code = #{roleCode}
+              AND u.deleted = false
+              AND u.status = 1
+            ORDER BY u.id
+            """)
+    List<UUID> selectActiveUserIdsByRoleCode(@Param("roleCode") String roleCode);
+
+    /**
      * 修改口令并清除强制改密标记、失败计数与锁定（成功改密后允许立即登录）。
      *
      * @return 影响行数（1=成功；0=用户不存在/已删除）

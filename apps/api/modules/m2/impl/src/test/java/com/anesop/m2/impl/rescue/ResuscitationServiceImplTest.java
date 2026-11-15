@@ -26,6 +26,9 @@ import com.anesop.m2.impl.persistence.entity.AnesthesiaRecordEntity;
 import com.anesop.m2.impl.persistence.entity.ResuscitationRecordEntity;
 import com.anesop.m2.impl.persistence.mapper.AnesthesiaRecordMapper;
 import com.anesop.m2.impl.persistence.mapper.ResuscitationRecordMapper;
+import com.anesop.m2.impl.support.SecondCheckerEligibility;
+import com.anesop.m4.api.drug.DrugDictionaryEntry;
+import com.anesop.m4.api.drug.DrugDictionaryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -37,6 +40,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,6 +60,7 @@ class ResuscitationServiceImplTest {
     private static final UUID RECORD_ID = UUID.fromString("12000000-0000-4000-8000-000000000001");
     private static final UUID SCHEDULE_ID = UUID.fromString("90000000-0000-4000-8000-000000000001");
     private static final UUID ACTOR = UUID.fromString("e0000000-0000-4000-8000-000000000002");
+    private static final UUID CHECKER = UUID.fromString("e0000000-0000-4000-8000-000000000003");
     private static final Instant NOW = Instant.parse("2026-12-01T02:00:00Z");
     private static final Instant RECORD_START = NOW.minusSeconds(3600);
     private static final AuthPrincipal CALLER =
@@ -69,6 +74,10 @@ class ResuscitationServiceImplTest {
     private SchedulingService schedulingService;
     @Mock
     private AuditWriter auditWriter;
+    @Mock
+    private DrugDictionaryService drugDictionary;
+    @Mock
+    private SecondCheckerEligibility secondCheckerEligibility;
 
     private ResuscitationServiceImpl service;
 
@@ -77,7 +86,14 @@ class ResuscitationServiceImplTest {
         ObjectMapper objectMapper = JsonMapper.builder().addModule(new JavaTimeModule()).build();
         service = new ResuscitationServiceImpl(recordMapper, resuscitationMapper,
                 schedulingService, auditWriter, objectMapper, new RecordProperties(600),
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                drugDictionary, secondCheckerEligibility, Clock.fixed(NOW, ZoneOffset.UTC));
+        lenient().when(drugDictionary.findByName(any()))
+                .thenReturn(Optional.of(dictionary("肾上腺素（演示）", false)));
+    }
+
+    private static DrugDictionaryEntry dictionary(String name, boolean narcotic) {
+        return new DrugDictionaryEntry(UUID.randomUUID().toString(), "SYNTH-DRUG-001", name,
+                narcotic, false, true);
     }
 
     @Test
@@ -243,6 +259,94 @@ class ResuscitationServiceImplTest {
                 request(NOW.minusSeconds(1200), NOW.minusSeconds(900), "演示", "SUCCESS"), CALLER,
                 null))
                 .isInstanceOf(NoSuchElementException.class);
+    }
+
+    @Test
+    void drugNotInDictionaryIsRejected() {
+        stubVisibleRecord();
+        when(drugDictionary.findByName("肾上腺素（演示）")).thenReturn(Optional.empty());
+        CreateResuscitationRequest request = request(NOW.minusSeconds(1200),
+                NOW.minusSeconds(900), "演示", "SUCCESS");
+
+        assertThatThrownBy(() -> service.create(RECORD_ID.toString(), request, CALLER, null))
+                .isInstanceOf(M2ValidationException.class)
+                .hasMessageContaining("药品未收录于药品字典");
+        verify(resuscitationMapper, never()).insertRecord(any());
+    }
+
+    @Test
+    void declaredNonNarcoticContradictingDictionaryIsRejected() {
+        stubVisibleRecord();
+        when(drugDictionary.findByName(any()))
+                .thenReturn(Optional.of(dictionary("肾上腺素（演示）", true)));
+        CreateResuscitationRequest request = request(NOW.minusSeconds(1200),
+                NOW.minusSeconds(900), "演示", "SUCCESS");
+        request.getDrugs().get(0).setNarcotic(false);
+        request.getDrugs().get(0).setSecondCheckerId(CHECKER.toString());
+        request.getDrugs().get(0).setSecondCheckerName("演示核对人");
+
+        assertThatThrownBy(() -> service.create(RECORD_ID.toString(), request, CALLER, null))
+                .isInstanceOf(M2ValidationException.class)
+                .hasMessageContaining("字典不一致");
+        verify(resuscitationMapper, never()).insertRecord(any());
+    }
+
+    @Test
+    void narcoticWithoutSecondCheckerIsRejected() {
+        stubVisibleRecord();
+        when(drugDictionary.findByName(any()))
+                .thenReturn(Optional.of(dictionary("肾上腺素（演示）", true)));
+        when(secondCheckerEligibility.require(any(), any(), any(), any()))
+                .thenThrow(new M2ValidationException("drugs[0].secondCheckerId",
+                        "麻精药品必须填写第二核对人"));
+        CreateResuscitationRequest request = request(NOW.minusSeconds(1200),
+                NOW.minusSeconds(900), "演示", "SUCCESS");
+
+        assertThatThrownBy(() -> service.create(RECORD_ID.toString(), request, CALLER, null))
+                .isInstanceOf(M2ValidationException.class)
+                .hasMessageContaining("第二核对人");
+        verify(resuscitationMapper, never()).insertRecord(any());
+    }
+
+    @Test
+    void narcoticWithEligibleSecondCheckerPersistsAndAuditsWithoutNames() {
+        stubVisibleRecord();
+        when(drugDictionary.findByName(any()))
+                .thenReturn(Optional.of(dictionary("肾上腺素（演示）", true)));
+        when(secondCheckerEligibility.require(eq(CHECKER), eq("演示核对人（合成）"), eq(ACTOR), any()))
+                .thenReturn("演示核对人（合成）");
+        CreateResuscitationRequest request = request(NOW.minusSeconds(1200),
+                NOW.minusSeconds(900), "演示", "SUCCESS");
+        request.getDrugs().get(0).setNarcotic(true);
+        request.getDrugs().get(0).setSecondCheckerId(CHECKER.toString());
+        request.getDrugs().get(0).setSecondCheckerName("演示核对人（合成）");
+
+        ResuscitationRecord created = service.create(RECORD_ID.toString(), request, CALLER, null);
+
+        assertThat(created.getDrugs()).singleElement().satisfies(drug -> {
+            assertThat(drug.getNarcotic()).isTrue();
+            assertThat(drug.getSecondCheckerId()).isEqualTo(CHECKER.toString());
+            assertThat(drug.getSecondCheckerName()).isEqualTo("演示核对人（合成）");
+        });
+        ArgumentCaptor<Map<String, Object>> detail = ArgumentCaptor.forClass(Map.class);
+        verify(auditWriter).record(eq("RESCUE_RECORD"), eq("RESUSCITATION_RECORD"), any(),
+                eq(true), detail.capture(), eq(ACTOR), eq("synth_anes"), eq(null));
+        assertThat(detail.getValue()).containsEntry("narcoticCount", 1)
+                .containsEntry("secondCheckCount", 1);
+        assertThat(detail.getValue().toString()).doesNotContain("演示核对人", "演示负责人", "演示护士");
+    }
+
+    @Test
+    void nonNarcoticWithSecondCheckerIsRejected() {
+        stubVisibleRecord();
+        CreateResuscitationRequest request = request(NOW.minusSeconds(1200),
+                NOW.minusSeconds(900), "演示", "SUCCESS");
+        request.getDrugs().get(0).setSecondCheckerId(CHECKER.toString());
+        request.getDrugs().get(0).setSecondCheckerName("演示核对人（合成）");
+
+        assertThatThrownBy(() -> service.create(RECORD_ID.toString(), request, CALLER, null))
+                .isInstanceOf(M2ValidationException.class)
+                .hasMessageContaining("非麻精药品不得填写");
     }
 
     @Test

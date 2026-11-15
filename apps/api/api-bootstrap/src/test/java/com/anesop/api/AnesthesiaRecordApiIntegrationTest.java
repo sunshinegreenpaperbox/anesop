@@ -65,6 +65,9 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
     private static final String RECORD_DEPT_ORG_ID = "f1000000-0000-4000-8000-0000000000e9";
 
     private static final String SECOND_CHECKER_ID = "e0000000-0000-4000-8000-000000000003";
+    /** M9-01 体征映射夹具：本类专用网关/设备，避免污染采集用例。 */
+    private static final String VITAL_GATEWAY = "GW-M9-VITAL-01";
+    private static final String VITAL_DEVICE = "SIM-M9-VITAL-01";
 
     @Autowired
     private MockMvc mockMvc;
@@ -85,6 +88,10 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
         ensureRecordDeptOrg();
         ensureRecordDeptUser();
         clearRecordRows();
+        jdbcTemplate.update("DELETE FROM m2_anes.anesthesia_vital WHERE gateway_id = ?",
+                VITAL_GATEWAY);
+        jdbcTemplate.update("DELETE FROM m2_anes.device_registry WHERE gateway_id = ?",
+                VITAL_GATEWAY);
         jdbcTemplate.update("DELETE FROM m1_sched.notification_outbox");
         jdbcTemplate.execute("ALTER TABLE m1_sched.schedule_change_request DISABLE TRIGGER USER");
         try {
@@ -108,6 +115,10 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
     void cleanUpAfterTest() {
         // 记录单 FK 指向台次/申请：必须在其他测试类清理申请前删除（触发器临时停用）。
         clearRecordRows();
+        jdbcTemplate.update("DELETE FROM m2_anes.anesthesia_vital WHERE gateway_id = ?",
+                VITAL_GATEWAY);
+        jdbcTemplate.update("DELETE FROM m2_anes.device_registry WHERE gateway_id = ?",
+                VITAL_GATEWAY);
         // 清理本类专用用户/角色/组织夹具，避免污染共享库上的其他测试类（用户计数/数据范围）。
         jdbcTemplate.update("DELETE FROM m0_platform.sys_user_org WHERE user_id = ?::uuid",
                 RECORD_DEPT_USER_ID);
@@ -773,6 +784,118 @@ class AnesthesiaRecordApiIntegrationTest extends AbstractApiIntegrationTest {
             body.put("secondCheckerName", checkerName);
         }
         return body;
+    }
+
+    @Test
+    void recordVitalSignsAreMappedFromRoomDevicesWithinWindow() throws Exception {
+        String admin = login(SyntheticAccounts.DEMO_ADMIN_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        String scheduleId = createSchedule(admin, "SYNTH-M9-01-VITAL-0001");
+        String recordId = insertOngoingRecord(scheduleId);
+        Instant startedAt = jdbcTemplate.queryForObject(
+                "SELECT started_at FROM m2_anes.anesthesia_record WHERE id = ?::uuid",
+                Instant.class, recordId);
+
+        jdbcTemplate.update("""
+                INSERT INTO m2_anes.device_registry
+                    (id, gateway_id, device_id, room_id, device_type, status, last_seen_at,
+                     quality_stats)
+                VALUES (gen_random_uuid(), ?, ?, ?::uuid, 'MONITOR', 'ONLINE', now(), '{}'::jsonb)
+                """, VITAL_GATEWAY, VITAL_DEVICE, OR_01);
+        // 窗口内：正常帧 + 可疑帧（质量码 1 + SIGNAL_LOSS）；窗口外（早于开始）必须被过滤。
+        insertVitalRow(1, startedAt.minusSeconds(60), 65, 99, 0, "[]");
+        insertVitalRow(2, startedAt.plusSeconds(60), 72, 98, 0, "[]");
+        insertVitalRow(3, startedAt.plusSeconds(120), 58, 97, 1, "[\"SIGNAL_LOSS\"]");
+
+        MvcResult result = mockMvc.perform(get("/v1/anesthesia/records/" + recordId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.vitalSignsTruncated").value(false))
+                .andExpect(jsonPath("$.vitalSigns", hasSize(12)))
+                .andReturn();
+        JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+        JsonNode vitals = body.get("vitalSigns");
+        List<String> metrics = new ArrayList<>();
+        Instant previous = null;
+        boolean sorted = true;
+        boolean sawSuspiciousHr = false;
+        for (JsonNode vital : vitals) {
+            metrics.add(vital.get("metric").asText());
+            Instant measuredAt = Instant.parse(vital.get("measuredAt").asText());
+            if (previous != null && measuredAt.isBefore(previous)) {
+                sorted = false;
+            }
+            previous = measuredAt;
+            assertThat(measuredAt).isAfterOrEqualTo(startedAt);
+            if ("HR".equals(vital.get("metric").asText())
+                    && vital.get("value").decimalValue().compareTo(new java.math.BigDecimal("58"))
+                            == 0) {
+                sawSuspiciousHr = true;
+                assertThat(vital.get("quality").asInt()).isEqualTo(1);
+                assertThat(vital.get("qualityFlags").toString()).contains("SIGNAL_LOSS");
+            }
+        }
+        assertThat(sorted).as("体征按 measuredAt 升序").isTrue();
+        assertThat(metrics).contains("HR", "SPO2", "NIBP_SYS", "NIBP_DIA", "ETCO2", "TEMP");
+        assertThat(sawSuspiciousHr).as("可疑帧原样透传质量码与标记").isTrue();
+        // 窗口外（早于 startedAt）的 HR=65 不返回。
+        assertThat(vitals.toString()).doesNotContain("\"value\":65");
+        // 无 PHI：体征数组本身不含患者姓名/院内患者号（记录单头部字段按契约返回）。
+        assertThat(vitals.toString())
+                .doesNotContain("演示患者", HIS_ANES, "patientName", "inpatientNo");
+    }
+
+    @Test
+    void draftRecordWithoutStartedAtHasEmptyVitalSigns() throws Exception {
+        String admin = login(SyntheticAccounts.DEMO_ADMIN_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        String scheduleId = createSchedule(admin, "SYNTH-M9-01-VITAL-0002");
+        String recordId = createRecord(admin, scheduleId);
+
+        jdbcTemplate.update("""
+                INSERT INTO m2_anes.device_registry
+                    (id, gateway_id, device_id, room_id, device_type, status, last_seen_at,
+                     quality_stats)
+                VALUES (gen_random_uuid(), ?, ?, ?::uuid, 'MONITOR', 'ONLINE', now(), '{}'::jsonb)
+                """, VITAL_GATEWAY, VITAL_DEVICE, OR_01);
+        insertVitalRow(1, Instant.now().minusSeconds(60), 70, 98, 0, "[]");
+
+        mockMvc.perform(get("/v1/anesthesia/records/" + recordId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.vitalSigns", hasSize(0)))
+                .andExpect(jsonPath("$.vitalSignsTruncated").value(false));
+    }
+
+    /** 直接插入进行中记录单（started_at 在 1 小时前），用于体征窗口映射用例。 */
+    private String insertOngoingRecord(String scheduleId) {
+        String recordId = UUID.randomUUID().toString();
+        jdbcTemplate.update("""
+                INSERT INTO m2_anes.anesthesia_record
+                    (id, schedule_id, application_id, patient_id, room_id, status, anesthesia_type,
+                     started_at, ended_at, created_at, created_by, updated_at, updated_by,
+                     version, deleted)
+                SELECT ?::uuid, s.id, s.application_id, ?::uuid, s.room_id, 'ONGOING', 'GENERAL',
+                       now() - interval '1 hour', NULL, now() - interval '1 hour', NULL,
+                       now() - interval '1 hour', NULL, 1, false
+                  FROM m1_sched.schedule s WHERE s.id = ?::uuid
+                """, recordId, PATIENT_ANES, scheduleId);
+        return recordId;
+    }
+
+    private void insertVitalRow(long seq, Instant measuredAt, int hr, int spo2, int quality,
+            String qualityFlags) {
+        jdbcTemplate.update("""
+                INSERT INTO m2_anes.anesthesia_vital
+                    (gateway_id, device_id, seq, measured_at, measured_at_corrected, received_at,
+                     hr, spo2, nibp_sys, nibp_dia, etco2, temp, quality, quality_flags, source,
+                     synthetic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 120, 80, 35.0, 36.7, ?, ?::jsonb, 'AUTO', true)
+                """, VITAL_GATEWAY, VITAL_DEVICE, seq,
+                OffsetDateTime.ofInstant(measuredAt, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(measuredAt, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(measuredAt.plusSeconds(1), ZoneOffset.UTC), hr, spo2,
+                quality, qualityFlags);
     }
 
     private String createRecord(String token, String scheduleId) throws Exception {

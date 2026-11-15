@@ -11,6 +11,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.anesop.m0.api.audit.AuditWriter;
+import com.anesop.m1.api.notification.NotificationEvent;
+import com.anesop.m1.api.notification.NotificationPort;
 import com.anesop.m2.impl.config.AlertProperties;
 import com.anesop.m2.impl.persistence.entity.AlertEntity;
 import com.anesop.m2.impl.persistence.entity.AlertRuleEntity;
@@ -62,6 +64,8 @@ class AlertEvaluatorTest {
     private DeviceRegistryMapper registryMapper;
     @Mock
     private AuditWriter auditWriter;
+    @Mock
+    private NotificationPort notificationPort;
 
     private AlertEvaluator evaluator;
 
@@ -69,7 +73,7 @@ class AlertEvaluatorTest {
     void setUp() {
         evaluator = new AlertEvaluator(alertMapper, ruleMapper, watermarkMapper, vitalMapper,
                 registryMapper, new AlertRuleEngine(new AlertProperties(10, 10, 300, 300, 300, 20000)),
-                new AlertProperties(10, 10, 300, 300, 300, 20000), auditWriter,
+                new AlertProperties(10, 10, 300, 300, 300, 20000), auditWriter, notificationPort,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -167,6 +171,44 @@ class AlertEvaluatorTest {
     }
 
     @Test
+    void criticalAlertIsDeliveredAsNotificationWithoutPatientIdentifiers() {
+        AnesthesiaRecordEntity record = record("ONGOING", NOW.minusSeconds(3600));
+        when(watermarkMapper.selectEvaluatedThrough(RECORD_ID)).thenReturn(null);
+        when(ruleMapper.selectEnabledRules()).thenReturn(List.of(criticalRule()));
+        when(registryMapper.selectDevices(isNull(), eq(ROOM_ID))).thenReturn(List.of(device()));
+        when(vitalMapper.selectAlertSamples(any(), any(), any(), any(), anyInt())).thenReturn(
+                List.of(vital(T0, 45), vital(T0.plusSeconds(10), 44),
+                        vital(T0.plusSeconds(20), 43), vital(T0.plusSeconds(30), 42)));
+        when(alertMapper.insertIgnoreDuplicate(any())).thenReturn(1);
+
+        evaluator.evaluate(record, AlertEvaluator.EvaluationTrigger.system());
+
+        ArgumentCaptor<NotificationEvent> event = ArgumentCaptor.forClass(NotificationEvent.class);
+        verify(notificationPort).publish(event.capture());
+        assertThat(event.getValue().eventType()).isEqualTo("ALERT_CRITICAL");
+        assertThat(event.getValue().payload())
+                .containsKeys("alertId", "recordId", "metric", "severity")
+                .doesNotContainKeys("patientName", "patientNo", "inpatientNo", "diagnosis");
+        assertThat(event.getValue().payload().get("severity")).isEqualTo("CRITICAL");
+    }
+
+    @Test
+    void warnAlertDoesNotSendNotification() {
+        AnesthesiaRecordEntity record = record("ONGOING", NOW.minusSeconds(3600));
+        when(watermarkMapper.selectEvaluatedThrough(RECORD_ID)).thenReturn(null);
+        when(ruleMapper.selectEnabledRules()).thenReturn(List.of(rule()));
+        when(registryMapper.selectDevices(isNull(), eq(ROOM_ID))).thenReturn(List.of(device()));
+        when(vitalMapper.selectAlertSamples(any(), any(), any(), any(), anyInt())).thenReturn(
+                List.of(vital(T0, 45), vital(T0.plusSeconds(10), 44),
+                        vital(T0.plusSeconds(20), 43), vital(T0.plusSeconds(30), 42)));
+        when(alertMapper.insertIgnoreDuplicate(any())).thenReturn(1);
+
+        evaluator.evaluate(record, AlertEvaluator.EvaluationTrigger.system());
+
+        verify(notificationPort, never()).publish(any());
+    }
+
+    @Test
     void manualTriggerAuditsCaller() {
         AnesthesiaRecordEntity record = record("ONGOING", NOW.minusSeconds(3600));
         when(watermarkMapper.selectEvaluatedThrough(RECORD_ID)).thenReturn(null);
@@ -197,6 +239,13 @@ class AlertEvaluatorTest {
         record.setCreatedAt(startedAt == null ? NOW.minusSeconds(7200)
                 : startedAt.minusSeconds(60));
         return record;
+    }
+
+    private static AlertRuleEntity criticalRule() {
+        AlertRuleEntity rule = rule();
+        rule.setCode("HR_CRITICAL");
+        rule.setSeverity("CRITICAL");
+        return rule;
     }
 
     private static AlertRuleEntity rule() {

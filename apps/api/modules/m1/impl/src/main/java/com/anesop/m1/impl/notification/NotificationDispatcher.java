@@ -21,7 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <ul>
  *   <li>每次 {@link #drainOnce()} 只取 1 条（{@code FOR UPDATE SKIP LOCKED}），成功记 SENT；</li>
  *   <li>失败按 60s × 次数退避，重试 3 次仍失败记 FAILED（last_error 固定文案，无 PHI）；</li>
- *   <li>模拟端口投递即记录日志并返回 true，因此自动化测试可直接断言 SENT。</li>
+ *   <li>站内消息端口投递成功返回 true，因此自动化测试可直接断言 SENT。</li>
  * </ul>
  */
 @Service
@@ -30,7 +30,7 @@ public class NotificationDispatcher {
     /** 单条通知最大尝试次数，超过记 FAILED，等待人工介入。 */
     static final int MAX_ATTEMPTS = 3;
     /** 固定失败文案：不回显通道返回内容，避免 PHI/凭据进入 last_error。 */
-    static final String FAILURE_MESSAGE = "通知投递失败（模拟通道），已按退避重试";
+    static final String FAILURE_MESSAGE = "通知投递失败，已按退避重试";
     private static final Logger LOG = LoggerFactory.getLogger(NotificationDispatcher.class);
 
     private final NotificationOutboxMapper outboxMapper;

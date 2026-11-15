@@ -12,13 +12,18 @@ import com.anesop.m0.api.security.AuthPrincipal;
 import com.anesop.m0.api.security.AuthRequestContext;
 import com.anesop.m1.api.schedule.SchedulingService;
 import com.anesop.m2.api.error.M2ConflictException;
+import com.anesop.m2.api.error.M2UnprocessableException;
 import com.anesop.m2.api.error.M2ValidationException;
 import com.anesop.m2.api.rescue.ResuscitationService;
+import com.anesop.m2.impl.support.SecondCheckerEligibility;
 import com.anesop.m2.impl.config.RecordProperties;
 import com.anesop.m2.impl.persistence.entity.AnesthesiaRecordEntity;
 import com.anesop.m2.impl.persistence.entity.ResuscitationRecordEntity;
 import com.anesop.m2.impl.persistence.mapper.AnesthesiaRecordMapper;
 import com.anesop.m2.impl.persistence.mapper.ResuscitationRecordMapper;
+import com.anesop.m4.api.drug.DrugDictionaryAmbiguousException;
+import com.anesop.m4.api.drug.DrugDictionaryEntry;
+import com.anesop.m4.api.drug.DrugDictionaryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -74,6 +79,8 @@ public class ResuscitationServiceImpl implements ResuscitationService {
     private final AuditWriter auditWriter;
     private final ObjectMapper objectMapper;
     private final RecordProperties recordProperties;
+    private final DrugDictionaryService drugDictionary;
+    private final SecondCheckerEligibility secondCheckerEligibility;
     private final Clock clock;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
@@ -81,13 +88,16 @@ public class ResuscitationServiceImpl implements ResuscitationService {
     public ResuscitationServiceImpl(AnesthesiaRecordMapper recordMapper,
             ResuscitationRecordMapper resuscitationMapper, SchedulingService schedulingService,
             AuditWriter auditWriter, ObjectMapper objectMapper, RecordProperties recordProperties,
-            Clock clock) {
+            DrugDictionaryService drugDictionary,
+            SecondCheckerEligibility secondCheckerEligibility, Clock clock) {
         this.recordMapper = recordMapper;
         this.resuscitationMapper = resuscitationMapper;
         this.schedulingService = schedulingService;
         this.auditWriter = auditWriter;
         this.objectMapper = objectMapper;
         this.recordProperties = recordProperties;
+        this.drugDictionary = drugDictionary;
+        this.secondCheckerEligibility = secondCheckerEligibility;
         this.clock = clock;
     }
 
@@ -139,7 +149,8 @@ public class ResuscitationServiceImpl implements ResuscitationService {
         }
         requireTimeWindow(record, startedAt, endedAt);
         ResuscitationEventSummary summary = requireSummary(request.getEventSummary());
-        List<ResuscitationDrug> drugs = requireDrugs(request.getDrugs(), startedAt, endedAt);
+        List<ResuscitationDrug> drugs = requireDrugs(request.getDrugs(), startedAt, endedAt,
+                caller == null ? null : caller.userId());
         ResuscitationParticipant leader = requireParticipant(request.getLeader(), "leader",
                 "抢救负责人不能为空");
         List<ResuscitationParticipant> rescuers = requireRescuers(request.getRescuers());
@@ -211,38 +222,86 @@ public class ResuscitationServiceImpl implements ResuscitationService {
         return normalized;
     }
 
-    private static List<ResuscitationDrug> requireDrugs(List<ResuscitationDrug> drugs,
-            Instant startedAt, Instant endedAt) {
+    /**
+     * 抢救用药明细校验 + 麻精判定（M9-01）：每项经 m4-api 药品字典解析。
+     *
+     * <p>字典未收录 400（fail-closed，不做客户端自判）；名称/通用名/别名命中多个药品 422
+     * {@code DRUG_AMBIGUOUS}；客户端声明 narcotic 与字典不一致 400（以字典为准，防止误报
+     * false 绕过第二核对）；字典麻精必须提供第二核对人并复用记录单资格口径（存在/在职/
+     * 非本人/持 {@code m2:record:write}）；非麻精不得填写核对人。
+     * 返回规范化副本（药名 trim、麻精标记来自字典），人员姓名只落库、不进日志/审计。
+     */
+    private List<ResuscitationDrug> requireDrugs(List<ResuscitationDrug> drugs, Instant startedAt,
+            Instant endedAt, UUID actorId) {
         if (drugs == null) {
             return List.of();
         }
         if (drugs.size() > MAX_DRUGS) {
             throw new M2ValidationException("drugs", "抢救用药明细不能超过 50 条");
         }
-        for (ResuscitationDrug drug : drugs) {
+        List<ResuscitationDrug> normalized = new ArrayList<>(drugs.size());
+        for (int index = 0; index < drugs.size(); index++) {
+            ResuscitationDrug drug = drugs.get(index);
+            String prefix = "drugs[" + index + "]";
             if (drug == null || drug.getDrugName() == null || drug.getDrugName().trim().isEmpty()
                     || drug.getDrugName().trim().length() > 200) {
-                throw new M2ValidationException("drugs.drugName", "药品名称不能为空且不超过 200 字符");
+                throw new M2ValidationException(prefix + ".drugName", "药品名称不能为空且不超过 200 字符");
             }
+            String drugName = drug.getDrugName().trim();
             BigDecimal dose = drug.getDose();
             if (dose == null || dose.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new M2ValidationException("drugs.dose", "剂量必须大于 0");
+                throw new M2ValidationException(prefix + ".dose", "剂量必须大于 0");
             }
             if (drug.getUnit() == null || drug.getUnit().trim().isEmpty()
                     || drug.getUnit().trim().length() > 16) {
-                throw new M2ValidationException("drugs.unit", "剂量单位不能为空且不超过 16 字符");
+                throw new M2ValidationException(prefix + ".unit", "剂量单位不能为空且不超过 16 字符");
             }
             if (drug.getRoute() != null && drug.getRoute().trim().length() > 32) {
-                throw new M2ValidationException("drugs.route", "给药途径长度超出限制");
+                throw new M2ValidationException(prefix + ".route", "给药途径长度超出限制");
             }
             Instant administeredAt = toInstant(drug.getAdministeredAt());
             if (administeredAt != null
                     && (administeredAt.isBefore(startedAt) || administeredAt.isAfter(endedAt))) {
-                throw new M2ValidationException("drugs.administeredAt",
+                throw new M2ValidationException(prefix + ".administeredAt",
                         "给药时间必须落在抢救时间窗内");
             }
+            DrugDictionaryEntry dictionary;
+            try {
+                dictionary = drugDictionary.findByName(drugName)
+                        .orElseThrow(() -> new M2ValidationException(prefix + ".drugName",
+                                "药品未收录于药品字典，无法判定麻精属性"));
+            } catch (DrugDictionaryAmbiguousException ambiguous) {
+                throw new M2UnprocessableException(prefix + ".drugName",
+                        "药品名称在字典中命中多个药品，拒绝登记（DRUG_AMBIGUOUS）");
+            }
+            boolean narcotic = dictionary.narcotic();
+            if (drug.getNarcotic() != null && drug.getNarcotic() != narcotic) {
+                throw new M2ValidationException(prefix + ".narcotic",
+                        "是否麻精类与药品字典不一致（以字典为准）");
+            }
+            UUID checkerId = null;
+            String checkerName = null;
+            if (narcotic) {
+                checkerId = parseUuid(drug.getSecondCheckerId());
+                checkerName = secondCheckerEligibility.require(checkerId,
+                        drug.getSecondCheckerName(), actorId, prefix + ".secondCheckerId");
+            } else if (drug.getSecondCheckerId() != null || drug.getSecondCheckerName() != null) {
+                throw new M2ValidationException(prefix + ".secondCheckerId",
+                        "非麻精药品不得填写双人核对信息");
+            }
+            ResuscitationDrug item = new ResuscitationDrug();
+            item.setDrugName(drugName);
+            item.setDose(dose);
+            item.setUnit(drug.getUnit().trim());
+            item.setRoute(drug.getRoute() == null || drug.getRoute().trim().isEmpty() ? null
+                    : drug.getRoute().trim());
+            item.setAdministeredAt(drug.getAdministeredAt());
+            item.setNarcotic(narcotic);
+            item.setSecondCheckerId(checkerId == null ? null : checkerId.toString());
+            item.setSecondCheckerName(checkerName);
+            normalized.add(item);
         }
-        return drugs;
+        return normalized;
     }
 
     private static ResuscitationParticipant requireParticipant(ResuscitationParticipant participant,
@@ -312,6 +371,10 @@ public class ResuscitationServiceImpl implements ResuscitationService {
         detail.put("endedAt", entity.getEndedAt().toString());
         detail.put("outcome", entity.getOutcome());
         detail.put("drugCount", drugs.size());
+        detail.put("narcoticCount", (int) drugs.stream()
+                .filter(drug -> Boolean.TRUE.equals(drug.getNarcotic())).count());
+        detail.put("secondCheckCount", (int) drugs.stream()
+                .filter(drug -> drug.getSecondCheckerId() != null).count());
         detail.put("interventionCount",
                 summary.getInterventions() == null ? 0 : summary.getInterventions().size());
         // 人员只记标识与人数，姓名不入审计（AGENTS 日志/审计无姓名）。

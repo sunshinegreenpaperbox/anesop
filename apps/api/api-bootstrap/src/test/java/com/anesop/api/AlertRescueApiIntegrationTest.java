@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.anesop.api.support.AbstractApiIntegrationTest;
 import com.anesop.api.support.SyntheticAccounts;
+import com.anesop.m1.impl.notification.NotificationDispatcher;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.SQLException;
@@ -74,6 +75,9 @@ class AlertRescueApiIntegrationTest extends AbstractApiIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private NotificationDispatcher notificationDispatcher;
 
     @BeforeEach
     void prepareData() {
@@ -626,7 +630,8 @@ class AlertRescueApiIntegrationTest extends AbstractApiIntegrationTest {
                 .andExpect(jsonPath("$.recordId").value(recordId))
                 .andExpect(jsonPath("$.resusType").value("CPR"))
                 .andExpect(jsonPath("$.eventSummary.summary").value("演示：胸外按压（合成数据）"))
-                .andExpect(jsonPath("$.drugs[0].drugName").value("肾上腺素（演示）"));
+                .andExpect(jsonPath("$.drugs[0].drugName").value("丙泊酚（演示）"))
+                .andExpect(jsonPath("$.drugs[0].narcotic").value(false));
 
         mockMvc.perform(get("/v1/anesthesia/records/" + recordId + "/resuscitations")
                         .header("Authorization", "Bearer " + clinician))
@@ -671,6 +676,139 @@ class AlertRescueApiIntegrationTest extends AbstractApiIntegrationTest {
                         .contentType(JSON)
                         .content(write(resusBody(started, ended, "SUCCESS"))))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void criticalAlertIsDeliveredToRoleUsersAsMessageWithoutPhi() throws Exception {
+        String admin = login(SyntheticAccounts.DEMO_ADMIN_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        String clinician = login(CLIN_USERNAME, CLIN_PASSWORD);
+        String scheduleId = createSchedule(admin, "SYNTH-M9-01-ALERT-0001");
+        String recordId = insertRecord(scheduleId);
+
+        MvcResult listed = mockMvc.perform(get("/v1/anesthesia/alert-rules")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andReturn();
+        String spo2RuleId = ruleIdOf(listed, "SPO2_LOW");
+        mockMvc.perform(put("/v1/anesthesia/alert-rules/" + spo2RuleId)
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(JSON)
+                        .content(write(ruleBody("95", 0, "CRITICAL", true, 1))))
+                .andExpect(status().isOk());
+
+        Instant base = Instant.now().minusSeconds(900).truncatedTo(ChronoUnit.SECONDS);
+        insertVital(1, base, 70, 85);
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/alerts/evaluate")
+                        .header("Authorization", "Bearer " + clinician))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdAlerts").value(1));
+
+        Long outboxRows = jdbcTemplate.queryForObject("""
+                SELECT count(*) FROM m1_sched.notification_outbox
+                 WHERE event_type = 'ALERT_CRITICAL' AND status = 'PENDING'
+                """, Long.class);
+        assertThat(outboxRows).isEqualTo(1L);
+        assertThat(notificationDispatcher.drainAll(20)).isEqualTo(1);
+
+        List<Map<String, Object>> messages = jdbcTemplate.queryForList("""
+                SELECT recipient_user_id, template_code, params::text AS params
+                  FROM m0_platform.sys_message WHERE template_code = 'CRITICAL_ALERT'
+                """);
+        assertThat(messages).isNotEmpty();
+        assertThat(messages).extracting(row -> row.get("recipient_user_id").toString())
+                .contains(SyntheticAccounts.DEMO_SELF_ID, SyntheticAccounts.DEMO_DEPT_ID);
+        for (Map<String, Object> message : messages) {
+            assertThat((String) message.get("params")).contains("alertId", "severity")
+                    .doesNotContain("演示患者", HIS_NO, "patientName", "diagnosis");
+        }
+        // 未确认告警同样投递（告警仍为 TRIGGERED）。
+        Long unacknowledged = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM m2_anes.alert WHERE record_id = ?::uuid "
+                        + "AND status = 'TRIGGERED'", Long.class, recordId);
+        assertThat(unacknowledged).isEqualTo(1L);
+    }
+
+    @Test
+    void resuscitationDrugNarcoticIsDeterminedByDictionaryAndRequiresSecondChecker()
+            throws Exception {
+        String admin = login(SyntheticAccounts.DEMO_ADMIN_USERNAME,
+                SyntheticAccounts.DEMO_ADMIN_PASSWORD);
+        String clinician = login(CLIN_USERNAME, CLIN_PASSWORD);
+        String scheduleId = createSchedule(admin, "SYNTH-M9-01-RESCUE-0001");
+        String recordId = insertRecord(scheduleId);
+        Instant started = Instant.now().minusSeconds(1500).truncatedTo(ChronoUnit.SECONDS);
+        Instant ended = started.plusSeconds(300);
+
+        // 字典未收录 → 400。
+        Map<String, Object> unknown = resusBody(started, ended, "SUCCESS");
+        unknown.put("drugs", List.of(Map.of("drugName", "未知药（演示）", "dose", 1, "unit", "mg")));
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/resuscitations")
+                        .header("Authorization", "Bearer " + clinician)
+                        .contentType(JSON)
+                        .content(write(unknown)))
+                .andExpect(status().isBadRequest());
+
+        // 字典麻精但缺第二核对人 → 400。
+        Map<String, Object> missingChecker = resusBody(started, ended, "SUCCESS");
+        missingChecker.put("drugs", List.of(Map.of("drugName", "舒芬太尼（演示）", "dose", 1,
+                "unit", "mg")));
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/resuscitations")
+                        .header("Authorization", "Bearer " + clinician)
+                        .contentType(JSON)
+                        .content(write(missingChecker)))
+                .andExpect(status().isBadRequest());
+
+        // 声明 false 但字典为麻精 → 400（以字典为准）。
+        Map<String, Object> falseDeclaration = resusBody(started, ended, "SUCCESS");
+        falseDeclaration.put("drugs", List.of(Map.of("drugName", "舒芬太尼（演示）", "dose", 1,
+                "unit", "mg", "narcotic", false, "secondCheckerId", SCOPE_ID,
+                "secondCheckerName", "演示核对人（合成）")));
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/resuscitations")
+                        .header("Authorization", "Bearer " + clinician)
+                        .contentType(JSON)
+                        .content(write(falseDeclaration)))
+                .andExpect(status().isBadRequest());
+
+        // 同人核对 → 400。
+        Map<String, Object> samePerson = resusBody(started, ended, "SUCCESS");
+        samePerson.put("drugs", List.of(Map.of("drugName", "舒芬太尼（演示）", "dose", 1,
+                "unit", "mg", "secondCheckerId", CLIN_ID,
+                "secondCheckerName", "演示负责人（合成）")));
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/resuscitations")
+                        .header("Authorization", "Bearer " + clinician)
+                        .contentType(JSON)
+                        .content(write(samePerson)))
+                .andExpect(status().isBadRequest());
+
+        // 非麻精却填写核对人 → 400。
+        Map<String, Object> nonNarcotic = resusBody(started, ended, "SUCCESS");
+        nonNarcotic.put("drugs", List.of(Map.of("drugName", "丙泊酚（演示）", "dose", 1,
+                "unit", "mg", "secondCheckerId", SCOPE_ID,
+                "secondCheckerName", "演示核对人（合成）")));
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/resuscitations")
+                        .header("Authorization", "Bearer " + clinician)
+                        .contentType(JSON)
+                        .content(write(nonNarcotic)))
+                .andExpect(status().isBadRequest());
+
+        // 麻精 + 合格第二核对人（存在/在职/非本人/持 m2:record:write）→ 201 并留痕。
+        Map<String, Object> valid = resusBody(started, ended, "SUCCESS");
+        valid.put("drugs", List.of(Map.of("drugName", "舒芬太尼（演示）", "dose", 1,
+                "unit", "mg", "narcotic", true, "secondCheckerId", SCOPE_ID,
+                "secondCheckerName", "演示核对人（合成）")));
+        mockMvc.perform(post("/v1/anesthesia/records/" + recordId + "/resuscitations")
+                        .header("Authorization", "Bearer " + clinician)
+                        .contentType(JSON)
+                        .content(write(valid)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.drugs[0].narcotic").value(true))
+                .andExpect(jsonPath("$.drugs[0].secondCheckerId").value(SCOPE_ID))
+                .andExpect(jsonPath("$.drugs[0].secondCheckerName").value("演示核对人（合成）"));
+
+        Map<String, Object> detail = latestAuditDetail("RESCUE_RECORD");
+        assertThat(detail).containsEntry("narcoticCount", 1)
+                .containsEntry("secondCheckCount", 1);
+        assertThat(detail.toString()).doesNotContain("演示核对人", "演示负责人", "演示护士");
     }
 
     // --------------------------------------------------- 数据范围与无权限 --
@@ -751,6 +889,7 @@ class AlertRescueApiIntegrationTest extends AbstractApiIntegrationTest {
 
     private void clearSchedules() {
         jdbcTemplate.update("DELETE FROM m1_sched.notification_outbox");
+        jdbcTemplate.update("DELETE FROM m0_platform.sys_message");
         jdbcTemplate.execute("ALTER TABLE m1_sched.schedule_change_request DISABLE TRIGGER USER");
         try {
             jdbcTemplate.update("DELETE FROM m1_sched.schedule_change_request");
@@ -979,7 +1118,8 @@ class AlertRescueApiIntegrationTest extends AbstractApiIntegrationTest {
         body.put("rescuers", List.of(
                 Map.of("userId", CLIN_ID, "name", "演示负责人（合成）"),
                 Map.of("name", "演示护士（合成）")));
-        body.put("drugs", List.of(Map.of("drugName", "肾上腺素（演示）", "dose", 1, "unit", "mg",
+        // M9-01：抢救用药经药品字典判定（演示字典中的非麻精药品）。
+        body.put("drugs", List.of(Map.of("drugName", "丙泊酚（演示）", "dose", 1, "unit", "mg",
                 "route", "IV",
                 "administeredAt", startedAt.plusSeconds(30).atOffset(ZoneOffset.UTC).toString())));
         body.put("outcome", outcome);

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -46,6 +47,7 @@ import com.anesop.m2.impl.persistence.entity.RecordEventEntity;
 import com.anesop.m2.impl.persistence.mapper.AnesthesiaRecordMapper;
 import com.anesop.m2.impl.persistence.mapper.DrugAdministrationMapper;
 import com.anesop.m2.impl.persistence.mapper.FluidRecordMapper;
+import com.anesop.m2.impl.vital.VitalSignReadPort;
 import com.anesop.m2.impl.config.RecordProperties;
 import com.anesop.m2.impl.persistence.mapper.RecordEventMapper;
 import com.anesop.m2.impl.support.ClinicalFailureAuditor;
@@ -120,6 +122,8 @@ class AnesthesiaRecordServiceImplTest {
     private ClinicalFailureAuditor failureAuditor;
     @Mock
     private DrugDictionaryService drugDictionary;
+    @Mock
+    private VitalSignReadPort vitalSignReadPort;
 
     private static final UUID CHECKER =
             UUID.fromString("e0000000-0000-4000-8000-000000000003");
@@ -131,7 +135,9 @@ class AnesthesiaRecordServiceImplTest {
         service = new AnesthesiaRecordServiceImpl(recordMapper, eventMapper, drugMapper, fluidMapper,
                 schedulingService, threeWayCheckService, auditWriter, new ObjectMapper(),
                 Clock.fixed(NOW, ZoneOffset.UTC), authService, userAdminService, failureAuditor,
-                drugDictionary, new RecordProperties(600));
+                drugDictionary, vitalSignReadPort, new RecordProperties(600));
+        lenient().when(vitalSignReadPort.read(any(), any(), any()))
+                .thenReturn(VitalSignReadPort.Window.empty());
     }
 
     // --------------------------------------------------------------- create --

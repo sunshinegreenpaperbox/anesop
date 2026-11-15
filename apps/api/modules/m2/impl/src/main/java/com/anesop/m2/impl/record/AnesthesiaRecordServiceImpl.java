@@ -44,6 +44,7 @@ import com.anesop.m2.impl.persistence.mapper.DrugAdministrationMapper;
 import com.anesop.m2.impl.persistence.mapper.FluidRecordMapper;
 import com.anesop.m2.impl.persistence.mapper.RecordEventMapper;
 import com.anesop.m2.impl.support.ClinicalFailureAuditor;
+import com.anesop.m2.impl.vital.VitalSignReadPort;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -131,6 +132,7 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
     private final UserAdminService userAdminService;
     private final ClinicalFailureAuditor failureAuditor;
     private final DrugDictionaryService drugDictionary;
+    private final VitalSignReadPort vitalSignReadPort;
     private final RecordProperties properties;
 
     @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
@@ -148,6 +150,7 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
             UserAdminService userAdminService,
             ClinicalFailureAuditor failureAuditor,
             DrugDictionaryService drugDictionary,
+            VitalSignReadPort vitalSignReadPort,
             RecordProperties properties) {
         this.recordMapper = recordMapper;
         this.eventMapper = eventMapper;
@@ -162,6 +165,7 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
         this.userAdminService = userAdminService;
         this.failureAuditor = failureAuditor;
         this.drugDictionary = drugDictionary;
+        this.vitalSignReadPort = vitalSignReadPort;
         this.properties = properties;
     }
 
@@ -792,7 +796,13 @@ public class AnesthesiaRecordServiceImpl implements AnesthesiaRecordService {
             }
         }
         dto.setEvents(legacyEvents);
-        dto.setVitalSigns(List.of());
+        // M9-01：体征由采集落库数据映射（记录时间窗 + 记录单术间），不再恒空；
+        // 未开始（无 startedAt）或术间为空时返回空数组，不伪造数值。
+        VitalSignReadPort.Window vitals = vitalSignReadPort.read(entity.getRoomId(),
+                entity.getStartedAt(),
+                entity.getEndedAt() != null ? entity.getEndedAt() : clock.instant());
+        dto.setVitalSigns(vitals.samples());
+        dto.setVitalSignsTruncated(vitals.truncated());
         dto.setThreeWayCheckCompleted(
                 threeWayCheckService.isThreeWayCheckCompleted(entity.getApplicationId().toString()));
         dto.setCreatedAt(offset(entity.getCreatedAt()));

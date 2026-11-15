@@ -36,9 +36,16 @@ public interface MessagePublisher {
      * @param type            消息类型（必须与注册表模板类型一致；用于防御性显式声明）
      * @param templateCode    {@link MessageTemplates} 中已登记的模板编码
      * @param params          模板参数（键必须是该模板允许的集合，值 ≤200 字符串）
+     * @param dedupeKey       业务投递去重键（可空；非空时同一键只落一条消息，见 V29）
      */
     record MessageCommand(UUID recipientUserId, MessageType type, String templateCode,
-            Map<String, String> params) {
+            Map<String, String> params, String dedupeKey) {
+
+        /** 兼容构造器：不需要去重的系统广播/测试使用。 */
+        public MessageCommand(UUID recipientUserId, MessageType type, String templateCode,
+                Map<String, String> params) {
+            this(recipientUserId, type, templateCode, params, null);
+        }
 
         /** 防御性拷贝：参数 Map 不可变，避免调用方后续修改影响已入队/已落库内容。 */
         public MessageCommand {

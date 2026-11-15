@@ -920,7 +920,8 @@ class SchedulingServiceImplTest {
         verify(notificationPort).publish(eventCaptor.capture());
         assertThat(eventCaptor.getValue().eventType()).isEqualTo("SCHEDULE_STOPPED");
         assertThat(eventCaptor.getValue().payload()).containsOnlyKeys(
-                "scheduleId", "applicationId", "roomId", "changeId", "changeType", "reasonCode", "status");
+                "scheduleId", "applicationId", "roomId", "changeId", "changeType", "reasonCode",
+                "status", "startAt", "endAt");
     }
 
     @Test

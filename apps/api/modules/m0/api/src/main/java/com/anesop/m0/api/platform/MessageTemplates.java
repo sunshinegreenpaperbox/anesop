@@ -50,20 +50,44 @@ public final class MessageTemplates {
     /** 耗材低库存提醒（M8-M4-01 预留）。 */
     public static final String MATERIAL_LOW_STOCK = "MATERIAL_LOW_STOCK";
 
-    private static final Map<String, Template> REGISTRY = Map.of(
-            SYSTEM_BROADCAST, new Template(SYSTEM_BROADCAST, MessageType.SYSTEM, "系统维护通知",
-                    Set.of("deptName")),
-            SCHEDULE_CHANGED, new Template(SCHEDULE_CHANGED, MessageType.SCHEDULE, "台次时间已调整",
-                    Set.of("roomNo", "startAt")),
-            SCHEDULE_STOPPED, new Template(SCHEDULE_STOPPED, MessageType.SCHEDULE, "台次已停台",
-                    Set.of("roomNo")),
-            ALERT_CRITICAL, new Template(ALERT_CRITICAL, MessageType.ALERT, "严重预警提醒",
-                    Set.of("count")),
-            QC_REVIEW_DUE, new Template(QC_REVIEW_DUE, MessageType.QC, "病历抽查待办", Set.of()),
-            TASK_ASSIGNED, new Template(TASK_ASSIGNED, MessageType.TASK, "待办任务提醒",
-                    Set.of("count")),
-            MATERIAL_LOW_STOCK, new Template(MATERIAL_LOW_STOCK, MessageType.ALERT, "耗材库存不足",
-                    Set.of("deptName", "count")));
+    /**
+     * 业务投递模板（M9-01，默认通知矩阵）：改台/急诊加台/停台/严重预警。
+     *
+     * <p>参数只允许标识、术间、时间与原因码（无 PHI）。编码与 m1 NotificationPort 的
+     * 事件映射一一对应；频率/免打扰/升级路径待院方确认（见 docs/modules/m1/README.md）。
+     */
+    public static final String SCHEDULE_CHANGE = "SCHEDULE_CHANGE";
+    /** 急诊加台通知。 */
+    public static final String EMERGENCY = "EMERGENCY";
+    /** 台次停台通知。 */
+    public static final String SCHEDULE_STOP = "SCHEDULE_STOP";
+    /** 严重预警提醒（含未确认）。 */
+    public static final String CRITICAL_ALERT = "CRITICAL_ALERT";
+
+    private static final Map<String, Template> REGISTRY = Map.ofEntries(
+            Map.entry(SYSTEM_BROADCAST, new Template(SYSTEM_BROADCAST, MessageType.SYSTEM,
+                    "系统维护通知", Set.of("deptName"))),
+            Map.entry(SCHEDULE_CHANGED, new Template(SCHEDULE_CHANGED, MessageType.SCHEDULE,
+                    "台次时间已调整", Set.of("roomNo", "startAt"))),
+            Map.entry(SCHEDULE_STOPPED, new Template(SCHEDULE_STOPPED, MessageType.SCHEDULE,
+                    "台次已停台", Set.of("roomNo"))),
+            Map.entry(ALERT_CRITICAL, new Template(ALERT_CRITICAL, MessageType.ALERT,
+                    "严重预警提醒", Set.of("count"))),
+            Map.entry(QC_REVIEW_DUE, new Template(QC_REVIEW_DUE, MessageType.QC,
+                    "病历抽查待办", Set.of())),
+            Map.entry(TASK_ASSIGNED, new Template(TASK_ASSIGNED, MessageType.TASK,
+                    "待办任务提醒", Set.of("count"))),
+            Map.entry(MATERIAL_LOW_STOCK, new Template(MATERIAL_LOW_STOCK, MessageType.ALERT,
+                    "耗材库存不足", Set.of("deptName", "count"))),
+            Map.entry(SCHEDULE_CHANGE, new Template(SCHEDULE_CHANGE, MessageType.SCHEDULE,
+                    "台次时间已调整", Set.of("scheduleId", "roomId", "startAt", "reasonCode"))),
+            Map.entry(EMERGENCY, new Template(EMERGENCY, MessageType.SCHEDULE,
+                    "急诊加台通知", Set.of("scheduleId", "roomId", "startAt", "reasonCode"))),
+            Map.entry(SCHEDULE_STOP, new Template(SCHEDULE_STOP, MessageType.SCHEDULE,
+                    "台次已停台", Set.of("scheduleId", "roomId", "reasonCode"))),
+            Map.entry(CRITICAL_ALERT, new Template(CRITICAL_ALERT, MessageType.ALERT,
+                    "严重预警提醒（待处理）", Set.of("scheduleId", "roomId", "alertId", "metric",
+                            "severity", "triggeredAt"))));
 
     private MessageTemplates() {
     }
@@ -75,6 +99,7 @@ public final class MessageTemplates {
 
     /** 所有已登记模板（只读快照，供文档/自检使用）。 */
     public static Map<String, Template> all() {
-        return REGISTRY;
+        // 防御性不可变副本：避免 SpotBugs MS_EXPOSE_REP 与调用方修改内部注册表。
+        return Map.copyOf(REGISTRY);
     }
 }

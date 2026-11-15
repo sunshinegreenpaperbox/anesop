@@ -6,6 +6,7 @@ import com.anesop.m2.impl.persistence.entity.VitalInsertRow;
 import com.anesop.m2.impl.persistence.entity.VitalRow;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -147,6 +148,31 @@ public interface AnesthesiaVitalMapper {
             """)
     List<VitalRow> selectAlertSamples(@Param("gatewayId") String gatewayId,
             @Param("deviceId") String deviceId,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            @Param("limit") int limit);
+
+    /**
+     * 记录单体征映射用：术间内**全部已登记设备**在记录时间窗内的采样帧（只读）。
+     *
+     * <p>M9-01：记录单 `vitalSigns` 不再恒空。按记录单创建时快照的术间（anesthesia_record.room_id）
+     * 关联 {@code device_registry}，窗口 {@code [from, to]} 含端点，按 measured_at 升序；
+     * {@code limit} 由服务层传 MAX+1 以判定截断。不跨模块读表（设备/体征均在 m2 自身 schema）。
+     */
+    @Select("""
+            SELECT v.seq, v.measured_at, v.hr, v.spo2, v.nibp_sys, v.nibp_dia, v.etco2, v.temp,
+                   v.quality, v.quality_flags
+              FROM m2_anes.anesthesia_vital v
+              JOIN m2_anes.device_registry r
+                ON r.gateway_id = v.gateway_id
+               AND r.device_id = v.device_id
+             WHERE r.room_id = #{roomId}
+               AND v.measured_at >= #{from}
+               AND v.measured_at <= #{to}
+             ORDER BY v.measured_at ASC, v.seq ASC, v.device_id ASC
+             LIMIT #{limit}
+            """)
+    List<VitalRow> selectVitalsByRoom(@Param("roomId") UUID roomId,
             @Param("from") Instant from,
             @Param("to") Instant to,
             @Param("limit") int limit);

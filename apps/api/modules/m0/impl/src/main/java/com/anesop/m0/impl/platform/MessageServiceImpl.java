@@ -18,6 +18,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -57,6 +58,9 @@ public class MessageServiceImpl implements MessageService, MessagePublisher {
     private static final String ACTION_READ_ALL = "MESSAGE_READ_ALL";
     private static final String RESOURCE_TYPE = "MESSAGE";
     private static final Pattern TEMPLATE_CODE = Pattern.compile("^[A-Z][A-Z0-9_]{0,63}$");
+    /** 去重键长度上限（V29 列宽 varchar(200)），字符集只允许标识类字符（无 PHI）。 */
+    private static final int MAX_DEDUPE_KEY_LENGTH = 200;
+    private static final Pattern DEDUPE_KEY = Pattern.compile("^[A-Za-z0-9:._-]{1,200}$");
     private static final TypeReference<Map<String, String>> PARAM_TYPE = new TypeReference<>() {
     };
 
@@ -65,6 +69,8 @@ public class MessageServiceImpl implements MessageService, MessagePublisher {
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
+    @SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+            justification = "Spring 注入的单例 Mapper/写入器/Clock 由容器管理；ObjectMapper 防御性拷贝")
     public MessageServiceImpl(SysMessageMapper messageMapper, AuditWriter auditWriter,
             ObjectMapper objectMapper, Clock authClock) {
         this.messageMapper = messageMapper;
@@ -169,6 +175,7 @@ public class MessageServiceImpl implements MessageService, MessagePublisher {
             throw new M0ValidationException("type", "消息类型与模板注册类型不一致");
         }
         Map<String, String> params = validateParams(template, command.params());
+        String dedupeKey = validateDedupeKey(command.dedupeKey());
 
         SysMessage row = new SysMessage();
         row.setId(UUID.randomUUID());
@@ -178,9 +185,34 @@ public class MessageServiceImpl implements MessageService, MessagePublisher {
         // 标题只来自服务端注册表，调用方无法注入任意文案或 PHI（评审 S-4）。
         row.setTitle(template.title());
         row.setParams(toJson(params));
+        row.setDedupeKey(dedupeKey);
         row.setCreatedAt(Instant.now(clock));
-        messageMapper.insert(row);
-        return row.getId();
+        if (dedupeKey == null) {
+            messageMapper.insert(row);
+            return row.getId();
+        }
+        // M9-01：同一业务事件 + 接收人 + 模板只落一条；并发/重试命中已有键时返回原消息标识。
+        int inserted = messageMapper.insertIgnoreDedupe(row);
+        if (inserted == 1) {
+            return row.getId();
+        }
+        SysMessage existing = messageMapper.selectByDedupeKey(dedupeKey);
+        return existing == null ? row.getId() : existing.getId();
+    }
+
+    /**
+     * 去重键只允许标识类字符（大写/小写字母、数字、冒号、点、下划线、连字符），
+     * 禁止把姓名/住院号/自由文本塞进去；空串视为不去重。
+     */
+    private static String validateDedupeKey(String dedupeKey) {
+        if (dedupeKey == null || dedupeKey.isBlank()) {
+            return null;
+        }
+        if (dedupeKey.length() > MAX_DEDUPE_KEY_LENGTH || !DEDUPE_KEY.matcher(dedupeKey).matches()) {
+            throw new M0ValidationException("dedupeKey",
+                    "去重键只允许字母/数字/冒号/点/下划线/连字符，长度 1–200");
+        }
+        return dedupeKey;
     }
 
     private static Map<String, String> validateParams(MessageTemplates.Template template,
