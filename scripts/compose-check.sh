@@ -417,6 +417,11 @@ else:
                          if re.search(re.escape(m) + r"(?![A-Za-z0-9_])", api_block)]
         emit(not query_markers, "nginx /api/ 访问日志不含 query/请求参数"
              + (f"；发现：{', '.join(query_markers)}" if query_markers else ""))
+        # 上线阻断回归：/api/ 反代必须带末尾斜杠（剥离 /api 前缀），否则后端 /v1/** 全 404。
+        proxy_lines = [ln.strip() for ln in api_block.splitlines() if ln.strip().startswith("proxy_pass")]
+        emit(bool(proxy_lines) and proxy_lines[0].rstrip(";").rstrip().endswith("/"),
+             "nginx /api/ proxy_pass 带末尾斜杠（剥离 /api 前缀，避免后端 404）"
+             + (f"；实际：{proxy_lines[0] if proxy_lines else '缺失'}" if not (bool(proxy_lines) and proxy_lines[0].rstrip(";").rstrip().endswith("/")) else ""))
         emit("anesop_no_query" in api_block and "access_log" in api_block,
              "nginx /api/ 使用自定义 anesop_no_query 访问日志格式"
              if "anesop_no_query" in api_block
