@@ -138,6 +138,18 @@
       <artifactId>spring-boot-starter-jdbc</artifactId>
     </dependency>
 
+    <!--
+      联调模拟器（M5-M19-01）：契约/集成测试在测试 JVM 内真实启动 HIS/药房/SPD HttpServer，
+      仅 test scope，不进入运行时交付物（生产适配器不直接依赖模拟器）。
+      单模块构建 apps/api 前需先安装本模块：见 docs/integration/README.md §2。
+    -->
+    <dependency>
+      <groupId>com.anesop</groupId>
+      <artifactId>anesop-simulators</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+
     <!-- 测试 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

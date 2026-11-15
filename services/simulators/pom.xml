@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    ANESOP 外部系统联调模拟器（M5-M19-01）。
+    独立 Maven 工程，加入根 pom 的 <modules>，用于 HIS/药房/SPD 的 HTTP 联调与契约测试；
+    设备路径复用 services/device-gateway 的 SimulatedDevice（不在此重复实现）。
+    无新增第三方依赖：HTTP 服务端/客户端用 JDK 内置 com.sun.net.httpserver / java.net.http，
+    JSON 用已审批的 jackson-databind（版本由根 pom 的 Boot BOM 锁定）。
+    本模块只产出 SYNTHETIC 合成数据，不连接任何真实外部系统（EXT-01/02/03 为模拟）。
+  -->
+  <parent>
+    <groupId>com.anesop</groupId>
+    <artifactId>anesop-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>anesop-simulators</artifactId>
+  <packaging>jar</packaging>
+
+  <name>ANESOP :: 联调模拟器</name>
+  <description>
+    HIS/药房/SPD 模拟服务（JDK HttpServer）+ 可配置响应/延迟/超时/错误码；
+    供适配器契约测试与 scripts/integration-smoke.sh 使用，全部数据为 SYNTHETIC。
+  </description>
+
+  <dependencies>
+    <!-- JSON：契约 DTO 序列化，版本由 Boot BOM 锁定（allowlist 已登记） -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <!-- 测试：JUnit 5 + AssertJ（HTTP 用例用 JDK HttpClient，不引入 mock 框架） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

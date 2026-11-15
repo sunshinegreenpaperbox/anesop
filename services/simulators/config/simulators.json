@@ -1,0 +1,23 @@
+{
+  "his": {
+    "port": 18081,
+    "latencyMs": 0,
+    "failFirstRequests": 0,
+    "errorStatus": 500,
+    "failureMode": "NONE"
+  },
+  "pharmacy": {
+    "port": 18082,
+    "latencyMs": 0,
+    "failFirstRequests": 0,
+    "errorStatus": 500,
+    "failureMode": "NONE"
+  },
+  "spd": {
+    "port": 18083,
+    "latencyMs": 0,
+    "failFirstRequests": 0,
+    "errorStatus": 503,
+    "failureMode": "NONE"
+  }
+}

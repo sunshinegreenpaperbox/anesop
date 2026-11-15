@@ -25,6 +25,8 @@
   <description>ANESOP 麻醉信息平台父 POM：版本锁定与构建基线</description>
 
   <modules>
+    <!-- 联调模拟器（M5-M19-01）：api-bootstrap 的契约测试以 test scope 依赖本模块 -->
+    <module>services/simulators</module>
     <module>apps/api</module>
     <module>services/device-gateway</module>
   </modules>

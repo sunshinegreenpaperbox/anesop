@@ -9,9 +9,9 @@
 
 | 层 | 技术 | 目标占比 | 当前落点 |
 |---|---|---|---|
-| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端全 reactor **1100** 个用例（含集成，2026-11-15）、前端 **167** 个用例（33 文件） |
+| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 **apps/api 1147** 个用例（含契约 16，2026-11-15 实测）+ 模拟器 **36**、前端 **179** 个用例（35 文件，2026-11-15 实测） |
 | 集成 | Spring Boot Test + 嵌入式 PostgreSQL 16（Zonky）/ Testcontainers | ≈20% | 迁移、MyBatis、认证越权、审计、网关幂等与断网补传 |
-| 契约 | spectral + oasdiff（Java DTO 反序列化用例） | — | `apps/api/api-contracts/src/test` |
+| 契约 | spectral + oasdiff（Java DTO 反序列化）+ 适配器↔模拟器字段映射 | — | `apps/api/api-contracts/src/test`；`apps/api/api-bootstrap/src/test/.../integration`（§13） |
 | E2E | Playwright（Chromium） | 关键路径 | **42 条**（首页 3 + 登录/越权 6 + M1 11 + M2 14 + M4 8）；E2E-01–05 见 §6，临床专项矩阵见 §9，管理域专项见 §11 |
 
 比例是目标而非硬门禁；骨架期没有业务域，集成/E2E 占比会随后续里程碑上升。
@@ -105,7 +105,7 @@ pnpm e2e
 - 阈值：行 ≥70%、分支 ≥55%；排除 `src/api/generated/**`、`src/env.d.ts`、`src/main.ts`、
   `src/**/__tests__/**`
 - 用例：`apps/web/src/__tests__/**` 与各模块 `__tests__/**`（含 M4 药品/五专/人员/耗材/报表/质控页）
-- 实测：**167/167 通过**（33 个测试文件，2026-11-15），语句 75.80%、分支 73.55%、函数 78.09%、行 78.26%（M4 页面新增行摊薄，仍高于 70/55 门禁）
+- 实测：**179/179 通过**（35 个测试文件，2026-11-15），语句 76.83%、分支 73.81%、函数 79.12%、行 79.24%（仍高于 70/55 门禁）
 - 断言可失败：标题、文案、路由 path/name 均为精确值；不使用恒真断言
 
 ## 6. E2E 清单与落地计划
@@ -319,8 +319,48 @@ pnpm e2e
 - 遗留项：药品/耗材 CSV 导出（契约未定义）；M4 模块 README 中已登记的【待确认】口径
   （R1–R5 映射、统计权重、质控指标清单）不因本专项改变，仍按 ADR-0018…0022 待院方确认。
 
+## 13. 集成联调与契约测试（M5-M19-01，发布准入）
+
+> 依据：`docs/integration/README.md`。EXT-01/02/03/04 真实系统不可用，用 `services/simulators`
+> 的 JDK `HttpServer` 模拟器锁定**适配器字段映射与异常语义**（SYNTHETIC，只绑定 127.0.0.1）；
+> 平台生产适配器仍为进程内模拟（无外部 I/O）。契约测试通过 **不等于**真实接口已验证（见 §F）。
+
+| 准入项 | 断言（可失败） | 用例 |
+|---|---|---|
+| 模拟器启动/停止/配置 | `start` JSON（UP/端口/请求数）、`status`、`stop`、端口 0、非法配置 fail-closed、端口冲突快速失败 | `services/simulators` **36** 用例（含 `SimulatorsMain --self-test`、延迟/错误码/前 N 次失败/非法 JSON 注入） |
+| HIS 字段映射（EXT-01） | 外部字段集合完全一致；19 字段映射；`F/M/U` 与 `择期/限期/急诊` 值域；患者主索引与申请一致；`POST /v1/scheduling/applications` 201、重复 409；创建/变更回调 | `HisSimulatorContractTest`（真实 HttpServer + 嵌入式 PG + 真实 API） |
+| 药房字段映射（EXT-02） | 目录字段映射 → `POST /v1/drugs` 201、重复 409；库存/发药（409 不足、404）；适配器状态映射满足 `drug.yaml` required 且与 API 语义一致 | `PharmacySimulatorContractTest` |
+| SPD 字段映射（EXT-03） | 目录映射 → `POST /v1/materials` 201、重复 409；同 `idempotencyKey` 同回执；回执/状态映射满足 `material.yaml` required 且与 API 一致 | `SpdSimulatorContractTest` |
+| 错误/超时/重试/降级 | 5xx 重试 3 次（attempts=3）；4xx 不重试（attempts=1）；超时 attempts=2 后降级；降级字段 `available=false/degraded=true/pendingSyncCount=1/lastSyncedAt=null`、`success=false/counts=0`；降级不阻塞平台主链路 | 上述 3 类 + `WireMapperContractTest`（值域与缺失字段 fail-closed） |
+| 设备（EXT-04） | TCP 协议 v1 解析/标准化/断网补传幂等 | 复用 `services/device-gateway` 既有测试；`scripts/simulators.sh device` 封装 `SimulatedDevice` |
+| 端到端联调冒烟 | 模拟器 + 独立 PG16 + `test` profile API：health UP → 登录 → EXT-02/EXT-03 状态 → 模拟器目录创建药品/耗材 → HIS 申请导入 → 申请列表 | `bash scripts/integration-smoke.sh`（退出码 0 + `[integration-smoke] OK`） |
+
+覆盖率（逐模块 JaCoCo 门禁 70%/55%）：`services/simulators` 实测 **97.28% 行 / 83.46% 分支**
+（36 用例，2026-11-15）。契约测试为 test 作用域代码，不参与模块覆盖率统计。
+
+运行：
+
+```bash
+source scripts/env.sh
+# 模拟器单元 + 覆盖率 + Checkstyle/SpotBugs
+./scripts/mvn.sh -B -f services/simulators/pom.xml verify
+# 契约测试（真实模拟器 + 嵌入式 PG16 + 真实 API）
+./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am \
+  -Dtest='HisSimulatorContractTest,PharmacySimulatorContractTest,SpdSimulatorContractTest,WireMapperContractTest' \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+# 端到端冒烟（首次构建 2–5 分钟，之后复用产物）
+bash scripts/integration-smoke.sh
+```
+
+阻断规则：任一契约/冒烟用例失败（含 flaky）→ 阻断 M5 联调验收；不得 `@Disabled` 或放宽断言。
+`api-bootstrap` 以 test 作用域依赖 `anesop-simulators`：根 reactor 自动先构建；只构建 `apps/api`
+时先 `./scripts/mvn.sh -B -f services/simulators/pom.xml install`。
+
 ## 12. 变更记录
 
+- 2026-11-15（M5-M19-01）：新增 §13 集成联调与契约测试矩阵；新增 `services/simulators`
+  （36 用例，97.28%/83.46%）与 4 类契约测试；新增 `scripts/simulators.sh`、
+  `scripts/integration-smoke.sh`；E2E 不变（42 条）。
 - 2026-11-15（M4-QA-01）：新增 `M4AcceptanceTest`（权限矩阵/授权治理/数据范围/5 类 CSV/
   五专对账/UDI 追溯/报表与质控手算，8 条）；新增 E2E `m4-narcotic-reconcile.spec.ts`
   （日结 409 差异 → 修正平账）与 `m4-qc-export.spec.ts`（指标导出请求/脱敏提示）；新增 §11 管理域
