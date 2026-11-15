@@ -2,6 +2,10 @@ package com.anesop.m0.impl.migration;
 
 import com.anesop.m0.impl.persistence.handler.UuidTypeHandler;
 import com.anesop.m0.impl.persistence.mapper.SysAuditLogMapper;
+import com.anesop.m0.impl.persistence.mapper.SysDictItemMapper;
+import com.anesop.m0.impl.persistence.mapper.SysDictMapper;
+import com.anesop.m0.impl.persistence.mapper.SysFileMapper;
+import com.anesop.m0.impl.persistence.mapper.SysMessageMapper;
 import com.anesop.m0.impl.persistence.mapper.SysRoleMapper;
 import com.anesop.m0.impl.persistence.mapper.SysUserMapper;
 import com.anesop.m0.impl.persistence.mapper.SysUserOrgMapper;
@@ -47,6 +51,11 @@ final class MybatisTestSupport {
         sqlSessionFactory.getConfiguration().addMapper(SysRoleMapper.class);
         sqlSessionFactory.getConfiguration().addMapper(SysUserOrgMapper.class);
         sqlSessionFactory.getConfiguration().addMapper(SysUserRoomMapper.class);
+        // M8-M0-04：字典/消息/文件元数据 Mapper（platform 服务集成测试）。
+        sqlSessionFactory.getConfiguration().addMapper(SysDictMapper.class);
+        sqlSessionFactory.getConfiguration().addMapper(SysDictItemMapper.class);
+        sqlSessionFactory.getConfiguration().addMapper(SysMessageMapper.class);
+        sqlSessionFactory.getConfiguration().addMapper(SysFileMapper.class);
         return sqlSessionFactory;
     }
 }

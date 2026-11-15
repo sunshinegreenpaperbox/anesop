@@ -7,6 +7,11 @@ spring:
       - classpath:db/seed/demo
 
 anesop:
+  m0:
+    file:
+      # 自动化测试：文件落 target/test-files（构建产物，不进源码树），每个用例可清理。
+      root-dir: target/test-files
+      max-size-bytes: 20971520
   m2:
     acquisition:
       # 自动化测试专用 SYNTHETIC 网关令牌（仅测试类路径，不是生产密钥，禁止复用）。

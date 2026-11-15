@@ -6,7 +6,8 @@
 
 - schema：`m0_platform`（本模块独占；其他模块只能经 `m0-api` 访问，禁止直连本 schema 的表）
 - 迁移：`db/migration/V1__m0_platform_init.sql`（结构）、`V2__m0_platform_seed_synthetic.sql`（平台预置基线，无账号）、
-  `V3__m0_auth_token.sql`（刷新令牌表 + `m0:auth:read`/`m0:auth:write` 权限点 + `sys_user.phone_hash`，S0-07）
+  `V3__m0_auth_token.sql`（刷新令牌表 + `m0:auth:read`/`m0:auth:write` 权限点 + `sys_user.phone_hash`，S0-07）、
+  `V27__m0_dict_message_file.sql`（`sys_message`/`sys_file` + 字典读索引 + 字典/消息/文件权限点，M8-M0-04）
 - 演示种子：`db/seed/demo/V100__demo_admin_synthetic.sql`（仅 dev/test 独立 location）
 - 规范与运行方式：`docs/db/README.md`；演示账号：`docs/db/seed.md`
 
@@ -21,6 +22,8 @@
 | `sys_audit_log` | 只追加审计；触发器拒绝 UPDATE/DELETE/TRUNCATE；留存 ≥ 6 个月 |
 | `sys_dict_type` / `sys_dict_item` | 字典；同类型内 code 唯一 |
 | `sys_refresh_token` | 刷新令牌（SHA-256 哈希、有效期、撤销时间、客户端信息）；V3 |
+| `sys_message` | 站内消息（收件人隔离、模板编码 + jsonb 参数白名单、read_at）；V27 |
+| `sys_file` | 文件元数据（内容寻址 storage_key、大小/类型白名单、SHA-256、业务关联、逻辑删除）；V27 |
 
 ## 目录与结构
 
@@ -101,3 +104,22 @@ source scripts/env.sh
   Flyway 运行时与 prod 启动断言。接口与权限点详见 `docs/modules/m0/README.md`。
   注意：实体主键为 `UUID` + `IdType.INPUT`，插入前由应用层赋值
   （MyBatis-Plus `ASSIGN_UUID` 只支持 String 主键；DB `gen_random_uuid()` 仅兜底直连 SQL）。
+
+## 字典 / 消息 / 文件（M8-M0-04）
+
+| 层 | 类 | 说明 |
+|---|---|---|
+| api | `com.anesop.m0.api.platform.DictService` | 全院读、管理员写、编码不可变、逻辑停用 |
+| api | `MessageService` / `MessagePublisher` | 消息仅本人；写入只走内部发布器（无任意发送端点） |
+| api | `MessageTemplates` | 模板注册表：code → 类型/固定标题/参数白名单，服务端渲染标题 |
+| api | `FileService` / `FileStorage` / `FileDownload` | 文件类型/大小白名单、内容寻址、可见性下载、我的文件 |
+| api | `FileBusinessVisibilityPort` | 业务对象数据范围端口（m1/m2 适配由 api-bootstrap 装配） |
+| impl | `com.anesop.m0.impl.platform.*` | 三个服务 + `LocalFileStorage` + `MinioFileStorage`（EXT-06 占位） |
+| impl | `com.anesop.m0.impl.config.FileProperties` | `anesop.m0.file.root-dir`（默认 `.cache/files`）、`max-size-bytes`（≤20 MiB） |
+| web | `DictController`/`MessageController`/`FileController` | 位于 `api-bootstrap`，权限点 + 异常映射 |
+
+- 口径：见 [`docs/modules/m0/README.md`](../../../../docs/modules/m0/README.md) §10 与 ADR-0024。
+- 审计：`DICT_ITEM_CREATE/UPDATE/DISABLE`、`MESSAGE_READ/READ_ALL`、`FILE_UPLOAD/DOWNLOAD`。
+- 测试：`./scripts/mvn.sh -B -f apps/api/pom.xml -pl modules/m0/impl -am test`
+  （`Platform*ServiceTest`）、`-pl api-bootstrap -am -Dtest=M0PlatformApiIntegrationTest test`。
+- 禁止：在本模块存 PHI；把消息当通用通知通道；绕过 `FileStorage` 直接写盘。

@@ -70,6 +70,14 @@ anesop:
       room-daily-available-minutes: ${ANESOP_M1_ANALYTICS_ROOM_DAILY_AVAILABLE_MINUTES:600}
       # 查询最大跨度（含首尾），默认 92 天；配置 >92 时夹紧为 92 并 WARN（契约上限固定 92）。
       max-range-days: ${ANESOP_M1_ANALYTICS_MAX_RANGE_DAYS:92}
+  # M0 公共支撑（M8-M0-04）：字典/消息/文件。文件内容**不进库**，按内容寻址落本地 FS；
+  # 默认目录仓库内 .cache/files（已 gitignore），生产由部署挂载盘注入绝对路径。
+  # 大小上限默认且最大 20 MiB（契约 platform.yaml 0.2.0 固定；配置更大时夹紧，不放宽）。
+  # MinIO 适配器仅接口占位 EXT-06，接入时切换 FileStorage 实现，不改业务代码。
+  m0:
+    file:
+      root-dir: ${ANESOP_M0_FILE_ROOT_DIR:.cache/files}
+      max-size-bytes: ${ANESOP_M0_FILE_MAX_SIZE_BYTES:20971520}
   # M2 术前评分口径（M2-M4-01）。默认值 = 当前实现口径（公开量表）：
   # RCRI 0/1/≥2、Apfel 0–1/2/≥3、STOP-BANG 0–2/3–4/≥5；VO2peak < 14 ≈ <4 METs。
   # 院方口径确认后只改配置并升级 calculator-version（写入 scores.calculatorVersion），

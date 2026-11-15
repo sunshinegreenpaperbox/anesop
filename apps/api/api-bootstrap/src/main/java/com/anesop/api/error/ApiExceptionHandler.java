@@ -24,6 +24,9 @@ import com.anesop.m2.api.preop.PreopConflictException;
 import com.anesop.m2.api.preop.PreopUnprocessableException;
 import com.anesop.m2.api.preop.PreopValidationException;
 import com.anesop.m0.api.audit.AuditWriter;
+import com.anesop.m0.api.platform.M0ConflictException;
+import com.anesop.m0.api.platform.M0UnprocessableException;
+import com.anesop.m0.api.platform.M0ValidationException;
 import com.anesop.m4.api.error.M4ConflictException;
 import com.anesop.m4.api.error.M4UnprocessableException;
 import com.anesop.m4.api.error.M4ValidationException;
@@ -141,6 +144,39 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(DuplicateKeyException.class)
     public ResponseEntity<Error> handleDuplicateKey(DuplicateKeyException exception, HttpServletRequest request) {
+        return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "数据已存在或已被修改", request);
+    }
+
+    /**
+     * 平台能力字段级校验（M8-M0-04：字典/文件字段）：400 {@code PARAM_INVALID}，
+     * field 由异常携带，文案由服务端固定提供；不回显 Base64 原文、文件内容片段或患者标识。
+     */
+    @ExceptionHandler(M0ValidationException.class)
+    public ResponseEntity<Error> handlePlatformValidation(M0ValidationException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "PARAM_INVALID", "请求参数校验失败", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 平台能力业务规则拒绝（M8-M0-04：文件类型/大小）：422 {@code BUSINESS_RULE_VIOLATION}，
+     * field 固定为 contentType/sizeBytes，文案不含文件内容。
+     */
+    @ExceptionHandler(M0UnprocessableException.class)
+    public ResponseEntity<Error> handlePlatformUnprocessable(M0UnprocessableException exception,
+            HttpServletRequest request) {
+        return response(HttpStatus.UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION",
+                "业务规则拒绝", request,
+                List.of(ErrorResponses.detail(exception.field(), exception.getMessage())));
+    }
+
+    /**
+     * 平台能力状态冲突（M8-M0-04：字典项编码重复/并发更新）：409 {@code STATE_CONFLICT}，
+     * 不回显冲突编码值。
+     */
+    @ExceptionHandler(M0ConflictException.class)
+    public ResponseEntity<Error> handlePlatformConflict(M0ConflictException exception,
+            HttpServletRequest request) {
         return response(HttpStatus.CONFLICT, "STATE_CONFLICT", "数据已存在或已被修改", request);
     }
 
