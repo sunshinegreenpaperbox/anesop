@@ -2,9 +2,9 @@
 
 > 对应 [`docs/acceptance/ACCEPTANCE.md`](../acceptance/ACCEPTANCE.md) C 项：初始化合成数据 →
 > 登录 → 排程 → 术前 → 术中 → 复苏 → 随访 → 统计 → 质控 → 驾驶舱。
-> **当前 S0（M1 前）只实现 M0 公共支撑与采集网关 POC**；排程及之后的业务步骤标注为
-> 「待 M1/M2/…」，给出届时使用的契约与入口，不伪造已实现能力。
-> 所有数据为 `SYNTHETIC` 合成数据，禁止使用真实患者信息。
+> S0 交付了 M0 公共支撑与采集网关 POC；M1–M8 业务模块已按契约落地，全模块演示数据
+> 由 [`scripts/seed-demo-data.sh`](../../scripts/seed-demo-data.sh) 通过真实 REST API 灌入，
+> 见第 6 节。所有数据为 `SYNTHETIC` 合成数据，禁止使用真实患者信息。
 
 ## 0. 前置条件与可用性
 
@@ -175,36 +175,111 @@ psql "postgresql://anesop:anesop@127.0.0.1:5432/anesop" -c "
 # 预期：行数等于推送帧数（重复推送不增加，唯一键 device_id+seq+measured_at 幂等）
 ```
 
-## 6. 完整业务流程（M1/M2 起逐段可用）
+## 6. 全模块演示数据一键灌入（已可用）
+
+> 用真实 REST API（非 SQL 直插）写入覆盖各环节的 `SYNTHETIC` 数据，走业务校验、状态机、
+> 审计与消息通知，适合演示前快速铺数据。仅用于本地/演示库，生产/预发/uat 禁止执行。
+
+### 6.1 用法
+
+```bash
+# 前置：API 已启动且 /actuator/health = UP（见第 2 节）
+bash scripts/seed-demo-data.sh --dry-run        # 只打印计划，不写数据
+bash scripts/seed-demo-data.sh                  # 默认 http://127.0.0.1:8080
+bash scripts/seed-demo-data.sh --base-url http://127.0.0.1:8080
+
+# 口令可覆盖（默认值仅本地演示）：
+DEMO_ADMIN_PASSWORD='当前口令' \
+DEMO_ADMIN_NEW_PASSWORD='Anesop@2026#Demo' \
+bash scripts/seed-demo-data.sh
+```
+
+脚本先 `curl /actuator/health`，再以 `demo_admin` 登录；若 `mustChangePassword=true` 自动改密
+并重新登录（旧/新口令可用环境变量覆盖）。`demo_self` 仅用于消息中心未读校验，同样支持
+`DEMO_SELF_PASSWORD` / `DEMO_SELF_NEW_PASSWORD`。数量可用 `SEED_HIS_IMPORT_COUNT`、
+`SEED_APP_COUNT`、`SEED_PREOP_COUNT`、`SEED_DRUG_COUNT`、`SEED_MATERIAL_COUNT`、
+`SEED_STAFF_COUNT` 调整（低于流程下限时自动抬到下限）。
+
+### 6.2 生成内容（默认值）
+
+| 模块 | 内容 |
+|---|---|
+| M1 申请 | HIS 模拟导入 3 条（`MOCK_HIS`/`simulated=true`）+ 手工申请 15 条，覆盖择期/限期/急诊、多术式/年龄；2 条取消为 `CANCELLED` |
+| M1 排程 | ≥8 个台次，覆盖今天/明天/后天、多个术间与序号；改台（PUT）、停台、急诊抢占加台、冲突检测（409）+ 改期解决、台次取消各 1 条 |
+| M2 术前 | 访视评估 6 份（ASA I–IV、Mallampati I–IV、RCRI/Apfel/STOP-BANG/DASI 组合），1 份 finalize；知情同意 10 份（签署 8、拒绝 1、签署后撤销 1）；三方核查 8 个申请 + 1 个申请多版本（先 Time-out、再补 Sign-out） |
+| M2 术中 | 记录单 5 张：锁定+修订 1、锁定 2、进行中 1、草稿 1；事件覆盖麻醉开始/诱导/插管/切皮/拔管/结束；麻精用药 1（第二核对人 `demo_self`）+ 普通用药 1；输液/出入量各 1；抢救 1；告警评估 2 次；锁单后写入被 409 拒绝（状态机验证） |
+| M2 复苏/随访 | 复苏 3 份（Aldrete 10/9/9，1 份转出 WARD）；随访 3 份（H24/H48、NRS/PONV）；PCIA/PCEA 参数各 1 |
+| M4 药品/麻精 | 新增药品 5（麻精 2、高危/镇静/升压等，含别名）；麻精专册、柜交接、基数、日结各 1（日结平账 `5+2-2-0=5`） |
+| M4 人员 | 人员档案 4、分级授权 R1–R5（R1/R2 双人审批）、排班 4、培训 4（1 条 20 天内到期）；另建 2 个 SYNTHETIC 审批账号 `demo_approver_1/2`（SYS_ADMIN，仅本地） |
+| M4 耗材 | 主数据 5、出入库 8（高值耗材只走 UDI，不允许裸数量）、UDI 5（1 已使用并绑定进行中记录）、SPD 模拟同步 1 |
+| M4 报表/质控 | 工作量、多维各查询 1；锁定快照 1；不良事件 + RCA + 复核 1；病历抽查 + 整改 + 闭环 1 |
+| M5 看板 | `realtime` / `kpi` / `risk` / `resources` 各查询 1 |
+| 消息中心 | 停台/改台/急诊触发通知 outbox，轮询 `demo_self` 未读消息 ≥1 |
+
+### 6.3 可重复执行与边界
+
+- 业务数据（申请、台次、记录、随访、质控等）**每次追加**，单号带批次后缀（`SYNTHETIC-…-<batch>`）；
+  主数据（药品/人员/耗材/审批账号）按编码/用户名去重，已存在则跳过。
+- 排程时段有限：反复灌入会逐渐占满术间时段，晚期运行可能出现「当日无空闲时段」跳过；
+  需要干净的全量演示时请重建演示库（见第 8 节）。
+- 已知接口边界（脚本不绕过）：当前 API 没有申请 `ACCEPTED`/`SCHEDULED` 流转端点，排程后申请仍为
+  `SUBMITTED`，脚本覆盖 `SUBMITTED` 与 `CANCELLED`；未配置设备网关令牌时告警评估采样 0 帧、
+  新增告警为 0（接口仍返回 200）；RCA 复核仅到阶段 1（`rectificationCompleted=false` 为服务端约束）。
+- 失败会打印脱敏后的响应并最终非零退出；不输出 token/口令/患者标识。
+
+### 6.4 快速抽查
+
+```bash
+BASE=http://127.0.0.1:8080
+TOKEN=$(curl -s -X POST "$BASE/v1/auth/login" -H 'Content-Type: application/json' \
+  -d '{"username":"demo_admin","password":"Anesop@2026#Demo"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["accessToken"])')
+curl -s "$BASE/v1/scheduling/schedules?date=$(date +%F)&page=1&size=50" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head
+curl -s "$BASE/v1/reports/workload?from=$(date +%Y-%m-01)&to=$(date +%F)&dimension=DEPT" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head
+curl -s "$BASE/v1/dashboard/realtime" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head
+curl -s "$BASE/v1/qc/adverse-events?page=1&size=5" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head
+```
+
+记录单按台次查询：`GET /v1/anesthesia/records?scheduleId=<台次ID>`（契约必填），再用
+`/events`、`/pacu-records?recordId=`、`/followups?recordId=` 查看时间轴、复苏与随访。
+
+## 7. 完整业务流程（M1/M2 起逐段可用）
 
 | # | ACCEPTANCE C 步骤 | 契约/入口（已存在） | 现状 | 预期结果（落地后） |
 |---|---|---|---|---|
-| 2 | 排程工作台新建/调整台次、制造并解决冲突 | `packages/contracts/openapi/scheduling.yaml` | **待 M1** | 冲突返回 409 `SCHEDULE_CONFLICT`，调整后 200 |
-| 3 | 术前访视 → 风险评分 → 知情同意 → 三方核查 | `anesthesia.yaml`、`patient.yaml` | **待 M2** | 访视单保存、评分回显、核查三方签名占位 |
-| 4 | 术中开始记录 → 设备推送 → 预警 → 用药/事件 → 锁单 → 修订 | `anesthesia.yaml` + 采集网关 | 采集链路已可用（第 5 节）；记录单/预警/锁单**待 M2** | 记录单锁定后不可改；修订留痕、版本递增 |
-| 5 | 复苏 → 转出 → 术后随访 | `anesthesia.yaml`（随访已定义） | **待 M2** | 复苏记录、转出时间、随访表单 |
-| 6 | 质控指标与工作量报表 → 驾驶舱大屏 | 暂无契约（M6/M7/M8） | **待 M6/M7/M8** | 指标口径可配置、报表 <10s、大屏实时刷新 |
+| 2 | 排程工作台新建/调整台次、制造并解决冲突 | `scheduling.yaml` | **已可用**（第 6 节脚本覆盖改台/停台/急诊/冲突） | 冲突 409 `SCHEDULE_CONFLICT`，调整后 200 |
+| 3 | 术前访视 → 风险评分 → 知情同意 → 三方核查 | `anesthesia.yaml`、`patient.yaml` | **已可用** | 访视单保存、评分回显、同意签署/拒绝/撤销、三方核查多版本 |
+| 4 | 术中开始记录 → 设备推送 → 预警 → 用药/事件 → 锁单 → 修订 | `anesthesia.yaml` + 采集网关 | **已可用**；设备推送需配置网关令牌 | 锁定后不可改；修订留痕、版本递增；锁单前校验同意/三方核查 |
+| 5 | 复苏 → 转出 → 术后随访 | `anesthesia.yaml` | **已可用** | 复苏 Aldrete、转出、H24/H48 随访与镇痛参数 |
+| 6 | 质控指标与工作量报表 → 驾驶舱大屏 | `report.yaml`、`qc.yaml`、`dashboard.yaml` | **已可用** | 工作量/多维报表、锁定快照、质控闭环、看板四接口 |
 | 7 | 审计日志查询任意关键操作 | 表 `m0_platform.sys_audit_log` | **已可用**（第 4 节） | 操作人/时间/对象/结果/traceId 可追溯 |
 
-演示时的诚实口径：**S0 能演示的是 M0 登录/权限/审计与采集链路；排程、麻醉记录、统计、
-质控、驾驶舱尚未实现**，对应菜单/接口 404 或占位页是预期行为，不作为缺陷记录。
+演示口径：M1–M8 主链路已可用；告警依赖设备采集（未配令牌时评估采样 0 帧）、HIS/SPD
+为 `SIMULATED` 适配器，演示时应明确标注“模拟/合成”。
 
-## 7. 演示后清理
+## 8. 演示后清理
 
 ```bash
 # 停止 API / 网关 / 前端（Ctrl-C）
-# 演示库如不再使用，先备份再重建；不要在生产库执行 seed-demo
-# 缓冲目录（网关）
+bash scripts/demo-local.sh stop
 rm -rf data/buffer
+
+# 重建本地演示库（清空全部演示数据；仅限 .cache/demo-pg 本地库）
+# 先确认当前目录是仓库根，且没有指向任何真实数据库
+rm -rf .cache/demo-pg/data .cache/demo-pg/pids
+bash scripts/demo-local.sh start
 ```
 
-- `demo_admin` 的初始口令只用于本地演示；改密后请记录新口令，或重建演示库。
+- `seed-demo-data.sh` 每次追加业务数据；如要回到干净状态，按上面步骤重建演示库。
+- `demo_admin`/`demo_self` 的初始口令只用于本地演示；改密后请记录新口令，或重建演示库。
+- 脚本会创建 SYNTHETIC 审批账号 `demo_approver_1/2`（SYS_ADMIN），仅用于分级授权双人审批；
+  重建演示库即删除，禁止在生产/预发复用。
 - 演示截图/录屏不得包含真实患者信息；本脚本只产生 `SYNTHETIC` 数据。
-- 生产/预发环境禁止执行 `seed-demo.sh`（脚本会拒绝疑似 prod/uat/staging 库名）。
+- 生产/预发环境禁止执行 `seed-demo.sh` / `seed-demo-data.sh`。
 
-## 8. 相关文档
+## 9. 相关文档
 
 - 数据与账号：[`docs/db/seed.md`](../db/seed.md)、[`docs/db/README.md`](../db/README.md)
+- 全模块演示数据脚本：[`scripts/seed-demo-data.sh`](../../scripts/seed-demo-data.sh)
 - M0 接口与权限：[`docs/modules/m0/README.md`](../modules/m0/README.md)
 - 采集网关协议与指标：[`docs/gateway/README.md`](../gateway/README.md)
 - 验收标准：[`docs/acceptance/ACCEPTANCE.md`](../acceptance/ACCEPTANCE.md)

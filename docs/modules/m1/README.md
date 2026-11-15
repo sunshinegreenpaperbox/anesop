@@ -272,6 +272,10 @@ COMPLETED / CANCELLED ──stop────────────────
   `m0_platform.sys_org.id`）；`ROOM` 按 `sys_user_room` 绑定术间；`SELF` 按申请创建人；
   `ROOM`/无有效绑定/`SELF` 看术间 → 403 或不可见，fail-closed；单对象越界一律 404。
 
+- 演示数据：`scripts/seed-demo-data.sh` 通过 M1 REST API 生成 HIS 模拟导入、手术申请
+  （择期/限期/急诊、取消）与排程台次（改台/停台/急诊抢占/冲突解决），全部为 `SYNTHETIC`；
+  用法见 [`docs/guides/demo.md`](../../guides/demo.md) §6。
+
 ## 7. 权限与审计
 
 - V7 新增 `m1:application:read`（SYS_ADMIN、SYS_OR_MANAGER、SYS_SURGEON）、

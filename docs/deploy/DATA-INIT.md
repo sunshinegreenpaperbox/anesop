@@ -2,7 +2,9 @@
 
 > 依据：方案书 §3.4/§3.6（数据与字典）、`AGENTS.md`「数据闸门」「上线闸门」、
 > `docs/db/seed.md`（种子分层与演示账号）、`db/migration/README.md`（迁移纪律）。
-> 工具：`scripts/init-data.sh`（M6-M20-02）；演示脚本仍可用 `scripts/seed-demo.sh`。
+> 工具：`scripts/init-data.sh`（M6-M20-02）；演示脚本仍可用 `scripts/seed-demo.sh`；
+> 全模块业务演示数据（申请/排程/术前/记录/复苏/随访/药品/人员/耗材/报表/质控/看板）
+> 见 `scripts/seed-demo-data.sh`，用法与生成内容见 [`../guides/demo.md`](../guides/demo.md) §6。
 > 关联：[`DEPLOYMENT.md`](DEPLOYMENT.md)（发布步骤）、[`GO-LIVE-CHECKLIST.md`](GO-LIVE-CHECKLIST.md)
 > （数据项）、[`../db/README.md`](../db/README.md)（迁移规范）。
 
