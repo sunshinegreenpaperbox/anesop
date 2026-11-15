@@ -12,6 +12,11 @@ m0/
 ├── views/LoginView.vue           # /login
 ├── views/ChangePasswordView.vue  # /m0/password（首次登录强制）
 ├── views/SessionsView.vue        # /m0/sessions
+├── views/DictManageView.vue      # /m0/dicts（M8-M0-04，仅 m0:dict:write）
+├── views/MessageCenterView.vue   # /m0/messages（M8-M0-04，未读角标/已读）
+├── views/FileCenterView.vue      # /m0/files（M8-M0-04，我的文件 + 上传/下载示例）
+├── components/FileUploadPanel.vue # 文件上传组件（business-type/business-id 复用入口）
+├── api/platform.ts                # 字典/消息/文件客户端（platform.yaml 0.2.0）
 └── README.md
 ```
 
@@ -36,7 +41,9 @@ pnpm e2e           # 3 条壳冒烟（不依赖后端）
 
 ## 约定
 
-- 跨模块复用只经 `packages/ui`（展示组件）与 `src/api/generated/`（契约类型）；
+- 跨模块复用只经 `packages/ui`（展示组件）与 `packages/contracts` 生成类型（本目录 `api/platform.ts` 引用 `@anesop/contracts/platform`）；
+- 文件上传组件复用：`<FileUploadPanel business-type="SCHEDULE" :business-id="caseId" />`（排程页）、
+  `business-type="RECORD"`（记录页）；权限与 PHI 禁令由后端强制，见 ADR-0024；
 - 禁止引用其他 `src/modules/mX` 的内部文件；
 - 路由按模块注册，菜单与权限由 S0-08 统一装配。
 
@@ -96,6 +103,22 @@ auth 生成类型，禁止手改生成物。
 | `views/LoginView.vue` | `/login` | 公开 | 账号/口令登录，回车提交，展示契约 `Error` 的 code/message/traceId；`mustChangePassword=true` 跳改密 |
 | `views/ChangePasswordView.vue` | `/m0/password` | 登录 | 旧口令 + 新口令（12–128，四类取三），成功后清会话重新登录 |
 | `views/SessionsView.vue` | `/m0/sessions` | `m0:auth:read` | 当前账号会话分页列表（只读，强制下线留 M1） |
+| `views/DictManageView.vue` | `/m0/dicts` | `m0:dict:write` | 字典类型/字典项维护（仅 SYS_ADMIN）：新增/编辑/逻辑停用、含停用项开关 |
+| `views/MessageCenterView.vue` | `/m0/messages` | `m0:message:read` | 当前用户消息分页、未读角标、单条/全部已读、只看未读 |
+| `views/FileCenterView.vue` | `/m0/files` | `m0:file:read` | 我的文件列表（只显示本人上传）、文件上传（`FileUploadPanel` 复用示例）、按 ID 查询元数据与鉴权下载 |
 
 页面不直接调用 `fetch`，一律经 `src/api/http.ts`（Bearer、`X-Trace-Id`、超时、401 单飞刷新重放）。
 菜单与路由守卫见 `src/navigation.ts`、`src/router/index.ts`，约定见 `docs/ui/README.md`。
+
+## 字典 / 消息 / 文件（M8-M0-04）
+
+- 契约：`packages/contracts/openapi/platform.yaml` 0.2.0；类型 `@anesop/contracts/platform`。
+- 权限：字典维护 `m0:dict:write`（仅 SYS_ADMIN）、消息 `m0:message:read`、文件 `m0:file:read|write`。
+- 未读角标来自 `GET /v1/messages` 的 `unreadCount`（服务端权威，不受过滤/分页影响）；
+  侧边菜单与消息中心共享 `src/stores/message.ts`，无 `m0:message:read` 时不请求消息接口。
+- 我的文件来自 `GET /v1/files`（只返回当前用户上传，服务端生成 `file-<id>.<ext>` 展示名）。
+- 文件上传/下载：仅 PDF/CSV/TXT/PNG/JPEG、≤20 MiB；**禁止 PHI**（DICOM/视频/身份证明/
+  含患者标识表格）；病毒扫描占位 EXT-07、MinIO 占位 EXT-06。下载越权：缺模块权限 403、
+  业务对象超数据范围 404（页面按错误体展示 code/message）。
+- 测试：`pnpm test:unit`（`DictManageView`/`MessageCenterView`/`FileUploadPanel`/`FileCenterView`/
+  `NavigationBadge`/`platformApi`）；E2E `apps/web/e2e/m0-messages.spec.ts`。

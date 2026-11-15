@@ -1,14 +1,28 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMenuStore } from '../stores/menu'
+import { useMessageStore } from '../stores/message'
 import MenuIcon from './MenuIcon.vue'
 
 defineProps<{ collapsed: boolean }>()
 
 const route = useRoute()
 const menu = useMenuStore()
+const message = useMessageStore()
 const activePath = computed(() => route.path)
+const unreadBadge = computed(() => (message.unreadCount > 99 ? '99+' : String(message.unreadCount)))
+
+onMounted(() => {
+  void message.refresh()
+})
+// 每次导航刷新角标（轻量 1 条分页请求），保证在其他页面也能看到最新未读数。
+watch(
+  () => route.path,
+  () => {
+    void message.refresh()
+  },
+)
 </script>
 
 <template>
@@ -22,7 +36,16 @@ const activePath = computed(() => route.path)
     >
       <el-menu-item v-for="item in menu.visibleMenus" :key="item.path" :index="item.path">
         <MenuIcon :name="item.icon" />
-        <template #title>{{ item.title }}</template>
+        <template #title>
+          <span class="side-menu__label">{{ item.title }}</span>
+          <el-badge
+            v-if="item.path === '/m0/messages' && message.unreadCount > 0"
+            :value="unreadBadge"
+            :max="99"
+            class="side-menu__badge"
+            data-testid="nav-unread-badge"
+          />
+        </template>
       </el-menu-item>
     </el-menu>
   </nav>
@@ -62,5 +85,17 @@ const activePath = computed(() => route.path)
 
 .side-menu__list :deep(.el-menu-item:focus-visible) {
   box-shadow: var(--anesop-shadow-focus);
+}
+
+.side-menu__label {
+  flex: 1 1 auto;
+}
+
+.side-menu__badge {
+  margin-left: var(--anesop-space-2);
+}
+
+.side-menu__badge :deep(.el-badge__content) {
+  border: none;
 }
 </style>

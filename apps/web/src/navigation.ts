@@ -164,6 +164,24 @@ export const appMenu: readonly MenuEntry[] = [
     icon: 'sessions',
     permissions: ['m0:auth:read'],
   },
+  {
+    path: '/m0/dicts',
+    title: '字典管理',
+    icon: 'lock',
+    permissions: ['m0:dict:write'],
+  },
+  {
+    path: '/m0/messages',
+    title: '消息中心',
+    icon: 'sessions',
+    permissions: ['m0:message:read'],
+  },
+  {
+    path: '/m0/files',
+    title: '文件管理',
+    icon: 'lock',
+    permissions: ['m0:file:read'],
+  },
   { path: '/m0/password', title: '修改口令', icon: 'lock' },
 ]
 

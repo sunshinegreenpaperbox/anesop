@@ -3,6 +3,9 @@ import MainLayout from '../layout/MainLayout.vue'
 import LoginView from '../modules/m0/views/LoginView.vue'
 import ChangePasswordView from '../modules/m0/views/ChangePasswordView.vue'
 import SessionsView from '../modules/m0/views/SessionsView.vue'
+import DictManageView from '../modules/m0/views/DictManageView.vue'
+import MessageCenterView from '../modules/m0/views/MessageCenterView.vue'
+import FileCenterView from '../modules/m0/views/FileCenterView.vue'
 import ApplicationListView from '../modules/m1/views/ApplicationListView.vue'
 import ApplicationDetailView from '../modules/m1/views/ApplicationDetailView.vue'
 import ScheduleBoardView from '../modules/m1/views/ScheduleBoardView.vue'
@@ -288,6 +291,24 @@ export const routes: RouteRecordRaw[] = [
         name: 'm0-sessions',
         component: SessionsView,
         meta: menuMeta('/m0/sessions'),
+      },
+      {
+        path: 'm0/dicts',
+        name: 'm0-dicts',
+        component: DictManageView,
+        meta: menuMeta('/m0/dicts'),
+      },
+      {
+        path: 'm0/messages',
+        name: 'm0-messages',
+        component: MessageCenterView,
+        meta: menuMeta('/m0/messages'),
+      },
+      {
+        path: 'm0/files',
+        name: 'm0-files',
+        component: FileCenterView,
+        meta: menuMeta('/m0/files'),
       },
       {
         path: 'm0/password',
