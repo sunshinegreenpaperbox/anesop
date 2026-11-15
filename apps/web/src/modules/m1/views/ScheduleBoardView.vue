@@ -19,6 +19,7 @@ import {
   type ScheduleConflict,
   type UpdateScheduleRequest,
 } from '../api/m1'
+import { listAnesthesiaRecords } from '../../m2/api/m2'
 import { ApiError } from '../../../api/http'
 import { formatLocalDate } from '../utils/date'
 import { useAuthStore } from '../../../stores/auth'
@@ -80,6 +81,23 @@ const form = ref<ScheduleForm>({
 const canWrite = computed(() => auth.hasPermission('m1:schedule:write'))
 const canReadRecord = computed(() => auth.hasPermission('m2:record:read'))
 const canApprove = computed(() => auth.hasPermission('m1:schedule:approve'))
+/** 台次卡片「流程入口」按各环节读权限逐项显示；缺权限直接不渲染，避免 403 跳转。 */
+const canPreopRead = computed(() => auth.hasPermission('m2:preop:read'))
+const canConsentRead = computed(() => auth.hasPermission('m2:consent:read'))
+const canThreeWayRead = computed(() => auth.hasPermission('m2:threeway:read'))
+const canPacuRead = computed(() => auth.hasPermission('m2:pacu:read'))
+const canFollowupRead = computed(() => auth.hasPermission('m2:followup:read'))
+const hasFlowEntries = computed(
+  () =>
+    canPreopRead.value ||
+    canConsentRead.value ||
+    canThreeWayRead.value ||
+    canReadRecord.value ||
+    canPacuRead.value ||
+    canFollowupRead.value,
+)
+/** 复苏/随访需先按台次换 recordId，请求期间禁用入口避免重复点击。 */
+const flowLoading = ref(false)
 
 /** 停台原因码白名单（与契约 0.5.0/服务端一致）。 */
 const stopReasonOptions = [
@@ -502,6 +520,61 @@ function openRecord(schedule: Schedule): void {
   void router.push(`/m2/records/${schedule.scheduleId}`)
 }
 
+/** 术前访视/知情同意/三方核查均以申请标识为路由参数。 */
+function openApplicationStep(schedule: Schedule, step: 'preop' | 'consent' | 'three-way'): void {
+  void router.push(`/m2/${step}/${schedule.applicationId}`)
+}
+
+/**
+ * 复苏/随访以麻醉记录单标识为路由参数：先按台次查询记录单，取第一条。
+ * 无记录时提示先创建记录单，不跳转；查询失败展示错误并保留卡片。
+ */
+async function openRecordStep(schedule: Schedule, step: 'pacu' | 'followup'): Promise<void> {
+  if (flowLoading.value) return
+  flowLoading.value = true
+  error.value = null
+  try {
+    const result = await listAnesthesiaRecords(schedule.scheduleId)
+    const record = result.items[0]
+    if (!record) {
+      ElMessage.warning('请先创建麻醉记录单')
+      return
+    }
+    const target = step === 'pacu' ? 'pacu' : 'followups'
+    void router.push(`/m2/${target}/${record.recordId}`)
+  } catch (caught) {
+    error.value = toApiError(caught)
+  } finally {
+    flowLoading.value = false
+  }
+}
+
+type FlowCommand = 'preop' | 'consent' | 'threeway' | 'record' | 'pacu' | 'followup'
+
+/** 台次卡片「流程入口」统一分发；command 与下拉项一一对应。 */
+function handleFlowCommand(command: string, schedule: Schedule): void {
+  switch (command as FlowCommand) {
+    case 'preop':
+      openApplicationStep(schedule, 'preop')
+      break
+    case 'consent':
+      openApplicationStep(schedule, 'consent')
+      break
+    case 'threeway':
+      openApplicationStep(schedule, 'three-way')
+      break
+    case 'record':
+      openRecord(schedule)
+      break
+    case 'pacu':
+      void openRecordStep(schedule, 'pacu')
+      break
+    case 'followup':
+      void openRecordStep(schedule, 'followup')
+      break
+  }
+}
+
 async function openHistory(schedule: Schedule): Promise<void> {
   historySchedule.value = schedule
   historyItems.value = []
@@ -646,6 +719,55 @@ onMounted(() => {
               <span class="board__mono">{{ schedule.patientNo }}</span>
             </div>
             <div class="board__item-actions">
+              <el-dropdown
+                v-if="hasFlowEntries"
+                trigger="click"
+                :disabled="flowLoading"
+                data-testid="flow-menu"
+                @command="(command: string) => handleFlowCommand(command, schedule)"
+              >
+                <el-button size="small" text type="primary" data-testid="flow-menu-trigger">
+                  流程入口
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-if="canPreopRead" command="preop" data-testid="flow-preop">
+                      术前访视
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="canConsentRead"
+                      command="consent"
+                      data-testid="flow-consent"
+                    >
+                      知情同意
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="canThreeWayRead"
+                      command="threeway"
+                      data-testid="flow-threeway"
+                    >
+                      三方核查
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="canReadRecord"
+                      command="record"
+                      data-testid="flow-record"
+                    >
+                      麻醉记录
+                    </el-dropdown-item>
+                    <el-dropdown-item v-if="canPacuRead" command="pacu" data-testid="flow-pacu">
+                      复苏记录（PACU）
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="canFollowupRead"
+                      command="followup"
+                      data-testid="flow-followup"
+                    >
+                      术后随访
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
               <el-button
                 v-if="canReadRecord"
                 size="small"

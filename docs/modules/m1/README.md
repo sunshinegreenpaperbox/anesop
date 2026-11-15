@@ -111,6 +111,29 @@ ADR-0011 增补与 `docs/api/README.md` §3.2 登记；强类型诉求记为 Q�
 状态不允许排程。时间窗非法（结束不晚于开始或时长不在 1–1440 分钟）统一 400，不再以 409
 `TIME_WINDOW_INVALID` 返回（该枚举值保留给内部规则防御）。
 
+### 3.2.1 台次卡片 → 各环节入口（前端）
+
+排程工作台 `/m1/schedule` 的台次卡片提供「流程入口」下拉（Element Plus `el-dropdown`，
+`data-testid="flow-menu"`），按当前账号权限**逐项渲染**，无权限项不渲染，避免把用户送到 403 页面：
+
+| 入口 | 权限点 | 路由 | 参数来源 |
+|---|---|---|---|
+| 术前访视 | `m2:preop:read` | `/m2/preop/{applicationId}` | 台次 `applicationId` |
+| 知情同意 | `m2:consent:read` | `/m2/consent/{applicationId}` | 台次 `applicationId` |
+| 三方核查 | `m2:threeway:read` | `/m2/three-way/{applicationId}` | 台次 `applicationId` |
+| 麻醉记录 | `m2:record:read` | `/m2/records/{scheduleId}` | 台次 `scheduleId` |
+| 复苏（PACU） | `m2:pacu:read` | `/m2/pacu/{recordId}` | 先 `GET /v1/anesthesia/records?scheduleId=` 取记录单 |
+| 术后随访 | `m2:followup:read` | `/m2/followups/{recordId}` | 同上取记录单 |
+
+- 申请维度入口（访视/同意/三方核查）直接使用台次上的 `applicationId`；记录维度入口
+  （复苏/随访）先按 `scheduleId` 查询该台次记录单并取第一条：无记录单时提示
+  `请先创建麻醉记录单` 且不跳转；查询失败在页面内展示错误码/追踪号，卡片保留。
+- 麻醉记录保留原快捷按钮（`data-testid="record-link"`），下拉内同时提供同一入口；
+  两处均按 `m2:record:read` 显示。
+- 权限点归属 M2，M1 不新增权限；入口仅做前端可见性控制，服务端仍按各模块契约鉴权。
+- 记录页 `/m2/records/{scheduleId}` 的状态区已提供「复苏记录（PACU）」「术后随访」按钮
+  （同样按 `m2:pacu:read`/`m2:followup:read` 显示），使用当前 `recordId` 跳转，与排程工作台入口一致。
+
 ## 4. 状态机
 
 ### 4.1 手术申请

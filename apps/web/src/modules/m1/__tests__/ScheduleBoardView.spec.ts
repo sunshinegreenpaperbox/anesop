@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import ElementPlus, { ElMessageBox } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ScheduleBoardView from '../views/ScheduleBoardView.vue'
 import { formatLocalDate } from '../utils/date'
@@ -78,6 +78,25 @@ function mountBoard() {
   return mount(ScheduleBoardView, {
     global: { plugins: [pinia, router, ElementPlus] },
   })
+}
+
+const anesthesiaRecordId = '12000000-0000-4000-8000-000000000001'
+
+/** 打开台次卡片的「流程入口」下拉（Element Plus 下拉内容 teleport 到 body）。 */
+async function openFlowMenu(wrapper: ReturnType<typeof mountBoard>): Promise<void> {
+  await wrapper.find('[data-testid="flow-menu-trigger"]').trigger('click')
+  await flushPromises()
+}
+
+function flowItem(testId: string): HTMLElement | null {
+  return document.body.querySelector<HTMLElement>(`[data-testid="${testId}"]`)
+}
+
+async function clickFlowItem(testId: string): Promise<void> {
+  const item = flowItem(testId)
+  expect(item).not.toBeNull()
+  item?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await flushPromises()
 }
 
 describe('ScheduleBoardView 排程工作台', () => {
@@ -552,5 +571,130 @@ describe('ScheduleBoardView 排程工作台', () => {
     await link.trigger('click')
 
     expect(pushSpy).toHaveBeenCalledWith(`/m2/records/${schedule.scheduleId}`)
+  })
+
+  it('有权限时流程入口显示申请维度环节并跳转 applicationId 路由', async () => {
+    resetAppState()
+    seedAuthenticatedUser(
+      syntheticUser({
+        permissions: ['m1:schedule:read', 'm2:preop:read', 'm2:consent:read', 'm2:threeway:read'],
+      }),
+    )
+    await router.push('/m1/schedule')
+    const queue = createFetchQueue([jsonResponse(roomList), jsonResponse(schedulePage)])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined as never)
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await openFlowMenu(wrapper)
+
+    expect(flowItem('flow-preop')).not.toBeNull()
+    expect(flowItem('flow-consent')).not.toBeNull()
+    expect(flowItem('flow-threeway')).not.toBeNull()
+    // 缺 m2:record:read / m2:pacu:read / m2:followup:read：对应项不渲染。
+    expect(flowItem('flow-record')).toBeNull()
+    expect(flowItem('flow-pacu')).toBeNull()
+    expect(flowItem('flow-followup')).toBeNull()
+
+    await clickFlowItem('flow-preop')
+    expect(pushSpy).toHaveBeenLastCalledWith(`/m2/preop/${schedule.applicationId}`)
+
+    await openFlowMenu(wrapper)
+    await clickFlowItem('flow-consent')
+    expect(pushSpy).toHaveBeenLastCalledWith(`/m2/consent/${schedule.applicationId}`)
+
+    await openFlowMenu(wrapper)
+    await clickFlowItem('flow-threeway')
+    expect(pushSpy).toHaveBeenLastCalledWith(`/m2/three-way/${schedule.applicationId}`)
+
+    wrapper.unmount()
+  })
+
+  it('无流程读权限时整组入口不渲染，仅渲染有权限的环节项', async () => {
+    resetAppState()
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:schedule:read'] }))
+    await router.push('/m1/schedule')
+    configureHttp({
+      fetchImpl: createFetchQueue([jsonResponse(roomList), jsonResponse(schedulePage)]).fetchImpl,
+    })
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="flow-menu"]').exists()).toBe(false)
+    expect(flowItem('flow-preop')).toBeNull()
+    expect(flowItem('flow-pacu')).toBeNull()
+    wrapper.unmount()
+
+    resetAppState()
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:schedule:read', 'm2:preop:read'] }))
+    await router.push('/m1/schedule')
+    configureHttp({
+      fetchImpl: createFetchQueue([jsonResponse(roomList), jsonResponse(schedulePage)]).fetchImpl,
+    })
+
+    const partialWrapper = mountBoard()
+    await flushPromises()
+    await openFlowMenu(partialWrapper)
+
+    expect(flowItem('flow-preop')).not.toBeNull()
+    expect(flowItem('flow-consent')).toBeNull()
+    expect(flowItem('flow-threeway')).toBeNull()
+    expect(flowItem('flow-record')).toBeNull()
+    expect(flowItem('flow-pacu')).toBeNull()
+    expect(flowItem('flow-followup')).toBeNull()
+
+    partialWrapper.unmount()
+  })
+
+  it('复苏入口先按台次查询记录单，再跳转记录单维度路由', async () => {
+    resetAppState()
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:schedule:read', 'm2:pacu:read'] }))
+    await router.push('/m1/schedule')
+    const queue = createFetchQueue([
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+      jsonResponse({ items: [{ recordId: anesthesiaRecordId, scheduleId: schedule.scheduleId }] }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined as never)
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await openFlowMenu(wrapper)
+    expect(flowItem('flow-pacu')).not.toBeNull()
+    expect(flowItem('flow-followup')).toBeNull()
+
+    await clickFlowItem('flow-pacu')
+
+    expect(queue.calls[2]?.url).toBe(`/api/v1/anesthesia/records?scheduleId=${schedule.scheduleId}`)
+    expect(pushSpy).toHaveBeenLastCalledWith(`/m2/pacu/${anesthesiaRecordId}`)
+    wrapper.unmount()
+  })
+
+  it('无麻醉记录单时随访入口提示先创建记录单且不跳转', async () => {
+    resetAppState()
+    seedAuthenticatedUser(syntheticUser({ permissions: ['m1:schedule:read', 'm2:followup:read'] }))
+    await router.push('/m1/schedule')
+    const queue = createFetchQueue([
+      jsonResponse(roomList),
+      jsonResponse(schedulePage),
+      jsonResponse({ items: [] }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined as never)
+    const warningSpy = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+
+    const wrapper = mountBoard()
+    await flushPromises()
+    await openFlowMenu(wrapper)
+    expect(flowItem('flow-followup')).not.toBeNull()
+
+    await clickFlowItem('flow-followup')
+
+    expect(queue.calls[2]?.url).toBe(`/api/v1/anesthesia/records?scheduleId=${schedule.scheduleId}`)
+    expect(warningSpy).toHaveBeenCalledWith('请先创建麻醉记录单')
+    expect(pushSpy).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })
