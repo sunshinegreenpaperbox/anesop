@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ApiError } from '../../../api/http'
+import type { components as authComponents } from '@anesop/contracts/auth'
+import { ApiError, http } from '../../../api/http'
 import { useAuthStore } from '../../../stores/auth'
 import {
   acknowledgeAlert,
@@ -86,6 +87,10 @@ const ANESTHESIA_TYPES = [
   { value: 'LOCAL', label: '局部麻醉' },
   { value: 'SEDATION', label: '镇静/监护麻醉' },
 ] as const
+
+/** 候选核对人只取脱敏用户摘要（auth.yaml UserSummary，不含手机号明文）。 */
+type UserSummaryPage = authComponents['schemas']['UserSummaryPage']
+type CheckerCandidate = { userId: string; username: string; displayName: string }
 
 const route = useRoute()
 const router = useRouter()
@@ -195,6 +200,49 @@ const drugForm = reactive({
 /* S-4：用药名称接 /v1/drugs/search 字典联想；麻精标志只读、来自字典（T-4），
  * 保留自由文本时提交前解析，未收录/歧义直接提示，不把客户端声明当作判定依据。 */
 const drugDictionaryMatch = ref<DrugDictionaryItem | null>(null)
+
+/* M8-QA-01（E2E-05）：第二位核对人下拉。候选来自 /v1/auth/users（需 m0:user:read，
+ * 仅用户管理只读角色可用）；无权限或加载失败时降级为手工填写标识与姓名。
+ * 服务端仍强制校验：存在/在职/非本人/持 m2:record:write，前端校验只做提前提示。 */
+const checkerCandidates = ref<CheckerCandidate[]>([])
+const checkerCandidatesLoading = ref(false)
+const checkerUnavailable = ref(false)
+const canListCheckers = computed(() => auth.hasPermission('m0:user:read'))
+const currentUserId = computed(() => auth.user?.userId ?? '')
+
+async function loadCheckerCandidates(): Promise<void> {
+  if (!canListCheckers.value || checkerCandidates.value.length > 0) return
+  checkerCandidatesLoading.value = true
+  try {
+    const page = await http.get<UserSummaryPage>('/v1/auth/users?page=1&size=200')
+    checkerCandidates.value = page.items
+      .filter((item) => item.status === 'ACTIVE')
+      .map((item) => ({
+        userId: item.userId,
+        username: item.username,
+        displayName: item.displayName,
+      }))
+    checkerUnavailable.value = false
+  } catch {
+    // 403/网络失败不阻断记录单：保留手工填写路径，由服务端做资格校验。
+    checkerUnavailable.value = true
+  } finally {
+    checkerCandidatesLoading.value = false
+  }
+}
+
+/** 选择候选核对人后回填姓名，避免标识与姓名不一致。 */
+function applyCheckerCandidate(userId: string): void {
+  drugForm.secondCheckerId = userId
+  drugForm.secondCheckerName =
+    checkerCandidates.value.find((item) => item.userId === userId)?.displayName ?? ''
+}
+
+/** 给药人展示：候选中可解析显示名时优先，否则回退用户标识（审计口径，不臆造姓名）。 */
+function operatorLabel(userId: string | null | undefined): string {
+  if (!userId) return '—'
+  return checkerCandidates.value.find((item) => item.userId === userId)?.displayName ?? userId
+}
 
 function normalizedDrugName(value: string): string {
   return value.trim().toLocaleLowerCase()
@@ -534,12 +582,19 @@ async function submitDrug(): Promise<void> {
   }
   const dictionary = matches[0]
   applyDictionaryDrug(dictionary)
-  if (
-    drugForm.narcotic &&
-    (!drugForm.secondCheckerId.trim() || !drugForm.secondCheckerName.trim())
-  ) {
-    ElMessage.warning('麻精药品必须双人核对：请填写核对人标识与姓名（不同人）')
-    return
+  if (drugForm.narcotic) {
+    const checkerId = drugForm.secondCheckerId.trim()
+    const checkerName = drugForm.secondCheckerName.trim()
+    if (!checkerId || !checkerName) {
+      ElMessage.warning(
+        '麻精药品必须双人核对：请选择第二位核对人（或在下方手工填写标识与姓名，不得为给药人本人）',
+      )
+      return
+    }
+    if (checkerId === currentUserId.value) {
+      ElMessage.warning('麻精药品双人核对：第二位核对人不得为给药人本人，请选择其他在职用户')
+      return
+    }
   }
   saving.value = true
   try {
@@ -878,6 +933,7 @@ function snapshotText(revision: RecordRevision | null): string {
 
 onMounted(async () => {
   await load()
+  await loadCheckerCandidates()
   startAlertPolling()
 })
 
@@ -1303,8 +1359,19 @@ onUnmounted(stopAlertPolling)
               </el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="给药人" width="170">
+            <template #default="{ row }">
+              <span :data-testid="`drug-operator-${row.drugId}`">{{
+                operatorLabel(row.createdBy)
+              }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="核对人" width="160">
-            <template #default="{ row }">{{ row.secondCheckerName ?? '—' }}</template>
+            <template #default="{ row }">
+              <span :data-testid="`drug-checker-${row.drugId}`">{{
+                row.secondCheckerName ?? '—'
+              }}</span>
+            </template>
           </el-table-column>
         </el-table>
 
@@ -1359,6 +1426,34 @@ onUnmounted(stopAlertPolling)
             </span>
           </el-form-item>
           <template v-if="drugForm.narcotic">
+            <el-form-item label="第二位核对人">
+              <el-select
+                v-model="drugForm.secondCheckerId"
+                data-testid="drug-second-checker"
+                filterable
+                clearable
+                :loading="checkerCandidatesLoading"
+                placeholder="选择在职且持 m2:record:write 的用户（不得为本人）"
+                style="width: 100%"
+                @change="applyCheckerCandidate"
+              >
+                <el-option
+                  v-for="candidate in checkerCandidates"
+                  :key="candidate.userId"
+                  :label="`${candidate.displayName}（${candidate.username}）${candidate.userId === currentUserId ? '·本人' : ''}`"
+                  :value="candidate.userId"
+                />
+              </el-select>
+              <p class="record__hint" data-testid="drug-second-checker-hint">
+                {{
+                  canListCheckers
+                    ? checkerUnavailable
+                      ? '候选核对人加载失败，可手工填写下方标识与姓名'
+                      : '候选来自 /v1/auth/users（在职用户）；提交时服务端校验存在/在职/非本人/持 m2:record:write'
+                    : '当前账号无 m0:user:read，无法加载候选核对人，请在下方手工填写标识与姓名'
+                }}
+              </p>
+            </el-form-item>
             <el-form-item label="核对人标识">
               <el-input
                 v-model="drugForm.secondCheckerId"

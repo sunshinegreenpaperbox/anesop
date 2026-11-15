@@ -13,7 +13,7 @@
 | M8-M0-04 | M0 公共支撑补全：字典 API、消息中心、文件管理 | platform.yaml（新域）、m0 模块、V27、前端 m0 | — | **Done（2026-11-15）** |
 | M8-M4-01 | 耗材库存预警（阈值配置 + 低库存提醒） | m4 模块、V28、material.yaml | M8-M0-04 | **Done（2026-11-15，并入 M8-M4-02 执行；页面预警，不投递消息中心）** |
 | M8-M4-02 | 报表数据锁定/快照（锁定后查询/导出口径） | m4 模块、V28、report.yaml | 院方口径签字 | **Done（2026-11-15）** |
-| M8-QA-01 | E2E-05 麻精双人核对页面流程 | `apps/web/e2e/**`、m4 页面 | M8-M0-04 | Ready |
+| M8-QA-01 | E2E-05 麻精双人核对页面流程 | `apps/web/e2e/**`、`RecordView.vue`（双人核对 UI）、m2 Vitest | M8-M0-04 | **Done（2026-11-15）** |
 | M8-M2-01 | 记录页 `vitalSigns` 直连设备域查询 | m2 模块、anesthesia.yaml | ADR-0016 Q-3 | Blocked（映射口径待临床确认） |
 | M8-M2-02 | 抢救用药麻精判定（强制双人核对） | m2 模块、anesthesia.yaml | ADR-0018/0019 Q | Blocked（临床确认） |
 | M8-DOC-01 | 契约 0.x deprecated 字段/端点清理 | 各契约 1.0.0（major） | ADR-0011、评审 | Ready（1.0.0 前） |
@@ -89,9 +89,22 @@
   （锁定后源数据变化仍为 3 台次/215 分钟、导出 `X-Report-Source=SNAPSHOT`、重复 409、append-only
   55000、审计、无 lock 权限 403、V28 权限与 3 条授权）+ 前端 Vitest 1 + E2E 1。
 
-### M8-QA-01 E2E-05 麻精双人核对页面流程
-- 目标：双人登录/切换、核对签字、拒绝与撤销分支；复用 `M4NarcoticApiIntegrationTest` 的
-  合成数据；E2E 不连真实后端（API 拦截）。
+### M8-QA-01 E2E-05 麻精双人核对页面流程（Done，2026-11-15）
+- **交付**：`apps/web/e2e/m2-narcotic-dual-check.spec.ts` 2 条（SYNTHETIC + API 拦截）：
+  1. 账号 A（麻醉医师/管理员）添加麻精用药 → 未选核对人提示且不发 POST → 下拉选本人（同人）
+     提示且不发 POST → 选择第二核对人（账号 B）提交成功，列表同时显示给药人 A 与核对人 B；
+  2. 账号 B 登录打开同一记录单 → 可见用药/麻精标志/双人核对信息；页头显示 B，用药行显示
+     核对人 B 与给药人 A 标识（B 无 `m0:user:read` 时按审计口径回退标识，不越权取姓名）。
+- **前端**：`RecordView.vue` 用药表单增“第二位核对人”下拉：候选来自 `/v1/auth/users?page=1&size=200`
+  （仅 `m0:user:read` 可加载、仅 ACTIVE 入选项；无权限/失败降级手工填写标识与姓名），选中后
+  自动回填姓名；新增“给药人”列（显示名可解析时优先，否则回退用户标识）；提交前增同人校验
+  （`secondCheckerId === 当前用户`）。麻精标志仍只读、以药品字典为准（T-4）。
+- **边界**：页面提示不替代服务端；真实“存在/在职/非本人/持 `m2:record:write`”与失败审计仍由
+  `AnesthesiaRecordApiIntegrationTest` 覆盖；未改后端/契约/迁移，未新增依赖。
+- **测试证据**：Vitest `RecordView.spec.ts` 新增 2 条（候选加载/同人拦截/他人提交；无权限不请求
+  用户列表且手工填写可提交）；`pnpm test:unit` 205 用例（41 文件）；`pnpm e2e` 49/49（25 spec）；`build`/`lint` 通过。
+- **文档**：`docs/testing/README.md` §6/§9/§15.4、`docs/acceptance/ACCEPTANCE.md` B E2E 行、
+  `FINAL-REPORT.md` §6.2 勾销、§3 B E2E 结论。
 
 ### M8-M2-01 / M8-M2-02
 - 均为临床口径 Blocked（ADR-0016 Q-3、ADR-0018/0019 Q），确认后按契约 minor 升级实现，

@@ -610,3 +610,233 @@ describe('RecordView 麻醉记录单', () => {
     expect(wrapper.find('[data-testid="record-fluid"]').exists()).toBe(false)
   })
 })
+
+/** 候选核对人下拉：点击 el-select 后从 teleport 到 body 的选项中按显示名选择。 */
+async function chooseCheckerOption(
+  wrapper: ReturnType<typeof mountView>,
+  keyword: string,
+): Promise<void> {
+  await wrapper.find('[data-testid="drug-second-checker"] .el-select__wrapper').trigger('click')
+  await settle()
+  const option = Array.from(
+    document.querySelectorAll<HTMLElement>('.el-select-dropdown__item'),
+  ).find((item) => item.textContent?.includes(keyword))
+  expect(option, `候选核对人 ${keyword}`).toBeTruthy()
+  option?.click()
+  await settle()
+}
+
+describe('RecordView 麻精双人核对（E2E-05 页面口径）', () => {
+  beforeEach(async () => {
+    resetAppState()
+    seedAuthenticatedUser(
+      syntheticUser({
+        permissions: [
+          'm0:user:read',
+          'm2:record:read',
+          'm2:record:write',
+          'm2:alert:read',
+          'm2:rescue:write',
+        ],
+      }),
+    )
+    await router.push(`/m2/records/${SCHEDULE_ID}`)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    resetAppState()
+  })
+
+  const usersPage = {
+    items: [
+      {
+        userId: '1000000000000000001',
+        username: 'demo_admin',
+        displayName: '演示管理员（合成）',
+        status: 'ACTIVE',
+        phoneMasked: null,
+        roles: ['SYS_ADMIN'],
+        mustChangePassword: false,
+        createdAt: '2026-11-13T09:00:00+08:00',
+      },
+      {
+        userId: '10000000-0000-4000-8000-000000000002',
+        username: 'synth_checker',
+        displayName: '演示核对护士（合成）',
+        status: 'ACTIVE',
+        phoneMasked: null,
+        roles: ['SYS_NURSE_ANESTHETIST'],
+        mustChangePassword: false,
+        createdAt: '2026-11-13T09:00:00+08:00',
+      },
+      {
+        userId: '10000000-0000-4000-8000-000000000003',
+        username: 'synth_disabled',
+        displayName: '演示停用用户（合成）',
+        status: 'DISABLED',
+        phoneMasked: null,
+        roles: ['SYS_ANESTHESIOLOGIST'],
+        mustChangePassword: false,
+        createdAt: '2026-11-13T09:00:00+08:00',
+      },
+    ],
+    meta: { page: 1, size: 200, total: 3, totalPages: 1 },
+  }
+
+  it('候选来自 /v1/auth/users（仅在职），同人提交被拦截，选择他人后提交成功', async () => {
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({}) as never)
+    const queue = createFetchQueue([
+      ...loadedResponses(),
+      jsonResponse(usersPage),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse(
+        {
+          ...drug,
+          drugId: '14000000-0000-4000-8000-000000000003',
+          drugName: '瑞芬太尼（演示）',
+          secondCheckerId: '10000000-0000-4000-8000-000000000002',
+          secondCheckerName: '演示核对护士（合成）',
+          createdBy: '1000000000000000001',
+        },
+        201,
+      ),
+      jsonResponse({ items: [record] }),
+      jsonResponse({ items: [event] }),
+      jsonResponse({
+        items: [
+          {
+            ...drug,
+            drugId: '14000000-0000-4000-8000-000000000003',
+            drugName: '瑞芬太尼（演示）',
+            secondCheckerId: '10000000-0000-4000-8000-000000000002',
+            secondCheckerName: '演示核对护士（合成）',
+            createdBy: '1000000000000000001',
+          },
+        ],
+      }),
+      jsonResponse({ items: [fluid] }),
+      jsonResponse(summary),
+      jsonResponse(effective),
+      jsonResponse({ items: [alert] }),
+      jsonResponse({ items: [resuscitation] }),
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountView()
+    await settle()
+
+    const usersCall = queue.calls.find((call) => call.url.startsWith('/api/v1/auth/users'))
+    expect(usersCall?.url).toBe('/api/v1/auth/users?page=1&size=200')
+    expect(usersCall?.init?.method).toBe('GET')
+
+    await wrapper.find('[data-testid="drug-name"]').setValue('瑞芬太尼（演示）')
+    await settle()
+
+    // 未选核对人：提示且不发 POST；此时字典已解析出麻精标志，下拉候选可见。
+    await wrapper.find('[data-testid="record-drug"]').trigger('click')
+    await settle()
+    expect(String(warning.mock.calls.at(-1)?.[0])).toContain('双人核对')
+    expect(queue.calls.some((call) => call.init?.method === 'POST')).toBe(false)
+    expect(
+      (wrapper.find('[data-testid="drug-narcotic"] input').element as HTMLInputElement).checked,
+    ).toBe(true)
+    expect(wrapper.find('[data-testid="drug-second-checker"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="drug-second-checker-hint"]').text()).toContain(
+      '/v1/auth/users',
+    )
+
+    // 同人：下拉选中本人仍被拦下。
+    const selfName = '演示管理员（合成）'
+    await chooseCheckerOption(wrapper, selfName)
+    await wrapper.find('[data-testid="record-drug"]').trigger('click')
+    await settle()
+    expect(String(warning.mock.calls.at(-1)?.[0])).toContain('不得为给药人本人')
+    expect(queue.calls.some((call) => call.init?.method === 'POST')).toBe(false)
+
+    // 选择第二核对人（在职）后提交成功，服务端写入双人信息。
+    await chooseCheckerOption(wrapper, '演示核对护士（合成）')
+    expect(
+      (wrapper.find('[data-testid="drug-second-checker-name"]').element as HTMLInputElement).value,
+    ).toBe('演示核对护士（合成）')
+    await wrapper.find('[data-testid="record-drug"]').trigger('click')
+    await settle()
+
+    const postCall = queue.calls.find(
+      (call) => call.url.endsWith('/drugs') && call.init?.method === 'POST',
+    )
+    expect(postCall).toBeTruthy()
+    const body = JSON.parse(String(postCall?.init?.body)) as Record<string, unknown>
+    expect(body).toMatchObject({
+      narcotic: true,
+      secondCheckerId: '10000000-0000-4000-8000-000000000002',
+      secondCheckerName: '演示核对护士（合成）',
+    })
+    const drugList = wrapper.find('[data-testid="drug-list"]').text()
+    expect(drugList).toContain('瑞芬太尼（演示）')
+    expect(drugList).toContain('演示核对护士（合成）')
+    // 给药人（A）与核对人（B）身份同时可见。
+    expect(drugList).toContain('演示管理员（合成）')
+  })
+
+  it('无 m0:user:read 时不请求用户列表，手工填写标识与姓名仍可提交', async () => {
+    resetAppState()
+    seedAuthenticatedUser(
+      syntheticUser({
+        permissions: ['m2:record:read', 'm2:record:write'],
+      }),
+    )
+    await router.push(`/m2/records/${SCHEDULE_ID}`)
+    // 无 m2:alert:read：初始与刷新均为 7 个请求（不含 alerts）。
+    const coreResponses = [
+      jsonResponse({ items: [record] }),
+      jsonResponse({ items: [event] }),
+      jsonResponse({ items: [drug] }),
+      jsonResponse({ items: [fluid] }),
+      jsonResponse(summary),
+      jsonResponse(effective),
+      jsonResponse({ items: [resuscitation] }),
+    ]
+    const queue = createFetchQueue([
+      ...coreResponses,
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse({ items: [dictionaryDrug()] }),
+      jsonResponse(drug, 201),
+      ...coreResponses,
+    ])
+    configureHttp({ fetchImpl: queue.fetchImpl })
+
+    const wrapper = mountView()
+    await settle()
+
+    expect(queue.calls.some((call) => call.url.startsWith('/api/v1/auth/users'))).toBe(false)
+
+    await wrapper.find('[data-testid="drug-name"]').setValue('瑞芬太尼（演示）')
+    await settle()
+    // 先触发一次“缺核对人”，使字典解析出麻精标志、核对人字段渲染。
+    await wrapper.find('[data-testid="record-drug"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="drug-second-checker-hint"]').text()).toContain(
+      '无 m0:user:read',
+    )
+    await wrapper
+      .find('[data-testid="drug-second-checker-id"]')
+      .setValue('10000000-0000-4000-8000-000000000002')
+    await wrapper.find('[data-testid="drug-second-checker-name"]').setValue('演示核对护士（合成）')
+    await wrapper.find('[data-testid="record-drug"]').trigger('click')
+    await settle()
+
+    const postCall = queue.calls.find(
+      (call) => call.url.endsWith('/drugs') && call.init?.method === 'POST',
+    )
+    expect(postCall).toBeTruthy()
+    expect(JSON.parse(String(postCall?.init?.body))).toMatchObject({
+      secondCheckerId: '10000000-0000-4000-8000-000000000002',
+      secondCheckerName: '演示核对护士（合成）',
+    })
+  })
+})

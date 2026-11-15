@@ -9,10 +9,10 @@
 
 | 层 | 技术 | 目标占比 | 当前落点 |
 |---|---|---|---|
-| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 **apps/api 1147** 个用例（含契约 16，2026-11-15 实测）+ 模拟器 **36**、前端 **179** 个用例（35 文件，2026-11-15 实测） |
+| 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 **apps/api 1147** 个用例（含契约 16，2026-11-15 实测）+ 模拟器 **36**、前端 **205** 个用例（41 文件，2026-11-15 实测） |
 | 集成 | Spring Boot Test + 嵌入式 PostgreSQL 16（Zonky）/ Testcontainers | ≈20% | 迁移、MyBatis、认证越权、审计、网关幂等与断网补传 |
 | 契约 | spectral + oasdiff（Java DTO 反序列化）+ 适配器↔模拟器字段映射 | — | `apps/api/api-contracts/src/test`；`apps/api/api-bootstrap/src/test/.../integration`（§13） |
-| E2E | Playwright（Chromium） | 关键路径 | **45 条**（首页 3 + 登录/越权 6 + M1 11 + M2 14 + M4 8 + M5 看板 3）；E2E-01–05 见 §6，临床专项矩阵见 §9，管理域专项见 §11 |
+| E2E | Playwright（Chromium） | 关键路径 | **49 条**（首页 3 + 登录/越权 6 + M0 消息 1 + M1 11 + M2 16 + M4 9 + M5 看板 3）；E2E-01–05 见 §6，临床专项矩阵见 §9，管理域专项见 §11 |
 
 比例是目标而非硬门禁；骨架期没有业务域，集成/E2E 占比会随后续里程碑上升。
 
@@ -105,7 +105,7 @@ pnpm e2e
 - 阈值：行 ≥70%、分支 ≥55%；排除 `src/api/generated/**`、`src/env.d.ts`、`src/main.ts`、
   `src/**/__tests__/**`
 - 用例：`apps/web/src/__tests__/**` 与各模块 `__tests__/**`（含 M4 药品/五专/人员/耗材/报表/质控页）
-- 实测：**179/179 通过**（35 个测试文件，2026-11-15），语句 76.83%、分支 73.81%、函数 79.12%、行 79.24%（仍高于 70/55 门禁）
+- 实测：**205/205 通过**（41 个测试文件，2026-11-15），语句 77.08%、分支 73.92%、函数 79.14%、行 79.48%（仍高于 70/55 门禁）
 - 断言可失败：标题、文案、路由 path/name 均为精确值；不使用恒真断言
 
 ## 6. E2E 清单与落地计划
@@ -116,7 +116,7 @@ pnpm e2e
 | E2E-02 | 采集断网补传 | S0-09 网关、平台 ingest、M2 记录页 | M2 | **已实现**（`m2-device-ingest.spec.ts`，UI+契约拦截；真实 HTTP+PG 见 §9） | 同一 batchKey 重放不重复 → 新 batchKey 补齐可见 → 无权限 403 |
 | E2E-03 | 记录锁单修订 | M2 术中记录、锁单/修订 | M2 | **已实现**（`m2-record-lock.spec.ts`，API 拦截） | 锁单 → 编辑被拒 → 修订版本递增、原值不变 |
 | E2E-04 | 权限越权 | M0 登录/RBAC、受保护页面 | M1 | **已实现（UI 级）**（`auth.spec.ts`） | 低权限路由 → 403；真实 API 403 由集成测试覆盖 |
-| E2E-05 | 麻精药品双人核对 | M5 麻精五专、双人核对 | M5 | **待实现**（依赖 M5；记录单内麻精核对已由 `AnesthesiaRecordApiIntegrationTest` 与 `m2-record.spec.ts` 覆盖数据入口） | 双人登录 → 核对/签字 → 未双人不可发药、留痕完整 |
+| E2E-05 | 麻精药品双人核对 | M5 麻精五专、双人核对 | M5 | **通过（已实现）**（`m2-narcotic-dual-check.spec.ts` 2 条，API 拦截；真实核对规则见 `AnesthesiaRecordApiIntegrationTest`） | 未选/同人核对阻止 → 选择第二核对人提交成功 → 第二核对人登录可见双人信息与两名用户身份 |
 
 当前已落地：
 
@@ -139,15 +139,23 @@ pnpm e2e
   1. 登记设备 → 无网关令牌 401 → 断网缓冲 2 帧上传 → 同 batchKey 重放 `duplicateBatch=true` 且
      `acceptedRows=0` → 记录页体征 2 条（非 4 条）→ 新 batchKey 补 1 帧 → 3 条（非 6 条）；
   2. 无 `m2:device:read` 用户设备查询 403、记录页被路由守卫拦到 `/403`，不渲染患者上下文。
-- `apps/web/e2e/m4-*.spec.ts` 8 条（M4 五域 + QA）：
+- `apps/web/e2e/m2-narcotic-dual-check.spec.ts` **E2E-05** 2 条（M8-QA-01）：
+  1. 账号 A（麻醉医师/管理员）添加麻精用药 → 未选核对人提示且不发 POST → 候选下拉选中本人
+     （同人）提示且不发 POST → 选择第二核对人（账号 B）后提交成功，列表同时显示给药人 A 与
+     核对人 B；候选来自 `/v1/auth/users`，仅 ACTIVE 用户进入下拉；
+  2. 账号 B 重新登录打开同一记录单 → 可见该用药、麻精标志与双人核对信息；页头显示 B，
+     用药行显示核对人 B 与给药人 A 标识（B 无 `m0:user:read` 时按审计口径回退用户标识，不越权取姓名）。
+- `apps/web/e2e/m0-messages.spec.ts` 1 条（M8-M0-04）：消息中心未读角标 → 查看后标记已读。
+- `apps/web/e2e/m4-*.spec.ts` 9 条（M4 五域 + QA）：
   1. `m4-drug.spec.ts` 1 条：药品新建 → 专册双签登记 → 日结平账；
   2. `m4-staff.spec.ts` 1 条：授予授权 → 授权校验通过 → 排班冲突提示；
   3. `m4-material.spec.ts` 1 条：UDI 登记入库 → 绑定记录使用 → 追溯链；
-  4. `m4-report.spec.ts` 2 条：筛选/查询/导出工作量 CSV；无读权限守卫 403；
+  4. `m4-report.spec.ts` 3 条：筛选/查询/导出工作量 CSV；锁定后同参数查询返回快照标识；
+     无读权限守卫 403；
   5. `m4-qc.spec.ts` 1 条：不良事件 RCA 闭环状态逐级前进；
   6. `m4-narcotic-reconcile.spec.ts` 1 条（M4-QA-01）：日结不平 409 → 差异明细 → 修正期末后平账；
   7. `m4-qc-export.spec.ts` 1 条（M4-QA-01）：质控指标按当前区间导出 CSV（`type=indicator`、`Accept: text/csv`、脱敏提示）。
-- `pnpm e2e` 实测 **45/45 通过**（2026-11-15，Chromium，无 flaky；含 M4 8 条 + M5 看板 3 条）。
+- `pnpm e2e` 实测 **49/49 通过**（2026-11-15，Chromium，25 个 spec，无 flaky；含 E2E-05 2 条 + M4 9 条 + M5 看板 3 条）。
 - `apps/web/e2e/m5-dashboard.spec.ts` 2 条 + `m5-dashboard-risk.spec.ts` 1 条（M5-M18-01/02）：
   看板加载 → 手动刷新 → 10s 自动刷新 → 暂停刷新；风险/资源/趋势大屏渲染与刷新；无 `m5:dashboard:read` 守卫跳转 `/403`（接口 URL 计数断言，避免恒真）。
 
@@ -247,7 +255,7 @@ source scripts/env.sh
   -Dtest=ClinicalRecordAcceptanceTest -Dsurefire.failIfNoSpecifiedTests=false test
 # 全量后端门禁（含专项与既有边界用例）
 ./scripts/mvn.sh -B -f apps/api/pom.xml clean verify
-# E2E（含 E2E-01/02/03/04）
+# E2E（含 E2E-01/02/03/04/05）
 pnpm e2e
 ```
 
@@ -255,8 +263,9 @@ pnpm e2e
 - `scripts/ci-local.sh --job e2e-smoke` 已包含 `pnpm e2e`（E2E-02 随之纳入本地门禁），无需改脚本；
   `--fast` 按设计跳过 e2e-smoke，发布前必须单独跑 `pnpm e2e`。
 - E2E-02 为 UI+契约层（见 §6 口径说明）；真实 ingest 幂等以集成测试为准，二者同时通过才算准入。
-- E2E-05（麻精双人核对）依赖 M5，尚未实现；记录单内麻精核对入口已由集成测试与 `m2-record.spec.ts`
-  覆盖，但**不能替代** M5 双人核对准入。
+- E2E-05 为页面流程层（API 拦截，2026-11-15）：页面提示“未选/同人”阻止提交，真实
+  存在/在职/非本人/持 `m2:record:write` 校验与失败审计由 `AnesthesiaRecordApiIntegrationTest`
+  承接；二者同时通过才算麻精双人核对准入。
 
 ## 10. CI 对应关系（S0-04 落地）
 
@@ -389,8 +398,8 @@ bash scripts/compose-check.sh      # nginx/compose 静态校验
 
 实测（2026-11-15）：安全专项 **12/12** 通过；`apps/api` clean verify BUILD SUCCESS
 （1157 用例，14:07）；`security-check.sh` 21/21；`security-scan.sh` OK（0 HIGH/CRITICAL，
-1 条白名单 WARN，镜像清单 9 项）；`compose-check.sh` 34 PASS；`pnpm test:unit` 179/179、
-`pnpm build`/`pnpm lint` 通过、`pnpm e2e` 45/45。
+1 条白名单 WARN，镜像清单 9 项）；`compose-check.sh` 34 PASS；`pnpm test:unit` 205/205、
+`pnpm build`/`pnpm lint` 通过、`pnpm e2e` 49/49。
 
 阻断规则：安全头缺失/CSP 退回 inline script、限流无 429/Retry-After、越权用例失败、
 扫描出现 HIGH/CRITICAL 未登记例外、日志/审计出现口令或令牌 → 阻断发布；不得放宽断言
@@ -465,9 +474,9 @@ bash scripts/compose-check.sh      # nginx/compose 静态校验
 | 准入域 | 项 | 结论 | 证据 | 阻断规则 |
 |---|---|---|---|---|
 | 功能 | M0–M5 五大域验收用例 | 通过 | `AuthAcceptanceFlowTest`、`M4AcceptanceTest`（8）、`M5Dashboard*ApiIntegrationTest`、各域 `*ApiIntegrationTest` | 任一 P0 缺陷未修复 → 阻断 |
-| 功能 | E2E-01…E2E-05 | E2E-01/02/03/04 通过；**E2E-05 麻精双人核对待 M5 页面/双人登录流程**（数据入口已由集成测试覆盖） | `pnpm e2e`（`m1-schedule-conflict`、`m2-device-ingest`、`m2-record-lock`、`auth`、M4×8 等） | E2E-01/02/03/04 任一失败 → 阻断；E2E-05 未实现按遗留登记 |
+| 功能 | E2E-01…E2E-05 | **E2E-01/02/03/04/05 全部通过**（49/49） | `pnpm e2e`（`m1-schedule-conflict`、`m2-device-ingest`、`m2-record-lock`、`auth`、`m2-narcotic-dual-check`、M4×9 等） | E2E-01…05 任一失败（含 flaky）→ 阻断 |
 | 覆盖 | 整体行 ≥70%/分支 ≥55%；核心域（m0 权限审计、m2、gateway）≥80%/70% | 通过 | JaCoCo 门禁（§2）；m0-impl 96.34%/87.52%、gateway 91.68%/77.39% | 低于阈值 → 阻断 |
-| 覆盖 | 前端 Vitest 行 ≥70%/分支 ≥55% | 通过（179/179，76.83%/73.81%） | `pnpm test:unit` | 低于阈值 → 阻断 |
+| 覆盖 | 前端 Vitest 行 ≥70%/分支 ≥55% | 通过（205/205，77.08%/73.92%） | `pnpm test:unit` | 低于阈值 → 阻断 |
 | 性能 | 关键端点本机基准（§15.1，9 项） | 通过（全部中位数 ≤ 上限的 10%） | `PerformanceBenchmarkTest` | 任一中位数超上限 → 阻断 |
 | 性能 | 报表/质控 ≤366 天 / 5000 台次 <5s | 通过（180ms / 126ms；SQL 68ms） | 同上 + `sqlAggregation…` | 超 5s → 阻断 |
 | 性能 | 看板 ≤2s、20 并发轮询 <2s | 通过（18ms；20 并发 309ms） | 同上 + `DashboardPollingStabilityTest` | 超限 → 阻断 |
@@ -484,10 +493,10 @@ bash scripts/compose-check.sh      # nginx/compose 静态校验
 **M5-QA-01 汇总**：性能 9 项、并发 4 组、稳定性 2 条、OWASP 10 项均有可执行证据，
 `apps/api` clean verify BUILD SUCCESS（**1172 用例**，2026-11-15 13:55，14m24s；api-bootstrap 296 含专项 15），
 `security-check.sh` 21/21、`contract-check.sh`/`check-rules.sh` 通过（全量 `check.sh` 未重复跑，
-单项已分别实跑）；前端 `pnpm test:unit` 179/179、`pnpm build`/`pnpm lint`/`vue-tsc` 通过、
-`pnpm e2e` 45/45。**发布准入结论：通过（本地可执行项）**；遗留为 EXT-05（密钥托管）、
-EXT-08（Docker/Trivy 镜像扫描与镜像内 jar CVE）、EXT-01…04（真实外部接口）、
-E2E-05（依赖 M5 双人核对页面）与 §15.1 的本机基线口径（生产容量需 CI/压测环境复核）。
+单项已分别实跑）；前端 `pnpm test:unit` 205/205、`pnpm build`/`pnpm lint`/`vue-tsc` 通过、
+`pnpm e2e` 49/49（含 E2E-05 2 条）。**发布准入结论：通过（本地可执行项）**；遗留为 EXT-05（密钥托管）、
+EXT-08（Docker/Trivy 镜像扫描与镜像内 jar CVE）、EXT-01…04（真实外部接口）
+与 §15.1 的本机基线口径（生产容量需 CI/压测环境复核）。
 
 ### 15.5 复现命令
 

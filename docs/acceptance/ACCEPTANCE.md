@@ -25,7 +25,7 @@
 | 测试 | 覆盖率 整体 ≥70%/55%，核心域 ≥80%/70% | |
 | 契约 | spectral 通过，oasdiff 无破坏性变更 | |
 | 迁移 | 空库迁移、升级迁移双路径通过 | |
-| E2E | 登录、排程冲突、采集断网补传、锁单修订、权限越权、麻精双人核对 | **部分通过**：E2E-01/02/03/04 + 登录/权限/管理域共 **45 条**通过（2026-11-15，`pnpm e2e`）；E2E-05 麻精药品双人核对的“双人登录→核对→签字”页面流程仍为遗留（记录单内麻精核对入口已由 `AnesthesiaRecordApiIntegrationTest` 与 `m2-record.spec.ts` 覆盖） | `apps/web/e2e/**`（21 个 spec）、`docs/testing/README.md` §6 |
+| E2E | 登录、排程冲突、采集断网补传、锁单修订、权限越权、麻精双人核对 | **通过**：E2E-01/02/03/04/05 + 登录/权限/管理域共 **49 条**通过（2026-11-15，`pnpm e2e`，25 个 spec）；E2E-05 覆盖“未选/同人核对阻止 → 选择第二核对人提交 → 第二核对人登录可见双人信息与两名用户身份”，真实核对规则由 `AnesthesiaRecordApiIntegrationTest` 承接 | `apps/web/e2e/**`（25 个 spec）、`docs/testing/README.md` §6 |
 | 性能 | 排程页 1000 条 <2s、报表 <10s（本地基准） | **通过（本机基线，2026-11-15）**：申请列表 5000 台次 page=1&size=100 中位 **52ms**；报表 workload 5000 台次/366 天 **180ms**；质控指标 **126ms**；时间轴 300 事件 **46ms**；锁单 **38ms**；看板 realtime **9ms**；登录 **123ms**；SQL 聚合 **68ms**（9 项上限 2000–5000ms，全部中位数 ≤ 上限的 4%）。并发 4 组、看板 20 并发轮询 **216ms**（<2s）。见 `docs/testing/README.md` §15 |
 | 安全 | 依赖漏洞无 HIGH/CRITICAL；密钥不入库；审计可用 | **通过（本地可执行项）**：`pnpm audit --prod` 0 HIGH/CRITICAL；`security-check.sh` 21 项（密钥占位/默认与 prod fail-closed/日志无 PHI）；安全头与限流专项 12 例；扫描摘要见 `docs/security/README.md`。镜像 Trivy 与 Maven jar CVE 为 EXT-08 |
 | 部署 | `docker compose config` 校验通过；一键起文档完整（Docker 不可用时标环境受限） | **静态通过（2026-11-15，EXT-08）**：`bash scripts/compose-check.sh` 35 PASS/0 FAIL/1 SKIP（Docker 运行时）；上线手册/回滚/检查清单/数据初始化/培训/应急预案齐备（见 §I）；`docker compose config` 与实跑待具备 Docker 的宿主机补 |
@@ -98,7 +98,7 @@
 | 稳定性（10s 轮询 / 无 SSE） | 通过：20 并发看板请求全部 200、总耗时 **216–669ms（<2s，多次运行）**、聚合逐字段一致；看板 4 端点均 `application/json`，无 `text/event-stream`；前端固定 `REFRESH_INTERVAL_MS=10_000` | `DashboardPollingStabilityTest`（2）、`apps/web/src/modules/m5/api/dashboard.ts` |
 | OWASP Top 10 2021 | 通过：A01–A10 逐项“现状/证据/剩余风险/EXT”，每项至少 1 个可失败用例/脚本；未发现未处置 HIGH/CRITICAL | `docs/security/README.md` §7；§14 安全专项 12 例；`security-check.sh` 21/21 |
 | 发布准入矩阵 | 通过（本地可执行项）：功能/覆盖/性能/安全/专项五域逐项结论与阻断规则已落地；阻断项任一失败即不得发布 | `docs/testing/README.md` §15.4；`scripts/performance-smoke.sh` |
-| 遗留 | EXT-05（密钥托管）、EXT-08（Docker/Trivy、镜像内 jar CVE）、EXT-01…04（真实外部接口）、E2E-05（依赖 M5 双人核对页面）；本机基线口径需 CI/压测环境复核 | `docs/security/README.md` §8、`docs/testing/README.md` §15.4 |
+| 遗留 | EXT-05（密钥托管）、EXT-08（Docker/Trivy、镜像内 jar CVE）、EXT-01…04（真实外部接口）；本机基线口径需 CI/压测环境复核 | `docs/security/README.md` §8、`docs/testing/README.md` §15.4 |
 
 > 结论：性能与安全专项“通过（本地可执行项）”；上述遗留不构成代码验收阻断，
 > 但真实接口/镜像扫描/容量复核必须在生产发布前按 EXT 逐项解除。
