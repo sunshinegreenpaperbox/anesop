@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M2/M3/M4/M5 达成**；M6 上线准备完成（6/6，2026-11-15）
-- 当前 Round：38（2026-11-15，M6 上线准备）
-- 最近提交：`docs(docs)` M5 达成收口（tag m5）；M6 变更本轮未提交
-- 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6；M5 5/5；M6 6/6**
-- 进行中：—（M6 完成，待人工上线签字与实时演练；M7 验收准备）
+- 当前里程碑：**M1–M6 达成**；M7 验收完成（代码/文档验收通过，待人工签字）
+- 当前 Round：38（2026-11-15，M7 验收）
+- 最近提交：`docs(acceptance)` M7 验收与 FINAL-REPORT
+- 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6；M5 5/5；M6 6/6；M7 验收完成**
+- 进行中：**自动施工结束**；生产上线/真实联调/人工验收（上线/数据/决策闸门）
 - 阻塞：上线前阻断——nginx `/api` 路径、实时演练、EXT-08 镜像扫描；GitHub 远端未建，CI/CODEOWNERS 未实跑
-- 下一步：M7 验收与 FINAL-REPORT（实时演练/镜像扫描/nginx 路径为上线前阻断项）
+- 下一步：按 `docs/acceptance/FINAL-REPORT.md` §7 执行人工验收与 EXT 解除；遗留见 §6.2
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
