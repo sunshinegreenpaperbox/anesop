@@ -13,7 +13,7 @@
 | M5-M18-02 | 风险与资源大屏（风险分层、利用率、告警聚合、大屏布局） | m5 模块、前端 | M5-M18-01 | Review |
 | M5-M19-01 | 集成联调模拟器与契约测试（HIS/药房/SPD/设备 + Pact/契约测试） | `services/simulators/**`（新建）、apps/api adapter、契约测试 | M4 | Review |
 | M5-M19-02 | 安全加固（CSP/速率限制/依赖扫描/权限复核/审计覆盖） | apps/api 安全配置、deploy/nginx、CI 脚本 | M4 | Review |
-| M5-QA-01 | 性能与安全专项（压测基准、OWASP 清单、并发/幂等回归） | 测试/文档 | M5-M18-01…M5-M19-02 | Blocked |
+| M5-QA-01 | 性能与安全专项（压测基准、OWASP 清单、并发/幂等回归） | 测试/文档 | M5-M18-01…M5-M19-02 | Done |
 
 ## 任务卡要点
 
@@ -108,3 +108,26 @@
   `pnpm test:unit` 179/179、`pnpm build`/`pnpm lint` 通过、`pnpm e2e` 45/45（1.4m）。遗留：多实例限流需 Redis、Maven jar CVE 由 CI 镜像扫描、CSP
   `style-src 'unsafe-inline'`（Element Plus）、`org.springframework:spring-tx` 未登记 allowlist
   （历史缺口，`docs/deps` 不在本任务写域，已登记 WARN）。
+- 执行结果（2026-11-15，M5-QA-01）：性能 9 项基准（`PerformanceBenchmarkTest`，JUnit
+  `System.nanoTime`，预热 1 + 测量 3、中位数对宽松上限断言、证据行
+  `[M5-QA-01][perf]` 输出到 surefire stdout）：登录 123ms、申请列表（5000 台次/100 条）
+  52ms、排程冲突 15ms、记录单时间轴（300 事件）46ms、锁单 38ms、报表 workload（5000 台次/
+  366 天）180ms、质控指标 126ms、看板 realtime 9ms、SQL 聚合 68ms（上限 2000–5000ms）；
+  报表同时断言手算 5000 台次/450000 分钟/0 unrecorded。并发回归（`ConcurrencyRegressionTest`，
+  CyclicBarrier + ExecutorService、真实 PG16）：8 并发登录全 200 且 8 个 access/refresh 令牌互异，
+  同一刷新令牌 8 并发恰 1×200、7×401、0×500（条件撤销）；并发锁单恰 1×200+1×409、库内
+  LOCKED/摘要 64hex/`current_revision=0`、锁后写 409；并发事件 seq {3,4} 不重不丢、时间轴
+  occurredAt 非降序；4 并发报表 3 台次/210 分钟逐字段一致且各留 `REPORT_QUERY` 审计。稳定性
+  （`DashboardPollingStabilityTest`）：20 并发 `GET /v1/dashboard/realtime` 全 200、**216–669ms**
+  （<2s，多次运行）、除 `updatedAt/dataDelaySeconds/dataQuality` 外聚合逐字段一致（专用 DEPT：
+  1 术间/2 台次/1 设备）；看板 4 端点均
+  `application/json`、无 `text/event-stream`，确认 10s 轮询未用 SSE。安全：`docs/security/README.md`
+  §7 重写为 OWASP Top 10 2021 逐项（A01–A10：现状/证据/剩余风险/EXT，引用安全头 3、限流 4+1、
+  权限矩阵补测 2、M4 验收 8、临床专项、模拟器契约等既有可失败用例）。发布准入：
+  `docs/testing/README.md` §15（性能表/并发表/稳定性/准入矩阵/复现命令），ACCEPTANCE B 性能 +
+  §H，STATUS Round 37。新增 `support/ClinicalApiFixtures`（共用 SYNTHETIC 临床夹具）与
+  `scripts/performance-smoke.sh`（三组用例 + 证据行数量校验，防“用例被过滤仍假绿”）。
+  证据：后端 `./scripts/mvn.sh -B -f apps/api/pom.xml clean verify` BUILD SUCCESS（**1172 用例**，
+  14m24s；api-bootstrap 296 含专项 15）、`pnpm test:unit` 179/179、`pnpm build`/`pnpm lint` 通过、
+  `pnpm e2e` 45/45；`security-check.sh` 21/21（全量 `check.sh` 未重复跑，单项已分别实跑）。遗留：EXT-05、EXT-08、EXT-01…04、E2E-05（依赖 M5 双人核对页面）、
+  本机基线需 CI/压测环境复核。

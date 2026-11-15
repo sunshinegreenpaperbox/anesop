@@ -1,12 +1,12 @@
 # 施工状态看板（每 Round 更新）
 
-- 当前里程碑：**M2/M3/M4 达成**；M5 进行中（4/5，下一步 M5-QA-01）
-- 当前 Round：36（2026-11-15，M5 安全加固）
-- 最近提交：`feat(m5)` M5-M19-02 安全加固
-- 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6；M5 4/5**
-- 进行中：M5-QA-01 性能与安全专项（下一步）
+- 当前里程碑：**M2/M3/M4 达成，M5 达成（5/5）**；下一步 M6 上线准备
+- 当前 Round：37（2026-11-15，M5-QA-01 性能与安全专项）
+- 最近提交：`feat(m5)` M5-M19-02 安全加固（M5-QA-01 为当前未提交工作）
+- 已完成任务：**S0 12/12；M2 9/9；M3 7/7；M4 6/6；M5 5/5**
+- 进行中：—（M5-QA-01 完成，待 Review）
 - 阻塞：—（Docker 不可用登记 EXT-08；GitHub 远端未建，CI/CODEOWNERS 未实跑）
-- 下一步：M5-QA-01 → tag m5 → M6 上线准备 → M7 验收与 FINAL-REPORT
+- 下一步：tag m5 → M6 上线准备 → M7 验收与 FINAL-REPORT
 - 环境：JDK 21、Maven 3.10（.m2repo）、Node 26/pnpm 11（仓库内 store）、嵌入式 PG16（Zonky）、
   Playwright Chromium（.playwright）；Docker 不可用（EXT-08）
 
@@ -56,6 +56,20 @@
 | 门禁实跑 | 后端 `mvn -f apps/api/pom.xml clean verify` **BUILD SUCCESS（1100 用例，13:03；api-bootstrap 248，含专项 8）**；前端 167/167 单测 + build + lint（0 error）+ `pnpm e2e` 42/42（1.2m）。`./scripts/check.sh` 未重复跑（会二次触发全量 verify），上述单项已分别实跑。 |
 | 遗留 | `drug.yaml`/`material.yaml` 无 CSV 导出端点（契约未定义，按 H-04 不臆造），药品/耗材导出待补契约后加测 |
 
+## M5-QA-01 性能与安全专项（2026-11-15）
+
+| 准入项 | 证据 |
+|---|---|
+| 性能基准（9 项） | `PerformanceBenchmarkTest`：登录 123ms、申请列表 5000 台次/100 条 52ms、排程冲突 15ms、时间轴 300 事件 46ms、锁单 38ms、报表 workload 5000 台次/366 天 180ms、质控指标 126ms、看板 realtime 9ms、SQL 聚合 68ms（上限 2000–5000ms，全部中位 ≤ 上限 4%）；报表同时断言 5000 台次/450000 分钟手算值 |
+| 并发回归（4 组） | `ConcurrencyRegressionTest`：8 并发登录全 200 且 8 个令牌互异；同一刷新令牌 8 并发 → 恰 1×200、7×401、0×500；并发锁单 → 恰 1×200+1×409、库内 LOCKED/摘要 64hex；并发事件 seq {3,4} 不重不丢、occurredAt 非降序；4 并发报表 3 台次/210 分钟完全一致且各留 `REPORT_QUERY` 审计 |
+| 稳定性 | `DashboardPollingStabilityTest`：20 并发 `GET /v1/dashboard/realtime` 全 200、**216–669ms**（<2s，多次运行）、聚合逐字段一致（专用 DEPT：1 术间/2 台次/1 设备）；看板 4 端点均 JSON、无 `text/event-stream`（确认 10s 轮询、未用 SSE） |
+| OWASP Top 10 2021 | `docs/security/README.md` §7：A01–A10 逐项现状/证据/剩余风险/EXT，引用既有安全测试（安全头 3、限流 4+1、权限矩阵补测 2、M4 验收 8、临床专项 2 等） |
+| 发布准入矩阵 | `docs/testing/README.md` §15.4：功能/覆盖/性能/安全/专项五域 + 阻断规则 + M5-QA-01 汇总 |
+| 脚本 | 新增 `scripts/performance-smoke.sh`（三组用例 + 证据行校验，防“用例被过滤仍假绿”） |
+| 文档 | `docs/testing/README.md` §15、`docs/security/README.md` §7/§10、ACCEPTANCE B 性能 + §H、本看板、M5-backlog 状态 |
+| 门禁实跑 | 后端 `./scripts/mvn.sh -B -f apps/api/pom.xml clean verify` **BUILD SUCCESS（1172 用例，14m24s；api-bootstrap 296 含专项 15）**；前端 `pnpm test:unit` 179/179、`pnpm build`/`pnpm lint`/`vue-tsc`/`pnpm e2e` 45/45；`security-check.sh` 21/21、`contract-check.sh`/`check-rules.sh` 通过（未重复跑全量 `check.sh`，单项已分别实跑） |
+| 遗留 | EXT-05 密钥托管、EXT-08 Docker/Trivy 与镜像内 jar CVE、EXT-01…04 真实外部接口、E2E-05（依赖 M5 双人核对页面）、本机基线需 CI/压测环境复核 |
+
 ## 近期提交
 
 | 提交 | 任务 | 说明 |
@@ -73,6 +87,7 @@
 | bad4204 | S0-04 | 10 项 CI 流水线 + ci-local 本地等价 |
 | （本提交） | S0-12 | README/guides/seed-demo/dev-check/链接校验 |
 | （本轮，未提交） | M4-QA-01 | `M4AcceptanceTest` 8 条 + E2E 2 条 + 管理域专项矩阵与文档 |
+| （本轮，未提交） | M5-QA-01 | `PerformanceBenchmarkTest` 9 + `ConcurrencyRegressionTest` 4 + `DashboardPollingStabilityTest` 2 + OWASP 逐项 + 发布准入矩阵 + `performance-smoke.sh` |
 
 ## 下一里程碑 M2（2027-01-29）任务候选
 

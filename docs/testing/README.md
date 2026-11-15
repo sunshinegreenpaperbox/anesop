@@ -12,7 +12,7 @@
 | 单元 | JUnit 5 + AssertJ / Vitest + Vue Test Utils | ≈70% | 后端 **apps/api 1147** 个用例（含契约 16，2026-11-15 实测）+ 模拟器 **36**、前端 **179** 个用例（35 文件，2026-11-15 实测） |
 | 集成 | Spring Boot Test + 嵌入式 PostgreSQL 16（Zonky）/ Testcontainers | ≈20% | 迁移、MyBatis、认证越权、审计、网关幂等与断网补传 |
 | 契约 | spectral + oasdiff（Java DTO 反序列化）+ 适配器↔模拟器字段映射 | — | `apps/api/api-contracts/src/test`；`apps/api/api-bootstrap/src/test/.../integration`（§13） |
-| E2E | Playwright（Chromium） | 关键路径 | **42 条**（首页 3 + 登录/越权 6 + M1 11 + M2 14 + M4 8）；E2E-01–05 见 §6，临床专项矩阵见 §9，管理域专项见 §11 |
+| E2E | Playwright（Chromium） | 关键路径 | **45 条**（首页 3 + 登录/越权 6 + M1 11 + M2 14 + M4 8 + M5 看板 3）；E2E-01–05 见 §6，临床专项矩阵见 §9，管理域专项见 §11 |
 
 比例是目标而非硬门禁；骨架期没有业务域，集成/E2E 占比会随后续里程碑上升。
 
@@ -147,7 +147,9 @@ pnpm e2e
   5. `m4-qc.spec.ts` 1 条：不良事件 RCA 闭环状态逐级前进；
   6. `m4-narcotic-reconcile.spec.ts` 1 条（M4-QA-01）：日结不平 409 → 差异明细 → 修正期末后平账；
   7. `m4-qc-export.spec.ts` 1 条（M4-QA-01）：质控指标按当前区间导出 CSV（`type=indicator`、`Accept: text/csv`、脱敏提示）。
-- `pnpm e2e` 实测 **42/42 通过**（2026-11-15，Chromium，无 flaky；含 M4 8 条）。
+- `pnpm e2e` 实测 **45/45 通过**（2026-11-15，Chromium，无 flaky；含 M4 8 条 + M5 看板 3 条）。
+- `apps/web/e2e/m5-dashboard.spec.ts` 2 条 + `m5-dashboard-risk.spec.ts` 1 条（M5-M18-01/02）：
+  看板加载 → 手动刷新 → 10s 自动刷新 → 暂停刷新；风险/资源/趋势大屏渲染与刷新；无 `m5:dashboard:read` 守卫跳转 `/403`（接口 URL 计数断言，避免恒真）。
 
 > **E2E-02/E2E-04 口径说明**：当前为 **UI 级（路由守卫 + 菜单权限过滤）+ 平台 API 契约拦截**，
 > Playwright 不启动 Spring Boot/PG，因此**不得宣称 E2E 已覆盖真实 ingest 幂等或真实越权 API**。
@@ -395,7 +397,132 @@ bash scripts/compose-check.sh      # nginx/compose 静态校验
 或跳过用例。已知限制（单实例限流、Maven jar CVE 依赖 CI 镜像扫描、CSP style-src
 `unsafe-inline`、`spring-tx` 白名单缺口）见 `docs/security/README.md` §8。
 
+## 15. 性能与安全专项（M5-QA-01，发布准入）
+
+> 依据：`docs/ai/tasks/M5-backlog.md` M5-QA-01、`AGENTS.md`「编码与测试要求」「患者数据安全」；
+> 安全项结论见 `docs/security/README.md` §7（OWASP Top 10 2021 逐项现状/证据/剩余风险/EXT）。
+> 全部数据为 `SYNTH-` 前缀的 SYNTHETIC 数据；真实嵌入式 PostgreSQL 16 + 真实 Flyway，
+> 不新增生产代码、契约或迁移。
+
+### 15.1 性能基准（本机、可重复）
+
+方法：`PerformanceBenchmarkTest`（JUnit 5 + `System.nanoTime()`），每个端点**预热 1 次、测量 3 次**，
+断言**中位数 ≤ 宽松上限**并把 min/median/max 打印到 surefire stdout（`[M5-QA-01][perf]` 行，
+可用 `grep "M5-QA-01" target/surefire-reports/*-output.txt` 提取）。上限是“拦截数量级回归”
+的本机基线，不是 SLA；断言中位数而非最大值，避免 GC/JIT 抖动造成 flaky。
+
+数据集：2036-01-01…2036-12-31（闰年，含首尾恰好 **366 天**）**5000 个非取消台次**，
+每台次 90 分钟记录单（报表手算 5000 台次 / 450000 分钟）；其中 1 张记录单 300 条时间轴事件；
+3 条锁单前置完整的记录单；2 个“今日”台次使看板聚合非空。
+
+| 端点 | 数据集 | 宽松上限 | 实测中位（min–max，2026-11-15 本机） | 结论 |
+|---|---|---|---|---|
+| 登录 `POST /v1/auth/login` | 单账号 BCrypt | 3000ms | **123ms**（121–152） | 通过 |
+| 申请列表 `GET /v1/scheduling/applications` | 5000 台次，page=1&size=100 | 3000ms | **52ms**（50–54） | 通过 |
+| 排程冲突 `POST /v1/scheduling/schedules/conflicts` | 5000 台次，单术间 1h 预检 | 3000ms | **15ms**（14–16） | 通过 |
+| 记录单时间轴 `GET /v1/anesthesia/records/{id}/events` | 300 条事件 | 3000ms | **46ms**（41–47） | 通过 |
+| 锁单 `POST /v1/anesthesia/records/{id}/lock` | 3 条前置完整记录（SHA-256 摘要） | 3000ms | **38ms**（35–38） | 通过 |
+| 报表 workload `GET /v1/reports/workload` | 5000 台次 / 366 天 / DEPT | 5000ms | **180ms**（166–237） | 通过 |
+| 质控指标 `GET /v1/qc/indicator-results` | 5000 台次 / 366 天 / 7 指标 | 5000ms | **126ms**（108–131） | 通过 |
+| 看板 realtime `GET /v1/dashboard/realtime` | 今日 2 台次 + 术间/告警/设备聚合 | 2000ms | **9ms**（9–9） | 通过 |
+| SQL 聚合（直连 JDBC） | 5000 台次 / 366 天 / 按科室聚合 | 5000ms | **68ms**（67–69） | 通过 |
+
+- “SQL 聚合”与“报表 workload”同窗口同时断言：前者只测数据库投影 + 聚合，后者测
+  HTTP + 服务层 + 序列化全链路；二者同时超限才定位到 SQL 层（AGENTS 性能条款“≤366 天/5000 台次 <5s”）。
+- 报表断言不仅是耗时：`caseCount=5000`、`anesthesiaMinutes=450000`、`unrecordedCaseCount=0`
+  为手算值，慢查询/漏行都会同时使断言失败。
+- 本机为开发机（JDK 21、`-Xmx` 默认、Hikari pool 4）；生产容量规划以 CI/压测环境为准。
+- 重复运行（`scripts/performance-smoke.sh`，与全量 verify 并行时段不同）中位数波动约 ±30%
+  （如报表 160–182ms、冲突 11–23ms），仍远低于上限；断言只卡上限，不卡具体数值。
+
+### 15.2 并发回归（真实 PG + 真实 API）
+
+`ConcurrencyRegressionTest`：`CyclicBarrier` + `ExecutorService` 同起跑线，任一线程异常立即失败
+（不做“部分成功即通过”兜底）。
+
+| 场景 | 关键断言（可失败） | 实测 |
+|---|---|---|
+| 并发登录/刷新 | 8 路并发登录全部 200、8 个 accessToken/refreshToken 互不相同；**同一刷新令牌 8 路并发恰 1×200、7×401、0×500**（条件撤销）；新 accessToken 可访问 `/v1/auth/me` | 通过 |
+| 并发锁单 | 同一记录单同 version 两路并发：**恰 1×200 + 1×409**（`STATE_CONFLICT`）；库内 `status=LOCKED`、`locked_at` 非空、摘要 64 位 hex、`current_revision=0`；锁后追加事件 409 | 通过 |
+| 并发事件 seq | 两路并发追加 `CUSTOM`：seq 恰为 **{3,4}** 不重不丢；时间轴 4 条、`occurredAt` 非降序、数据库 seq 连续 1..4 | 通过 |
+| 并发报表（幂等） | 4 路并发 workload：全部 200，`caseCount=3`、`anesthesiaMinutes=210`（手算）、两个科室桶 2/180 与 1/30 完全一致；每次查询各留 `REPORT_QUERY` 审计（≥4） | 通过 |
+
+### 15.3 稳定性：10s 轮询与“未使用 SSE”
+
+`DashboardPollingStabilityTest`（看板刷新决策见 M5-M18-01 / ADR-0023：**10s 轮询**，无 SSE）：
+
+| 项 | 断言 | 实测 |
+|---|---|---|
+| 后端无状态 | **20 路并发** `GET /v1/dashboard/realtime` 全部 200，总耗时 **< 2s**；除 `updatedAt`/`dataDelaySeconds`/`dataQuality`（请求时点量）外，术间/台次/告警/设备聚合在 20 份响应中逐字段一致 | **216–669ms**（多次运行，limit 2000ms），一致 |
+| 无 SSE | 看板 4 个 GET 端点（realtime/risk/resources/trends）均返回 `application/json`，响应头与响应体均无 `text/event-stream` | 通过 |
+| 前端轮询 | `apps/web/src/modules/m5/api/dashboard.ts` 固定 `REFRESH_INTERVAL_MS = 10_000`，`DashboardView`/`RiskDashboardView` 用 `setInterval` 刷新（Vitest 已断言 10s 定时器） | 通过 |
+
+### 15.4 发布准入矩阵（M5）
+
+阻断规则：**任一“阻断项”不通过（含 flaky）→ 不得发布**；不得 `@Disabled`、放宽断言或跳过；
+外部依赖项（EXT）按 §8 记录解除条件，不阻断代码验收但必须写入发布说明。
+
+| 准入域 | 项 | 结论 | 证据 | 阻断规则 |
+|---|---|---|---|---|
+| 功能 | M0–M5 五大域验收用例 | 通过 | `AuthAcceptanceFlowTest`、`M4AcceptanceTest`（8）、`M5Dashboard*ApiIntegrationTest`、各域 `*ApiIntegrationTest` | 任一 P0 缺陷未修复 → 阻断 |
+| 功能 | E2E-01…E2E-05 | E2E-01/02/03/04 通过；**E2E-05 麻精双人核对待 M5 页面/双人登录流程**（数据入口已由集成测试覆盖） | `pnpm e2e`（`m1-schedule-conflict`、`m2-device-ingest`、`m2-record-lock`、`auth`、M4×8 等） | E2E-01/02/03/04 任一失败 → 阻断；E2E-05 未实现按遗留登记 |
+| 覆盖 | 整体行 ≥70%/分支 ≥55%；核心域（m0 权限审计、m2、gateway）≥80%/70% | 通过 | JaCoCo 门禁（§2）；m0-impl 96.34%/87.52%、gateway 91.68%/77.39% | 低于阈值 → 阻断 |
+| 覆盖 | 前端 Vitest 行 ≥70%/分支 ≥55% | 通过（179/179，76.83%/73.81%） | `pnpm test:unit` | 低于阈值 → 阻断 |
+| 性能 | 关键端点本机基准（§15.1，9 项） | 通过（全部中位数 ≤ 上限的 10%） | `PerformanceBenchmarkTest` | 任一中位数超上限 → 阻断 |
+| 性能 | 报表/质控 ≤366 天 / 5000 台次 <5s | 通过（180ms / 126ms；SQL 68ms） | 同上 + `sqlAggregation…` | 超 5s → 阻断 |
+| 性能 | 看板 ≤2s、20 并发轮询 <2s | 通过（18ms；20 并发 309ms） | 同上 + `DashboardPollingStabilityTest` | 超限 → 阻断 |
+| 安全 | OWASP Top 10 2021（A01–A10） | 通过（逐项现状/证据/剩余风险/EXT） | `docs/security/README.md` §7；§14 安全专项 12 例；`security-check.sh` 21/21 | 任一 A 项无证据或存在未处置 HIGH/CRITICAL → 阻断 |
+| 安全 | 安全头/CSP/HSTS、限流 429、越权回归 | 通过 | `SecurityHeadersIntegrationTest`（3）、`RateLimitIntegrationTest`（4）、`RateLimitRecoveryTest`（1）、`NginxSecurityHeadersConfigTest`（2）、`SecurityAuthorizationRegressionTest`（2） | 安全头缺失/CSP 退回 inline script/限流无 429/越权用例失败 → 阻断 |
+| 安全 | 依赖漏洞/许可证 | 通过（0 HIGH/CRITICAL；1 WARN `spring-tx`；镜像 EXT-08） | `scripts/security-scan.sh` | 新增 HIGH/CRITICAL 未登记例外 → 阻断 |
+| 专项 | 时间轴一致性（seq 连续、occurredAt 非降序、UPDATE/DELETE 55000） | 通过 | `ClinicalRecordAcceptanceTest`、`ConcurrencyRegressionTest#concurrentEventAppendsSerializeSequence` | 失败 → 阻断（AGENTS 临床专项） |
+| 专项 | 断网采集补传幂等（同 batchKey 不重复） | 通过 | `ClinicalRecordAcceptanceTest`、`DeviceAcquisitionApiIntegrationTest`、E2E-02 | 失败 → 阻断 |
+| 专项 | 并发修改（事件 seq、同 version 恰 200/409、修订号连续、并发锁单恰一成功） | 通过 | `ClinicalRecordAcceptanceTest`、`ConcurrencyRegressionTest`（4 组） | 失败 → 阻断 |
+| 专项 | 签名锁定（锁后写 409/55000、摘要 64 hex 稳定、修订链衔接） | 通过 | `ClinicalRecordAcceptanceTest`、`RecordLockRevisionApiIntegrationTest` | 失败 → 阻断 |
+| 专项 | 集成联调契约（HIS/药房/SPD/设备） | 模拟器通过；真实接口待接入（EXT-01…04） | `docs/testing` §13 | 契约用例失败 → 阻断；真实接口按 EXT 登记 |
+| 专项 | 稳定性（10s 轮询无状态、无 SSE） | 通过 | `DashboardPollingStabilityTest`；前端 `REFRESH_INTERVAL_MS` | 失败 → 阻断 |
+
+**M5-QA-01 汇总**：性能 9 项、并发 4 组、稳定性 2 条、OWASP 10 项均有可执行证据，
+`apps/api` clean verify BUILD SUCCESS（**1172 用例**，2026-11-15 13:55，14m24s；api-bootstrap 296 含专项 15），
+`security-check.sh` 21/21、`contract-check.sh`/`check-rules.sh` 通过（全量 `check.sh` 未重复跑，
+单项已分别实跑）；前端 `pnpm test:unit` 179/179、`pnpm build`/`pnpm lint`/`vue-tsc` 通过、
+`pnpm e2e` 45/45。**发布准入结论：通过（本地可执行项）**；遗留为 EXT-05（密钥托管）、
+EXT-08（Docker/Trivy 镜像扫描与镜像内 jar CVE）、EXT-01…04（真实外部接口）、
+E2E-05（依赖 M5 双人核对页面）与 §15.1 的本机基线口径（生产容量需 CI/压测环境复核）。
+
+### 15.5 复现命令
+
+```bash
+source scripts/env.sh
+
+# 性能基准（9 项，约 1 分钟；含 5000 台次/366 天数据构造）
+./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am \
+  -Dtest=PerformanceBenchmarkTest -Dsurefire.failIfNoSpecifiedTests=false test
+grep -h "M5-QA-01" apps/api/api-bootstrap/target/surefire-reports/*-output.txt
+
+# 并发回归（4 组，约 50 秒）
+./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am \
+  -Dtest=ConcurrencyRegressionTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+# 稳定性（10s 轮询/无 SSE，约 5 秒）
+./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am \
+  -Dtest=DashboardPollingStabilityTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+# 一键跑完三组并打印证据行（不替代全量 verify）
+bash scripts/performance-smoke.sh
+```
+
+- 三组用例均使用真实嵌入式 PG16；与既有 `AbstractApiIntegrationTest` 共享 Spring 上下文，
+  `@BeforeAll` 一次性构造大数据集、`@AfterAll` 按前缀清理（append-only 表临时停用触发器后恢复）。
+- 数据库不可用/嵌入式 PG 启动失败时按 EXT-08 处理：**不算通过**，也不阻断主线，但发布前必须补齐。
+
 ## 12. 变更记录
+
+- 2026-11-15（M5-QA-01）：新增 §15 性能与安全专项与**发布准入矩阵**；新增
+  `PerformanceBenchmarkTest`（9 项关键端点/ SQL 聚合）、`ConcurrencyRegressionTest`（登录刷新/
+  锁单/事件 seq/报表 4 组）、`DashboardPollingStabilityTest`（20 并发轮询无状态 + 无 SSE）、
+  `support/ClinicalApiFixtures`（共用 SYNTHETIC 临床夹具）与 `scripts/performance-smoke.sh`；
+  OWASP Top 10 2021 逐项“现状/证据/剩余风险/EXT”见 `docs/security/README.md` §7。
+  实测：9 项性能中位耗时 9–180ms（上限 2000–5000ms）、并发 4 组通过、20 并发轮询 216ms。
 
 - 2026-11-15（M5-M19-02）：新增 §14 安全专项（12 例：安全头 3、nginx 配置 2、限流 4、
   窗口恢复 1、权限矩阵补测 2）；新增 `scripts/security-check.sh`（21 项，接入 `check.sh`

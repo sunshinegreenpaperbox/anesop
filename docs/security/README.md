@@ -1,7 +1,8 @@
-# 安全加固与安全运营（M5-M19-02）
+# 安全加固与安全运营（M5-M19-02 / M5-QA-01）
 
-- 状态：已完成（2026-11-15），进入 Review
-- 任务：`docs/ai/tasks/M5-backlog.md` M5-M19-02；验收：`docs/acceptance/ACCEPTANCE.md` B/G 项
+- 状态：已完成（2026-11-15），进入 Review；OWASP 逐项复评见 §7（M5-QA-01，2026-11-15）
+- 任务：`docs/ai/tasks/M5-backlog.md` M5-M19-02（加固）+ M5-QA-01（专项复评）；
+  验收：`docs/acceptance/ACCEPTANCE.md` B/G/H 项
 - 规则依据：`AGENTS.md`「患者数据与安全红线」「依赖准入」、方案书 §3.9（安全与权限）、
   §3.7.1（部署拓扑）、§3.8.3（Nginx）
 - 写域：`apps/api/api-bootstrap/**`、`deploy/nginx/anesop.conf`、`deploy/compose/docker-compose.yml`（仅注释）、
@@ -20,6 +21,8 @@
 | 安全静态检查（21 项，离线） | `scripts/security-check.sh` |
 | 依赖/镜像扫描（联网） | `scripts/security-scan.sh`，证据 `.cache/security/` |
 | 本地一键门禁接入 | `scripts/check.sh` 第 8/8 步（新增约 1–2 秒） |
+| 性能/并发/稳定性专项（M5-QA-01） | `PerformanceBenchmarkTest`（9 项，含锁单摘要/报表/看板）、`ConcurrencyRegressionTest`（8 并发登录 + 刷新轮换唯一、并发锁单恰一成功、事件 seq、报表幂等）、`DashboardPollingStabilityTest`（20 并发轮询无状态 + 无 SSE）；`scripts/performance-smoke.sh` |
+| OWASP Top 10（2021）逐项结论 | 本文 §7（A01–A10 的现状/证据/剩余风险/EXT） |
 | CI 既有门禁 | `.github/workflows/ci.yml` `ci/deps-license` / `ci/secret-scan` / `ci/sast` / `ci/image-scan` |
 
 ## 2. HTTP 安全响应头
@@ -151,18 +154,29 @@ OpenAPI `security` 声明，汇总既有 403/401 用例，并补两条关键缺�
 
 ## 7. OWASP Top 10（2021）对照结论
 
-| 风险 | 本系统措施 | 结论 / 遗留 |
-|---|---|---|
-| A01 访问控制失效 | RBAC + 数据范围（ALL/DEPT/ROOM/SELF）+ 方法级 `@PreAuthorize` + 403/404 语义 + 越权审计；本任务矩阵复核与补测 | 通过；M3 空壳，待其端点落地后补矩阵 |
-| A02 加密机制失效 | TLS 1.2/1.3、HSTS、BCrypt 口令、手机号 AES-256-GCM + HMAC、JWT HS256（≥32 字节、fail-closed）、字段密钥/pepper 环境注入 | 通过；密钥托管（EXT-05）待院方 |
-| A03 注入 | MyBatis-Plus 参数绑定 + Bean Validation + 契约枚举；日志不含 SQL 实参 | 通过（Semgrep/SpotBugs/评审兜底） |
-| A04 不安全设计 | 记录 append-only、锁单/修订版本、双人核对、状态机、fail-closed 配置 | 通过；临床口径待确认项按 ADR 管理 |
-| A05 安全配置错误 | 默认即安全（prod fail-closed）、springdoc/actuator 收紧、CSP/HSTS/安全头、密钥占位、`security-check.sh` 21 项 | 通过；CSP `style-src 'unsafe-inline'` 为 Element Plus 兼容的已知折衷 |
-| A06 易受攻击组件 | `pnpm audit`（prod 硬门禁 + 全量例外表）、allowlist/许可证、镜像 Trivy（CI） | 通过（0 HIGH/CRITICAL）；Maven jar CVE 依赖 CI 镜像扫描（EXT-08），`spring-tx` 白名单缺口待补 |
-| A07 身份认证失效 | 登录失败计数/锁定、刷新令牌轮换 + 哈希存储、吊销表、强制改密、限流 429 | 通过；多实例限流需 Redis（遗留） |
-| A08 软件与数据完整性 | Flyway 版本化迁移 + append-only 审计、契约生成物禁手改、依赖 lockfile | 通过 |
-| A09 日志与监控失效 | 统一审计 + traceId + 401 采样 + `auth.audit.failures` 指标 + 访问日志无 query（无 PHI） | 通过；Loki 告警规则待运维配置 |
-| A10 SSRF | 外部系统仅 HIS/药房/SPD/设备适配器，地址来自受控配置；无用户可控任意 URL 拉取 | 通过（真实联调 EXT-01/02/03/04 待接入时复评） |
+复评时间 2026-11-15（M5-QA-01），方法：以 M5-M19-02 安全加固证据为基线，叠加 M5-QA-01 的
+性能/并发/稳定性专项与 M0–M5 既有集成测试，逐项给出“现状 / 证据 / 剩余风险 / EXT”。
+“证据”只列**可失败**的自动化用例或脚本（不含人工目检）；“EXT”指向 §8 或
+`docs/acceptance/EXTERNAL-DEPS.md` 的编号，无外部依赖的写“无”。
+
+| 风险 | 现状（当前控制措施） | 证据（可失败测试/脚本） | 剩余风险 | EXT / 遗留 |
+|---|---|---|---|---|
+| **A01 访问控制失效** | RBAC + 数据范围（ALL/DEPT/ROOM/SELF）+ 方法级 `@PreAuthorize`；集合越权 403、单对象越界 404（不泄露存在性）；拒绝即写 `ACCESS_DENIED` 审计；锁单/修订有行锁 + version 条件，并发下恰一个成功 | `SecurityAuthorizationRegressionTest`（2）、`M4AcceptanceTest#roleEndpointMatrixCoversPositiveAndNegativeCases`、`M4*ApiIntegrationTest`（DataScope）、`M5DashboardRiskResourceApiIntegrationTest`（4 端点 403）、`ConcurrencyRegressionTest#concurrentLockHasExactlyOneWinner`、E2E `auth.spec.ts` | M3 人员域当前为空壳、无对外端点，矩阵未覆盖；前端菜单/路由守卫仅是展示层，真实边界在 API（已由集成测试锁定） | 无（M3 端点落地后补矩阵行） |
+| **A02 加密机制失效** | TLS 1.2/1.3 + HSTS；口令 BCrypt；手机号 AES-256-GCM + HMAC；JWT HS256 密钥 ≥32 字节且缺失即 fail-closed；刷新令牌只存 SHA-256 哈希；字段密钥/pepper 走环境注入；锁单/修订摘要 SHA-256 | `SecurityHeadersIntegrationTest`（3）、`NginxSecurityHeadersConfigTest`（2）、`AuthApiIntegrationTest`（跨密钥 401、轮换/吊销）、`ClinicalRecordAcceptanceTest` + `RecordLockRevisionApiIntegrationTest`（摘要 64 位 hex、版本链稳定）、`security-check.sh`（无硬编码密钥/云 token） | 密钥托管与轮换依赖院方 KMS/密钥管理制度；HS256 为共享密钥模式，无自动轮换 | EXT-05（密钥托管待院方） |
+| **A03 注入** | MyBatis-Plus 参数绑定 + Bean Validation + 契约枚举白名单；CSV 导出对 `= + - @` 前置单引号（公式注入）；日志不含 SQL 实参与患者标识 | `M4AcceptanceTest#csvExportsAreBomMaskedInjectionSafePhiFreeAndAudited`（`workload/multi` + `indicator/adverse/review` 五类 CSV）、`M4ReportApiIntegrationTest#csvExportHasBomHeaderFormulaGuardNoPhiAndAudit`、`security-check.sh`（日志无 PHI/口令）、Checkstyle/SpotBugs/Semgrep（CI `ci/sast`） | 动态 SQL 片段（排序/维度拼装）依赖白名单与评审保证；无 WAF，注入尝试仅靠 nginx 限流与日志观测 | 无 |
+| **A04 不安全设计** | 临床记录 append-only（数据库触发器 55000）＋锁单/修订版本链；三方核查、双人核对、状态机；配置 fail-closed；看板为只读聚合、不含 PHI，刷新用 10s 轮询而非 SSE（无长连接服务端状态）；报表/事件并发幂等 | `ClinicalRecordAcceptanceTest`（时间轴/锁单/并发修订链）、`M4AcceptanceTest`（授权治理/五专对账）、`ConcurrencyRegressionTest`（并发登录/锁单/事件 seq/报表 4 组）、`DashboardPollingStabilityTest`（20 并发聚合逐字段一致、无 `text/event-stream`） | 临床/管理口径仍有【待确认】项（ADR-0018…0023），由院方确认后可能调整聚合语义；设计评审仍依赖人工 | 无（口径项按 ADR 管理） |
+| **A05 安全配置错误** | 默认即安全：默认/prod 缺密钥拒绝启动；springdoc/actuator 收紧；CSP（`script-src 'self'` 无 inline/eval）、HSTS（仅 HTTPS）、XFO DENY、nosniff、Referrer、Permissions；登录/刷新限流 | `security-check.sh` **21/21**（接入 `check.sh` 第 8/8 步）、`DefaultProfileSecureTest`、`SecureDefaultsIntegrationTest`、`SecurityHeadersIntegrationTest`、`RateLimitIntegrationTest`（4）、`RateLimitRecoveryTest`（1）、`NginxSecurityHeadersConfigTest`、`compose-check.sh` 34 PASS | CSP `style-src 'unsafe-inline'`（Element Plus 行内样式）；HSTS 无 `preload`；nginx master 以 root 启动 | 遗留-3 / 遗留-4 / 遗留-5 |
+| **A06 易受攻击组件** | `pnpm audit --prod` 硬门禁 + 例外表（逐条记录 GHSA/理由/到期）；直接依赖 allowlist + 许可证校验；镜像 Trivy 进 CI；lockfile 精确版本 | `scripts/security-scan.sh`（npm 生产依赖 **0 HIGH/CRITICAL**；1 条 moderate `element-plus` 低于阻断线；1 条 WARN `spring-tx` 白名单缺口；镜像待扫清单 9 项）、`check-deps-license.py`、CI `ci/deps-license` / `ci/image-scan` | Maven jar CVE 本机无 dependency-check 离线库，未实测；镜像内 OS 包漏洞未扫 | EXT-08（Docker/Trivy 不可用）；遗留-2 |
+| **A07 身份认证失效** | 失败计数/锁定（原子 UPDATE，并发错误口令全部累计）；刷新令牌轮换 + 哈希存储 + 条件撤销（并发刷新恰一个成功）；吊销表；强制改密；登录按 IP+用户名限流 429 + `Retry-After`；账号不存在也执行假哈希比对（侧信道防护） | `AuthApiIntegrationTest`（锁定/轮换/改密/401/审计）、`RateLimitIntegrationTest`（4）、`RateLimitRecoveryTest`（1）、`ConcurrencyRegressionTest#concurrentLoginAndRefreshIssueExactlyOneRotatedToken`（8 并发登录全 200 且令牌互异；同一刷新令牌 8 并发 → 恰 1×200、7×401、0×500） | 应用层限流为单实例内存桶，多实例部署阈值被放大；未启用 MFA（方案未要求） | 遗留-1 |
+| **A08 软件与数据完整性** | Flyway 版本化迁移 + expand-contract；审计/临床/修订表 append-only（UPDATE/DELETE/TRUNCATE 55000）；契约生成物禁手改（ADR-0003）；依赖 lockfile；外部回执按 `idempotencyKey` 幂等 | `ClinicalRecordAcceptanceTest`（直写 55000）、`M4AcceptanceTest`（五专/UDI 审计与台账守恒）、`SpdSimulatorContractTest`（同 key 同回执）、`security-check.sh`、`scripts/contract-check.sh`（drift/oasdiff） | 镜像 digest 固定与 SBOM/签名未落地；迁移回滚演练仅本机记录 | EXT-08（镜像 digest/Trivy） |
+| **A09 日志与监控失效** | 统一审计覆盖登录/刷新/登出/改密/越权/401/业务动作的成功与失败；`trace_id` 与 `X-Trace-Id` 一致；401 按 IP+路径采样；`auth.audit.failures` 指标；nginx 访问日志不含 query；日志/审计无口令、令牌、患者标识 | `AuthAuditFailOpenTest`、`AuthApiIntegrationTest`（审计 actor/result/detail 断言）、`NginxPhiLogConfigTest`、`security-check.sh`（日志无 PHI/令牌）、`ConcurrencyRegressionTest#concurrentReportsStayIdempotent`（4 路并发各留 `REPORT_QUERY` 审计） | Loki 告警规则与值班流程待运维配置；审计在线留存 180 天未做容量验证 | 运维遗留（Loki/留存） |
+| **A10 SSRF** | 外部系统仅 HIS/药房/SPD/设备适配器，地址来自受控配置（env），代码中无用户可控 URL 拉取；模拟器只绑定 `127.0.0.1`；超时/4xx 不重试、5xx 有限重试、失败降级不阻塞主链路 | `services/simulators` 36 用例（非法配置 fail-closed）、`HisSimulatorContractTest` / `PharmacySimulatorContractTest` / `SpdSimulatorContractTest`（超时降级、4xx 不重试、503 重试）、`WireMapperContractTest`（缺失/非法字段 fail-closed） | 真实接口（HL7/WebService、mTLS、库房/SPD 地址）接入后，出站白名单、DNS 重绑定与超时策略需重新评估 | EXT-01/02/03/04（真实联调前复评） |
+
+**结论（M5-QA-01）**：A01–A10 十项均有可执行证据，未发现未处置的 HIGH/CRITICAL 风险；
+剩余风险集中在外部依赖（密钥托管 EXT-05、镜像/依赖扫描 EXT-08、外部接口 EXT-01…04）
+与已知折衷（单实例限流、CSP `style-src`、HSTS preload、nginx root），已登记在 §8 与
+`docs/testing/README.md` §15 的发布准入矩阵，**不构成发布阻断**。
+
 
 ## 8. 已知限制与外部依赖（EXT）
 
@@ -190,4 +204,18 @@ bash scripts/security-check.sh      # 静态，21 项
 bash scripts/security-scan.sh       # 联网，依赖 + 镜像清单
 bash scripts/compose-check.sh       # nginx/compose 静态校验
 ./scripts/check.sh                  # 本地全量门禁（含第 8 步安全静态检查）
+
+# M5-QA-01：性能/并发/稳定性证据（OWASP §7 的“性能/并发”类证据；约 2 分钟）
+bash scripts/performance-smoke.sh
+# 或单独跑：-Dtest=PerformanceBenchmarkTest / ConcurrencyRegressionTest /
+#           DashboardPollingStabilityTest（见 docs/testing/README.md §15.5）
 ```
+
+## 10. 变更记录
+
+- 2026-11-15（M5-QA-01）：§7 重写为 OWASP Top 10 2021 逐项“现状/证据/剩余风险/EXT”对照
+  （A01–A10 全部引用可失败测试/脚本）；§1 增补性能/并发/稳定性证据索引；§9 增加
+  `scripts/performance-smoke.sh`。
+- 2026-11-15（M5-M19-02）：安全头/CSP/HSTS、登录与刷新限流（429 + `Retry-After`）、
+  `security-check.sh`（21 项）与 `security-scan.sh`、M0–M5 权限矩阵复核、审计覆盖复核；
+  初版 OWASP Top 10 对照（§7）。
