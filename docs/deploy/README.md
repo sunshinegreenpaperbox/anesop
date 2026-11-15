@@ -169,7 +169,8 @@ docker compose -f deploy/compose/docker-compose.yml --profile monitoring up -d
 | `anesop-pgdata` | postgres `/var/lib/postgresql/data` | 每日全备 + WAL（见备份手册） |
 | `anesop-redisdata` | redis `/data` | 可重建，不单独备份（缓存非唯一数据源） |
 | `anesop-rabbitmqdata` | rabbitmq `/var/lib/rabbitmq` | 每日导出定义；消息以业务补偿为准 |
-| `anesop-miniodata` | minio `/data` | 版本化 + 每日镜像/快照 |
+| `anesop-miniodata` | minio `/data` | 版本化 + 每日镜像/快照（EXT-06 预留，当前未接入） |
+| `anesop-m0filedata` | api `/var/lib/anesop/files` | M0 附件（非 PHI）；随库备份，保留期待院方确认 |
 | `anesop-promdata` | prometheus `/prometheus` | 可不备份（指标可重采） |
 | `anesop-grafanadata` | grafana `/var/lib/grafana` | 每周导出仪表盘 |
 | `anesop-lokidata` | loki `/loki` | 按审计要求保留，见备份手册 |
