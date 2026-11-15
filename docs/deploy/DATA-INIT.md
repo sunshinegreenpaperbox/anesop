@@ -93,6 +93,13 @@ bash scripts/init-data.sh --mode demo \
 - 实际委托 `scripts/seed-demo.sh`，locations = `db/migration` + `db/seed/demo`；
 - 创建 `demo_admin`/`demo_dept`/`demo_self` 与演示药品（全部 SYNTHETIC）；
   初始口令见 [`../db/seed.md`](../db/seed.md)，**首次登录强制改密**；
+- 业务演示数据（申请/排程/记录/设备/告警/药品/人员/耗材/报表/质控/看板）用
+  `bash scripts/seed-demo-data.sh` 经 REST API 追加；设备与告警可单独跑
+  `bash scripts/seed-demo-data.sh --section alerts`（登记 2 台设备 + 合成体征 ingest +
+  告警断言，见 [`../guides/demo.md`](../guides/demo.md) §6.5）；
+- 采集网关令牌 `ANESOP_M2_ACQUISITION_GATEWAY_TOKEN` **只用于本地演示**：
+  `scripts/demo-local.sh start` 默认注入 `demo-gateway-token`；生产必须由密钥托管注入
+  随机值，未注入时 ingest 一律 401（fail-closed），演示默认值不得复制到生产/预发；
 - 演示库不得直接改配置当生产库：Flyway 会报告"已应用但本地未解析的 V100"，
   这是安全信号，应重新初始化生产库并核对数据；
 - 演示账号不得进入生产；生产启动守卫会拒绝 `demo_*`。

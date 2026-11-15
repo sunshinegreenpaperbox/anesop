@@ -3,18 +3,23 @@
 # ANESOP 全模块演示数据灌入（SYNTHETIC，仅本地/演示环境）
 #
 # 通过真实 REST API 逐环节写入合成数据，覆盖 M1 申请/排程、M2 术前/记录/复苏/
-# 随访、M4 药品麻精/人员/耗材/报表/质控、M5 看板与消息中心。所有请求都走业务
-# 校验、审计与状态机，不使用 SQL 直插。
+# 随访、设备登记/体征 ingest/术中告警、M4 药品麻精/人员/耗材/报表/质控、M5 看板与
+# 消息中心。所有请求都走业务校验、审计与状态机，不使用 SQL 直插。
 #
 # 用法（仓库根）：
 #   bash scripts/seed-demo-data.sh --dry-run          # 只打印计划
 #   bash scripts/seed-demo-data.sh                    # 灌入（默认 http://127.0.0.1:8080）
 #   bash scripts/seed-demo-data.sh --base-url http://127.0.0.1:8080
+#   bash scripts/seed-demo-data.sh --section alerts   # 只跑「设备与告警」段（复用进行中记录）
 #
 # 账号：demo_admin（首次登录自动改密）/ demo_self（仅用于消息中心未读校验）。
 # 口令通过环境变量覆盖，默认值只用于本地演示：
 #   DEMO_ADMIN_PASSWORD / DEMO_ADMIN_NEW_PASSWORD
 #   DEMO_SELF_PASSWORD  / DEMO_SELF_NEW_PASSWORD
+#
+# 设备 ingest 使用内部网关令牌（header X-Gateway-Token）：
+#   ANESOP_M2_ACQUISITION_GATEWAY_TOKEN（默认 demo-gateway-token，仅本地演示；
+#   生产必须由密钥托管注入随机值）。API 未注入令牌时 ingest 返回 401，脚本会给出提示。
 #
 # 可重复执行：申请/排程/记录/随访/质控等业务数据每次追加（业务单号带批次后缀），
 # 药品/人员/耗材等主数据按编码去重（已存在则复用），重复运行不会 5xx。
@@ -40,7 +45,15 @@ DRUG_COUNT="${SEED_DRUG_COUNT:-5}"
 MATERIAL_COUNT="${SEED_MATERIAL_COUNT:-5}"
 STAFF_COUNT="${SEED_STAFF_COUNT:-4}"
 
+# 设备与告警段（SYNTHETIC）：网关令牌默认值仅用于本地演示。
+GATEWAY_TOKEN="${ANESOP_M2_ACQUISITION_GATEWAY_TOKEN:-demo-gateway-token}"
+DEVICE_GATEWAY="${SEED_DEVICE_GATEWAY_ID:-GW-DEMO-01}"
+DEVICE_MONITOR="${SEED_DEVICE_MONITOR_ID:-SIM-MON-DEMO-01}"
+DEVICE_MACHINE="${SEED_DEVICE_MACHINE_ID:-SIM-VENT-DEMO-01}"
+ALERT_WAIT_SECONDS="${SEED_ALERT_WAIT_SECONDS:-20}"
+
 DRY_RUN=0
+SECTION_FILTER="all"
 TOKEN=""
 ADMIN_TOKEN=""
 HTTP=""
@@ -59,6 +72,11 @@ LAST_SCHED_START=""
 LAST_SCHED_END=""
 TMP_DIR=""
 BATCH=""
+ALERT_RECORD_ID=""
+ALERT_SCHEDULE_ID=""
+ALERT_ROOM_ID=""
+ALERT_ROOM_NO=""
+ALERT_RULES=""
 
 # 演示组织/术间/账号固定标识（见 docs/db/seed.md）
 DEPT_ANES="f1000000-0000-4000-8000-000000000002"
@@ -69,9 +87,11 @@ SELF_ID="e0000000-0000-4000-8000-000000000003"
 
 usage() {
   cat <<'USAGE'
-用法：bash scripts/seed-demo-data.sh [--base-url URL] [--dry-run] [--help]
+用法：bash scripts/seed-demo-data.sh [--base-url URL] [--section all|alerts] [--dry-run] [--help]
 
   --base-url URL   API 基地址，默认 http://127.0.0.1:8080（或 ANESOP_API_BASE_URL）
+  --section NAME   只跑指定段：all（默认，全量）或 alerts（设备登记 + 体征 ingest + 告警，
+                   复用已有进行中记录；无可用记录时在空闲台次上新建一张）
   --dry-run        只打印灌入计划，不发起写请求
   --help           显示本帮助
 
@@ -81,6 +101,9 @@ usage() {
   SEED_HIS_IMPORT_COUNT（默认 3）、SEED_APP_COUNT（默认 15）
   SEED_PREOP_COUNT（默认 6）、SEED_DRUG_COUNT（默认 5）
   SEED_MATERIAL_COUNT（默认 5）、SEED_STAFF_COUNT（默认 4）
+  ANESOP_M2_ACQUISITION_GATEWAY_TOKEN             ingest 网关令牌（默认 demo-gateway-token，仅本地演示）
+  SEED_DEVICE_GATEWAY_ID / SEED_DEVICE_MONITOR_ID / SEED_DEVICE_MACHINE_ID  设备标识
+  SEED_ALERT_WAIT_SECONDS                         等待告警落库的轮询秒数（默认 20）
 USAGE
 }
 
@@ -89,11 +112,18 @@ while [ $# -gt 0 ]; do
     --base-url)
       [ $# -ge 2 ] || { echo "--base-url 缺少参数" >&2; exit 2; }
       BASE_URL="$2"; shift 2 ;;
+    --section)
+      [ $# -ge 2 ] || { echo "--section 缺少参数（all|alerts）" >&2; exit 2; }
+      SECTION_FILTER="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
 done
+case "$SECTION_FILTER" in
+  all|alerts) ;;
+  *) echo "未知段：$SECTION_FILTER（支持 all|alerts）" >&2; exit 2 ;;
+esac
 BASE_URL="${BASE_URL%/}"
 
 # 数量下限：后续流程固定使用 15 条申请 / 5 条记录，低于下限会告警并抬到下限。
@@ -110,6 +140,11 @@ DRUG_COUNT="$(clamp_count DRUG "$DRUG_COUNT" 5 6)"
 MATERIAL_COUNT="$(clamp_count MATERIAL "$MATERIAL_COUNT" 5 6)"
 STAFF_COUNT="$(clamp_count STAFF "$STAFF_COUNT" 4 6)"
 HIS_IMPORT_COUNT="$(clamp_count HIS "$HIS_IMPORT_COUNT" 1 10)"
+case "$ALERT_WAIT_SECONDS" in
+  ''|*[!0-9]*) ALERT_WAIT_SECONDS=20 ;;
+esac
+[ "$ALERT_WAIT_SECONDS" -ge 1 ] || ALERT_WAIT_SECONDS=1
+[ "$ALERT_WAIT_SECONDS" -le 120 ] || ALERT_WAIT_SECONDS=120
 
 info() { printf '[seed-demo-data] %s\n' "$*"; }
 warn() { printf '[seed-demo-data] 警告：%s\n' "$*" >&2; }
@@ -275,12 +310,336 @@ login_account() { # login_account USER OLD NEW → 设置 ACCOUNT_TOKEN
 }
 
 # ---------------------------------------------------------------------------
+# 设备与告警（M2 采集 + 告警评估）辅助
+# ---------------------------------------------------------------------------
+jlen() { # jlen [PATH] → 数组长度（读取失败/非数组返回 0）
+  python3 - "$RESP_FILE" "${1:-}" <<'PY' 2>/dev/null || echo 0
+import json, sys
+try:
+    cur = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    print(0); raise SystemExit
+path = sys.argv[2]
+if path:
+    for p in path.split('.'):
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(p)]
+            except Exception:
+                print(0); raise SystemExit
+        elif isinstance(cur, dict):
+            cur = cur.get(p)
+        else:
+            cur = None
+        if cur is None:
+            print(0); raise SystemExit
+print(len(cur) if isinstance(cur, list) else 0)
+PY
+}
+
+# 网关 ingest 使用内部令牌，不携带用户 JWT（与契约 security: [] 一致）。
+api_gateway_file() { # api_gateway_file PATH FILE
+  local path="$1" file="$2"
+  HTTP=$(curl -sS --max-time 40 -o "$RESP_FILE" -w '%{http_code}' -X POST "$BASE_URL$path" \
+    -H "X-Gateway-Token: $GATEWAY_TOKEN" -H 'Content-Type: application/json' \
+    --data-binary "@$file" 2>/dev/null) || HTTP=000
+}
+
+print_summary() {
+  printf '\n================ 灌入汇总 ================\n'
+  printf '  API        : %s\n' "$BASE_URL"
+  printf '  批次        : %s\n' "$BATCH"
+  printf '  成功        : %d\n' "$OK"
+  printf '  跳过        : %d\n' "$SKIP"
+  printf '  失败        : %d\n' "$FAIL"
+  if [ "$FAIL" -gt 0 ]; then
+    printf '  失败项      :\n'
+    for f in "${FAILURES[@]}"; do printf '    - %s\n' "$f"; done
+    printf '=========================================\n'
+    exit 1
+  fi
+  printf '  结果        : OK（全部为 SYNTHETIC 演示数据）\n'
+  printf '=========================================\n'
+}
+
+alert_target_from_record() { # alert_target_from_record RECORD_ID
+  local rid="$1" status sid
+  [ -n "$rid" ] || return 1
+  api GET "/v1/anesthesia/records/$rid"
+  [ "$HTTP" = "200" ] || return 1
+  status="$(jget status)"
+  if [ "$status" != "IN_PROGRESS" ] && [ "$status" != "ONGOING" ]; then
+    return 1
+  fi
+  sid="$(jget scheduleId)"
+  [ -n "$sid" ] || return 1
+  api GET "/v1/scheduling/schedules/$sid"
+  [ "$HTTP" = "200" ] || return 1
+  ALERT_RECORD_ID="$rid"
+  ALERT_SCHEDULE_ID="$sid"
+  ALERT_ROOM_ID="$(jget roomId)"
+  ALERT_ROOM_NO="$(jget roomNo)"
+  [ -n "$ALERT_ROOM_ID" ]
+}
+
+discover_alert_target() {
+  local dates=() d i total sid st rid room
+  local cand_ids=() cand_rooms=()
+  dates=("$TODAY" "$TOMORROW" "$DAY_AFTER")
+  for i in 1 2 3 4 5 6; do
+    dates+=("$(iso_day $((0 - 86400 * i)))")
+  done
+  for d in "${dates[@]}"; do
+    api GET "/v1/scheduling/schedules?date=$d&page=1&size=200"
+    is_2xx || continue
+    total="$(jget meta.total)"; [ -z "$total" ] && total=0
+    i=0
+    while [ "$i" -lt "$total" ] && [ "$i" -lt 200 ]; do
+      sid="$(jget "items.$i.scheduleId")"
+      [ -z "$sid" ] && break
+      room="$(jget "items.$i.roomId")"
+      api GET "/v1/anesthesia/records?scheduleId=$sid"
+      if is_2xx; then
+        rid="$(jget "items.0.recordId")"
+        st="$(jget "items.0.status")"
+        if [ -n "$rid" ] && [ "$st" = "IN_PROGRESS" ]; then
+          ALERT_RECORD_ID="$rid"
+          ALERT_SCHEDULE_ID="$sid"
+          ALERT_ROOM_ID="$room"
+          ALERT_ROOM_NO=""
+          return 0
+        fi
+        if [ -z "$rid" ] && [ "${#cand_ids[@]}" -lt 5 ]; then
+          cand_ids+=("$sid")
+          cand_rooms+=("$room")
+        fi
+      fi
+      i=$((i + 1))
+    done
+  done
+  # 没有进行中记录时，在最近的空闲台次上补建一张并记录 ANESTHESIA_START。
+  for i in "${!cand_ids[@]}"; do
+    sid="${cand_ids[$i]}"
+    room="${cand_rooms[$i]}"
+    api POST /v1/anesthesia/records "{\"scheduleId\":\"$sid\",\"anesthesiaType\":\"GENERAL\"}"
+    if ! is_2xx; then continue; fi
+    rid="$(jget recordId)"
+    api POST "/v1/anesthesia/records/$rid/events" \
+      "{\"eventType\":\"ANESTHESIA_START\",\"occurredAt\":\"$(iso 0)\",\"source\":\"MANUAL\",\"note\":\"演示：设备告警样本（合成）\"}"
+    if ! is_2xx; then
+      warn "补建记录单后写入 ANESTHESIA_START 失败（HTTP $HTTP），跳过该台次"
+      continue
+    fi
+    ALERT_RECORD_ID="$rid"
+    ALERT_SCHEDULE_ID="$sid"
+    ALERT_ROOM_ID="$room"
+    ALERT_ROOM_NO=""
+    info "未找到进行中记录，已在空闲台次 $sid 新建记录单并开始麻醉（SYNTHETIC）"
+    sleep 2
+    return 0
+  done
+  return 1
+}
+
+build_vitals_frames() { # build_vitals_frames STARTED_AT_ISO OUTFILE BATCH_KEY → 打印帧数
+  python3 - "$1" "$2" "$3" <<'PY'
+import datetime, json, sys
+from zoneinfo import ZoneInfo
+tz = ZoneInfo('Asia/Shanghai')
+started = datetime.datetime.fromisoformat(sys.argv[1])
+if started.tzinfo is None:
+    started = started.replace(tzinfo=tz)
+now = datetime.datetime.now(tz)
+start = max(started + datetime.timedelta(seconds=1), now - datetime.timedelta(seconds=180))
+end = now - datetime.timedelta(seconds=2)
+if end <= start:
+    start = started + datetime.timedelta(seconds=1)
+    end = start + datetime.timedelta(seconds=2)
+span = max(1, int((end - start).total_seconds()))
+count = max(2, min(40, span))
+step = max(1.0, span / (count - 1))
+seq0 = int(end.timestamp())
+frames = []
+for i in range(count):
+    t = start + datetime.timedelta(seconds=min(span, round(i * step)))
+    phase = i / (count - 1)
+    frames.append({
+        "seq": seq0 + i,
+        "measuredAt": t.isoformat(timespec='seconds'),
+        "hr": 134 if 0.55 <= phase <= 0.75 else 78,
+        "spo2": 88 if 0.25 <= phase <= 0.55 else 98,
+        "nibpSys": 76 if 0.60 <= phase <= 0.80 else 118,
+        "nibpDia": 42 if 0.60 <= phase <= 0.80 else 76,
+        "etco2": 35.0,
+        "temp": 36.6,
+        "quality": 0,
+        "flags": [],
+        "source": "AUTO",
+    })
+json.dump({"batchKey": sys.argv[3], "frames": frames},
+          open(sys.argv[2], 'w', encoding='utf-8'), ensure_ascii=False)
+print(count)
+PY
+}
+
+register_demo_device() { # register_demo_device DEVICE_ID DEVICE_TYPE LABEL
+  local id="$1" type="$2" label="$3"
+  api POST /v1/devices "{\"gatewayId\":\"$DEVICE_GATEWAY\",\"deviceId\":\"$id\",\"roomId\":\"$ALERT_ROOM_ID\",\"deviceType\":\"$type\",\"status\":\"ONLINE\"}"
+  case "$HTTP" in
+    201) ok "$label 登记：$DEVICE_GATEWAY/$id → 术间 ${ALERT_ROOM_NO:-$ALERT_ROOM_ID}"; return 0 ;;
+    200) ok "$label 幂等登记/换台绑定：$DEVICE_GATEWAY/$id → 术间 ${ALERT_ROOM_NO:-$ALERT_ROOM_ID}"; return 0 ;;
+    403) bad "$label 登记（403：需要 m2:device:write）"; return 1 ;;
+    *)   bad "$label 登记"; return 1 ;;
+  esac
+}
+
+seed_device_alerts() {
+  local mode="${1:-full}" started batch_key frame_file frame_count inserted dup rej alerts=0 vitals=0 i rules
+  begin_section "设备与告警（登记/绑定/ingest/评估）"
+  if [ -z "$ALERT_RECORD_ID" ]; then
+    bad "没有可用的进行中记录单"
+    end_section
+    return 1
+  fi
+  info "目标记录单：$ALERT_RECORD_ID（台次 $ALERT_SCHEDULE_ID，术间 ${ALERT_ROOM_NO:-$ALERT_ROOM_ID}）"
+
+  register_demo_device "$DEVICE_MONITOR" MONITOR "监护仪"
+  register_demo_device "$DEVICE_MACHINE" ANESTHESIA_MACHINE "麻醉机"
+  api GET /v1/devices
+  if is_2xx; then
+    ok "设备台账可查询（$(jlen items) 台）"
+  else
+    bad "设备台账查询"
+  fi
+
+  api GET "/v1/anesthesia/records/$ALERT_RECORD_ID"
+  if [ "$HTTP" != "200" ]; then
+    bad "读取目标记录单（开始时间未知）"
+    end_section
+    return 1
+  fi
+  started="$(jget startedAt)"
+  # 记录刚开始（startedAt 在未来/刚好现在）时等几秒，保证体征落在记录时间窗内。
+  age="$(python3 - "$started" <<'PY' 2>/dev/null || echo 0
+import datetime, sys
+from zoneinfo import ZoneInfo
+try:
+    t = datetime.datetime.fromisoformat(sys.argv[1])
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+    print(int((datetime.datetime.now(t.tzinfo) - t).total_seconds()))
+except Exception:
+    print(0)
+PY
+)"
+  case "$age" in ''|*[!0-9-]*) age=0 ;; esac
+  if [ "$age" -lt 2 ]; then
+    info "记录单刚开始（${age}s），等待 3s 让体签名落入记录时间窗"
+    sleep 3
+  fi
+  batch_key="${DEVICE_GATEWAY}-${DEVICE_MONITOR}-${BATCH}-$(date +%s)"
+  frame_file="$TMP_DIR/frames-$BATCH.json"
+  frame_count="$(build_vitals_frames "$started" "$frame_file" "$batch_key")"
+  case "$frame_count" in
+    ''|0) bad "生成合成体征帧"; end_section; return 1 ;;
+  esac
+  ok "合成体征帧 $frame_count 帧（含 SpO2 88%、HR 134、MAP 低值样本）"
+
+  api_gateway_file "/v1/devices/$DEVICE_GATEWAY/$DEVICE_MONITOR/ingest" "$frame_file"
+  if is_2xx; then
+    inserted="$(jget acceptedRows)"; dup="$(jget duplicateRows)"; rej="$(jget rejectedRows)"
+    ok "体征 ingest（accepted=${inserted:-0}，duplicate=${dup:-0}，rejected=${rej:-0}）"
+  elif [ "$HTTP" = "401" ]; then
+    if [ "$mode" = "standalone" ]; then
+      bad "体征 ingest（401：网关令牌未注入或不匹配）"
+    else
+      skip "体征 ingest（401：API 未注入网关令牌；全量模式下不阻断，可用 --section alerts 单独验证）"
+    fi
+    warn "本地演示：bash scripts/demo-local.sh stop && bash scripts/demo-local.sh start（默认注入 demo-gateway-token，仅 dev）；或设置 ANESOP_M2_ACQUISITION_GATEWAY_TOKEN 后重启 API。生产必须由密钥托管注入，禁止使用默认值。"
+    end_section
+    [ "$mode" = "standalone" ] && return 1
+    return 0
+  elif [ "$HTTP" = "404" ]; then
+    bad "体征 ingest（404：设备未登记）"
+    end_section
+    return 1
+  else
+    bad "体征 ingest"
+    end_section
+    return 1
+  fi
+
+  # 正常链路由 ingest 提交后的领域事件实时评估；这里再调手动评估做补偿/幂等验证。
+  api POST "/v1/anesthesia/records/$ALERT_RECORD_ID/alerts/evaluate"
+  if is_2xx; then
+    ok "告警评估：规则 $(jget evaluatedRules) 条，采样 $(jget sampledFrames) 帧，新增 $(jget createdAlerts)"
+  else
+    bad "告警评估"
+  fi
+
+  for i in $(seq 1 "$ALERT_WAIT_SECONDS"); do
+    api GET "/v1/anesthesia/records/$ALERT_RECORD_ID/alerts"
+    if is_2xx; then
+      alerts="$(jlen items)"
+      [ "$alerts" -ge 1 ] && break
+    fi
+    sleep 1
+  done
+  if [ "$alerts" -ge 1 ]; then
+    rules="$(python3 - "$RESP_FILE" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    items = json.load(open(sys.argv[1], encoding='utf-8')).get('items') or []
+except Exception:
+    items = []
+print(",".join(sorted({str(i.get('ruleCode')) for i in items if i.get('ruleCode')})))
+PY
+)"
+    ALERT_RULES="$rules"
+    ok "告警列表非空：$alerts 条（规则 ${rules:-?}）"
+  else
+    bad "告警列表为空（需记录已开始且样本落在记录时间窗内）"
+  fi
+
+  api GET "/v1/anesthesia/records/$ALERT_RECORD_ID"
+  if is_2xx; then
+    vitals="$(jlen vitalSigns)"
+    if [ "$vitals" -ge 1 ]; then
+      ok "记录单 vitalSigns 非空：$vitals 条（truncated=$(jget vitalSignsTruncated)）"
+    else
+      bad "记录单 vitalSigns 为空"
+    fi
+  else
+    bad "读取记录单详情"
+  fi
+
+  end_section
+  [ "$alerts" -ge 1 ] && [ "$vitals" -ge 1 ]
+}
+
+run_device_alert_section() { # run_device_alert_section full|standalone
+  local mode="$1"
+  if [ "$mode" = "full" ] && [ -n "${INPROGRESS_RECORD:-}" ] && alert_target_from_record "$INPROGRESS_RECORD"; then
+    info "使用本次灌入的进行中记录单"
+  elif discover_alert_target; then
+    info "复用已有进行中记录单"
+  else
+    begin_section "设备与告警（登记/绑定/ingest/评估）"
+    bad "未找到进行中记录单（可先执行全量灌入，或确认演示库已有记录）"
+    end_section
+    return 1
+  fi
+  seed_device_alerts "$1"
+}
+
+# ---------------------------------------------------------------------------
 # dry-run 计划
 # ---------------------------------------------------------------------------
 if [ "$DRY_RUN" = "1" ]; then
   cat <<PLAN
 [seed-demo-data] 计划（dry-run，不发起写请求）
   API：$BASE_URL
+  执行段：$SECTION_FILTER（all=全量；alerts=仅设备与告警）
   账号：$ADMIN_USER（首次登录自动改密）；$SELF_USER（仅消息中心未读校验）
   演示组织：麻醉科 $DEPT_ANES / 手术室 $DEPT_OR；术间从 GET /v1/scheduling/rooms 动态读取
 
@@ -298,6 +657,10 @@ if [ "$DRY_RUN" = "1" ]; then
     - 抢救 1、告警评估、UDI 使用 1
   M2 复苏与随访
     - 复苏 3（不同 Aldrete，1 转出）、随访 3（H24/H48、NRS/PONV、PCA 参数）
+  M2 设备与告警（--section alerts 可单独执行）
+    - 登记 2 台设备（监护仪/麻醉机）并绑定进行中记录所在术间
+    - 网关令牌 ingest 合成体征帧（HR/SpO2/NIBP/EtCO2/体温，含 SpO2 低值样本）
+    - 触发 SpO2 低告警；断言记录单 vitalSigns 非空、告警列表非空
   M4 药品与麻精
     - 新增药品 $DRUG_COUNT（麻精/高危/别名）、麻精专册/交接/基数/日结（平账）
   M4 人员
@@ -360,6 +723,13 @@ SCHED_IDS=()
 STAFF_IDS=()
 APPROVER_IDS=()
 PATIENT_IDS=()
+
+if [ "$SECTION_FILTER" = "alerts" ]; then
+  info "按段执行：仅「设备与告警」（跳过其余段，复用已有业务数据）"
+  run_device_alert_section standalone
+  print_summary
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # 1. M1 手术申请（HIS 导入 + 手工申请 + 取消）
@@ -1152,7 +1522,14 @@ if [ "${#RECORD_IDS[@]}" -ge 5 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. M4 人员（档案 / 分级授权 / 排班 / 培训）
+# 7. M2 设备与告警（登记/绑定/ingest/评估）
+#    放在复苏/随访之后：此时「进行中」记录的 startedAt 已在过去，体征样本
+#    能落入记录时间窗并被告警引擎评估。
+# ---------------------------------------------------------------------------
+run_device_alert_section full
+
+# ---------------------------------------------------------------------------
+# 8. M4 人员（档案 / 分级授权 / 排班 / 培训）
 # ---------------------------------------------------------------------------
 begin_section "M4 人员（档案/授权/排班/培训）"
 
@@ -1468,17 +1845,4 @@ fi
 # ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
-printf '\n================ 灌入汇总 ================\n'
-printf '  API        : %s\n' "$BASE_URL"
-printf '  批次        : %s\n' "$BATCH"
-printf '  成功        : %d\n' "$OK"
-printf '  跳过        : %d\n' "$SKIP"
-printf '  失败        : %d\n' "$FAIL"
-if [ "$FAIL" -gt 0 ]; then
-  printf '  失败项      :\n'
-  for f in "${FAILURES[@]}"; do printf '    - %s\n' "$f"; done
-  printf '=========================================\n'
-  exit 1
-fi
-printf '  结果        : OK（全部为 SYNTHETIC 演示数据）\n'
-printf '=========================================\n'
+print_summary

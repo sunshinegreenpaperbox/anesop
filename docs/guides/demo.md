@@ -62,6 +62,8 @@ source scripts/env.sh
 # 终端 1：后端（需 PG；dev profile 允许演示账号与进程内 JWT 密钥）
 ./scripts/mvn.sh -B -f apps/api/pom.xml -pl api-bootstrap -am -DskipTests package
 java -jar apps/api/api-bootstrap/target/api-bootstrap-*.jar --spring.profiles.active=dev
+# 或一键启停本地演示 PG(55432)+API(8080)：bash scripts/demo-local.sh start
+# 该脚本默认注入仅 dev 使用的采集网关令牌 demo-gateway-token（生产禁止使用默认值）
 
 # 健康检查（预期 {"status":"UP",...}）
 curl -s http://localhost:8080/actuator/health
@@ -187,6 +189,7 @@ psql "postgresql://anesop:anesop@127.0.0.1:5432/anesop" -c "
 bash scripts/seed-demo-data.sh --dry-run        # 只打印计划，不写数据
 bash scripts/seed-demo-data.sh                  # 默认 http://127.0.0.1:8080
 bash scripts/seed-demo-data.sh --base-url http://127.0.0.1:8080
+bash scripts/seed-demo-data.sh --section alerts # 只跑「设备与告警」段（4–10 秒，复用已有进行中记录）
 
 # 口令可覆盖（默认值仅本地演示）：
 DEMO_ADMIN_PASSWORD='当前口令' \
@@ -209,6 +212,7 @@ bash scripts/seed-demo-data.sh
 | M2 术前 | 访视评估 6 份（ASA I–IV、Mallampati I–IV、RCRI/Apfel/STOP-BANG/DASI 组合），1 份 finalize；知情同意 10 份（签署 8、拒绝 1、签署后撤销 1）；三方核查 8 个申请 + 1 个申请多版本（先 Time-out、再补 Sign-out） |
 | M2 术中 | 记录单 5 张：锁定+修订 1、锁定 2、进行中 1、草稿 1；事件覆盖麻醉开始/诱导/插管/切皮/拔管/结束；麻精用药 1（第二核对人 `demo_self`）+ 普通用药 1；输液/出入量各 1；抢救 1；告警评估 2 次；锁单后写入被 409 拒绝（状态机验证） |
 | M2 复苏/随访 | 复苏 3 份（Aldrete 10/9/9，1 份转出 WARD）；随访 3 份（H24/H48、NRS/PONV）；PCIA/PCEA 参数各 1 |
+| M2 设备/告警 | 设备 2 台（监护仪/麻醉机）绑定进行中记录术间；网关令牌 ingest 40 帧合成体征（含 SpO2 88%、HR 134 样本）；触发 `SPO2_LOW`/`HR_HIGH` 告警；记录单 `vitalSigns` 非空（见 6.5） |
 | M4 药品/麻精 | 新增药品 5（麻精 2、高危/镇静/升压等，含别名）；麻精专册、柜交接、基数、日结各 1（日结平账 `5+2-2-0=5`） |
 | M4 人员 | 人员档案 4、分级授权 R1–R5（R1/R2 双人审批）、排班 4、培训 4（1 条 20 天内到期）；另建 2 个 SYNTHETIC 审批账号 `demo_approver_1/2`（SYS_ADMIN，仅本地） |
 | M4 耗材 | 主数据 5、出入库 8（高值耗材只走 UDI，不允许裸数量）、UDI 5（1 已使用并绑定进行中记录）、SPD 模拟同步 1 |
@@ -220,11 +224,12 @@ bash scripts/seed-demo-data.sh
 
 - 业务数据（申请、台次、记录、随访、质控等）**每次追加**，单号带批次后缀（`SYNTHETIC-…-<batch>`）；
   主数据（药品/人员/耗材/审批账号）按编码/用户名去重，已存在则跳过。
-- 排程时段有限：反复灌入会逐渐占满术间时段，晚期运行可能出现「当日无空闲时段」跳过；
-  需要干净的全量演示时请重建演示库（见第 8 节）。
+- 排程时段有限：目标日/术间已满时脚本自动顺延到 +3~+5 天的空闲时段，保证记录/复苏等后续流程不断；
+  连 +5 天也无空位时按「跳过」计数。反复灌入会不断累积数据，需要干净的全量演示时请重建演示库（见第 8 节）。
 - 已知接口边界（脚本不绕过）：当前 API 没有申请 `ACCEPTED`/`SCHEDULED` 流转端点，排程后申请仍为
-  `SUBMITTED`，脚本覆盖 `SUBMITTED` 与 `CANCELLED`；未配置设备网关令牌时告警评估采样 0 帧、
-  新增告警为 0（接口仍返回 200）；RCA 复核仅到阶段 1（`rectificationCompleted=false` 为服务端约束）。
+  `SUBMITTED`，脚本覆盖 `SUBMITTED` 与 `CANCELLED`；API 未注入网关令牌时设备 ingest 返回 401、
+  告警仍为 0（接口 fail-closed），`demo-local.sh start` 默认注入演示令牌（仅 dev，见 6.5）；
+  RCA 复核仅到阶段 1（`rectificationCompleted=false` 为服务端约束）。
 - 失败会打印脱敏后的响应并最终非零退出；不输出 token/口令/患者标识。
 
 ### 6.4 快速抽查
@@ -242,18 +247,70 @@ curl -s "$BASE/v1/qc/adverse-events?page=1&size=5" -H "Authorization: Bearer $TO
 记录单按台次查询：`GET /v1/anesthesia/records?scheduleId=<台次ID>`（契约必填），再用
 `/events`、`/pacu-records?recordId=`、`/followups?recordId=` 查看时间轴、复苏与随访。
 
+### 6.5 设备与告警演示（采集 ingest + 术中告警）
+
+> 为什么单独做：M2 告警由「采集 ingest 成功提交后的领域事件」实时评估落库，没有体征样本时
+> `m2_anes.alert` 恒为 0。本段通过真实设备接口补齐“设备 → 体征 → 告警”链路。
+
+```bash
+# 推荐：只跑设备与告警段（4–10 秒，不重复灌业务数据）
+bash scripts/seed-demo-data.sh --section alerts
+# 全量灌入也包含本段（位于复苏/随访之后，保证记录 startedAt 已在过去）
+bash scripts/seed-demo-data.sh
+```
+
+脚本行为（全部走 REST API，不使用 SQL 直插）：
+
+1. 复用一个 `IN_PROGRESS` 麻醉记录单（按台次扫描；没有则在最近的空闲台次新建并记录
+   `ANESTHESIA_START`），读取其记录单与术间；
+2. `POST /v1/devices` 登记 2 台设备（`GW-DEMO-01/SIM-MON-DEMO-01` 监护仪、
+   `GW-DEMO-01/SIM-VENT-DEMO-01` 麻醉机）并绑定该术间（需 `m2:device:write`，`demo_admin` 有）；
+3. `POST /v1/devices/{gatewayId}/{deviceId}/ingest` 上传 40 帧合成体征
+   （HR/SpO2/NIBP/EtCO2/体温，含 SpO2 88%、HR 134、MAP 低值样本），header
+   `X-Gateway-Token` 取 `ANESOP_M2_ACQUISITION_GATEWAY_TOKEN`（默认 `demo-gateway-token`）；
+4. `POST /v1/anesthesia/records/{recordId}/alerts/evaluate` 做补偿/幂等评估（正常链路由 ingest
+   提交后的领域事件实时评估，手动评估通常为 0）；
+5. 断言并输出：`GET /records/{recordId}/alerts` 非空（演示通常得到 `SPO2_LOW`/`HR_HIGH`），
+   `GET /records/{recordId}` 的 `vitalSigns` 非空；任一为空则非零退出。
+
+网关令牌用途与边界：
+
+| 项 | 说明 |
+|---|---|
+| 变量 | `ANESOP_M2_ACQUISITION_GATEWAY_TOKEN`（映射 `anesop.m2.acquisition.gateway-token`） |
+| 用途 | 仅用于采集网关 `ingest` 的 `X-Gateway-Token`，与用户 JWT 分离；不落日志/审计/错误响应 |
+| 本地默认 | `scripts/demo-local.sh start` 默认注入 `demo-gateway-token`（仅 dev/demo；可用同名环境变量覆盖） |
+| 生产 | 必须由院方密钥托管注入随机值（如 `openssl rand -base64 32`）；**未注入即 401（fail-closed）**，禁止使用默认值 |
+
+若 `ingest` 返回 401（API 启动时未注入令牌），脚本会打印明确提示；本地先
+`bash scripts/demo-local.sh stop && bash scripts/demo-local.sh start` 重启（只重启，不删数据），
+再用 `bash scripts/demo-local.sh status` 看令牌探针（`404=令牌通过且设备未登记`，`401=未注入/不匹配`）。
+
+手工抽查（把 `<recordId>` 换成脚本输出的目标记录单）：
+
+```bash
+BASE=http://127.0.0.1:8080
+TOKEN=$(curl -s -X POST "$BASE/v1/auth/login" -H 'Content-Type: application/json' \
+  -d '{"username":"demo_admin","password":"Anesop@2026#Demo"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["accessToken"])')
+curl -s "$BASE/v1/anesthesia/records/<recordId>/alerts" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+curl -s "$BASE/v1/anesthesia/records/<recordId>" -H "Authorization: Bearer $TOKEN" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("vitalSigns:", len(d["vitalSigns"]))'
+curl -s "$BASE/v1/devices" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
 ## 7. 完整业务流程（M1/M2 起逐段可用）
 
 | # | ACCEPTANCE C 步骤 | 契约/入口（已存在） | 现状 | 预期结果（落地后） |
 |---|---|---|---|---|
 | 2 | 排程工作台新建/调整台次、制造并解决冲突 | `scheduling.yaml` | **已可用**（第 6 节脚本覆盖改台/停台/急诊/冲突） | 冲突 409 `SCHEDULE_CONFLICT`，调整后 200 |
 | 3 | 术前访视 → 风险评分 → 知情同意 → 三方核查 | `anesthesia.yaml`、`patient.yaml` | **已可用** | 访视单保存、评分回显、同意签署/拒绝/撤销、三方核查多版本 |
-| 4 | 术中开始记录 → 设备推送 → 预警 → 用药/事件 → 锁单 → 修订 | `anesthesia.yaml` + 采集网关 | **已可用**；设备推送需配置网关令牌 | 锁定后不可改；修订留痕、版本递增；锁单前校验同意/三方核查 |
+| 4 | 术中开始记录 → 设备推送 → 预警 → 用药/事件 → 锁单 → 修订 | `anesthesia.yaml` + 采集网关 | **已可用**；`seed-demo-data.sh --section alerts` 可一键补齐设备/体征/告警（需网关令牌，`demo-local.sh` 默认注入） | 锁定后不可改；修订留痕、版本递增；锁单前校验同意/三方核查 |
 | 5 | 复苏 → 转出 → 术后随访 | `anesthesia.yaml` | **已可用** | 复苏 Aldrete、转出、H24/H48 随访与镇痛参数 |
 | 6 | 质控指标与工作量报表 → 驾驶舱大屏 | `report.yaml`、`qc.yaml`、`dashboard.yaml` | **已可用** | 工作量/多维报表、锁定快照、质控闭环、看板四接口 |
 | 7 | 审计日志查询任意关键操作 | 表 `m0_platform.sys_audit_log` | **已可用**（第 4 节） | 操作人/时间/对象/结果/traceId 可追溯 |
 
-演示口径：M1–M8 主链路已可用；告警依赖设备采集（未配令牌时评估采样 0 帧）、HIS/SPD
+演示口径：M1–M8 主链路已可用；告警由设备采集触发（`--section alerts` 可一键演示，
+API 未注入网关令牌时 ingest 401、告警为 0）、HIS/SPD
 为 `SIMULATED` 适配器，演示时应明确标注“模拟/合成”。
 
 ## 8. 演示后清理
