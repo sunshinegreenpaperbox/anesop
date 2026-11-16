@@ -191,3 +191,27 @@ PY
 | 迁移 job 红 | 是否改了已执行脚本；版本是否跳号；生产 locations 是否混入 seed |
 | 覆盖率下降 | 新增分支是否有用例；是否把逻辑塞进被排除的 `config/**` |
 | 找不到改动 | 是否只改在写域内；跨模块依赖是否应先改 `api` 契约 |
+
+## 10. 远程仓库与推送（2026-11-16 建立）
+
+- 远程：`origin = git@github.com:sunshinegreenpaperbox/anesop.git`，默认分支 **`main`**
+- 当前已推送：`main`（148 个提交）与标签 `m1`–`m9`
+- 本机网络：GitHub **HTTPS 被阻断**，使用 SSH；本机系统 `ssh_config` 权限异常，仓库内已设置：
+  ```bash
+  git config core.sshCommand "ssh -F /dev/null -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile=$PWD/.cache/known_hosts"
+  ```
+  团队成员各自把公钥加入 GitHub（Settings → SSH keys）即可；不要提交私钥。
+- **仓库规则限制**：GitHub ruleset 对单次推送的分支+标签数量上限为 **5**，因此：
+  ```bash
+  git push -u origin main          # 先推分支（单次 1 个 ref）
+  git push origin m1 m2 m3 m4 m5   # 标签分批，每批 ≤5
+  git push origin m6 m7 m8 m9
+  ```
+  日常功能分支 PR 不受影响；不要 force push 已共享的 `main`/标签。
+- 首次建立（记录用）：
+  ```bash
+  git remote add origin git@github.com:sunshinegreenpaperbox/anesop.git
+  git push -u origin main
+  git push origin --tags   # 若超出 5 个标签会被规则拒绝，需分批
+  ```
