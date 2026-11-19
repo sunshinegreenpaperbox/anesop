@@ -56,7 +56,7 @@ fail() { printf '[demo-local] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'USAGE'
-用法：bash scripts/demo-local.sh {start|stop|status|seed|--help}
+用法：bash scripts/demo-local.sh {start|stop|status|seed|--help}\n  说明：start 幂等；已初始化时不会重跑迁移/Flyway。Ctrl+C 后请用 stop 清理，或再次 start（会自动清理残留 pid/socket）。
 
   start    初始化（首次）→ 启动 PostgreSQL(55432) → 启动 API(8080)
   stop     停止 API 与 PostgreSQL（不删除数据）
@@ -92,9 +92,45 @@ token_probe() {
   esac
 }
 
+# 只认真正可建立 TCP 连接；不要用 socket 文件存在性判断（异常退出/重启后会残留 socket 导致误报“已在运行”）
 pg_ready() {
-  "$PGBIN/postgres" --version >/dev/null 2>&1 || return 1
-  (exec 3<>"/dev/tcp/127.0.0.1/$PGPORT") >/dev/null 2>&1 || [ -S "$PGROOTDIR/.s.PGSQL.$PGPORT" ]
+  (exec 3<>"/dev/tcp/127.0.0.1/$PGPORT") >/dev/null 2>&1
+}
+
+# 清理上次异常退出（Ctrl+C/断电）遗留的 postmaster.pid 与 socket；仅在 PG 未运行时执行。
+# 判断 pid 是否真是"本数据目录的 postgres"：重启/命名空间变化后 PID 会被复用，
+# 仅用 kill -0 会把当前 shell 误判为 PostgreSQL（常见于断电重启后的 postmaster.pid）。
+pid_is_our_postgres() {
+  local pid="${1:-}"
+  [ -n "$pid" ] || return 1
+  if [ -r "/proc/$pid/cmdline" ]; then
+    local cmd
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    case "$cmd" in
+      *postgres*"$PGDATA"*) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  command -v ps >/dev/null 2>&1 || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -q "postgres.*${PGDATA}" && return 0
+  return 1
+}
+
+cleanup_stale_pg() {
+  pg_ready && return 0
+  if [ -f "$PGDATA/postmaster.pid" ]; then
+    local stale_pid
+    stale_pid="$(head -n1 "$PGDATA/postmaster.pid" 2>/dev/null || true)"
+    if pid_is_our_postgres "$stale_pid"; then
+      return 0
+    fi
+    info "清理上次异常退出的 postmaster.pid（pid=${stale_pid:-未知} 已不是本演示库进程）"
+    rm -f "$PGDATA/postmaster.pid"
+  fi
+  if [ -e "$PGROOTDIR/.s.PGSQL.$PGPORT" ] || [ -e "$PGROOTDIR/.s.PGSQL.$PGPORT.lock" ]; then
+    info "清理残留 socket：$PGROOTDIR/.s.PGSQL.$PGPORT"
+    rm -f "$PGROOTDIR/.s.PGSQL.$PGPORT" "$PGROOTDIR/.s.PGSQL.$PGPORT.lock"
+  fi
 }
 
 prepare_pg() {
@@ -114,16 +150,51 @@ start_pg() {
     info "PostgreSQL 已在 127.0.0.1:$PGPORT 运行"
     return 0
   fi
+  # 上次异常退出（Ctrl+C/断电/重启）可能留下 postmaster.pid 或 socket：先清理再启动
+  cleanup_stale_pg
   info "启动 PostgreSQL 16（port=$PGPORT）"
   LD_LIBRARY_PATH="$PGLIB" nohup "$PGBIN/postgres" -D "$PGDATA" -p "$PGPORT" \
     -k "$PGROOTDIR" -c listen_addresses=127.0.0.1 -c fsync=off -c full_page_writes=off \
     >"$PG_LOG" 2>&1 &
   echo $! > "$PID_DIR/pg.pid"
   for _ in $(seq 1 30); do pg_ready && break; sleep 1; done
-  pg_ready || fail "PostgreSQL 启动失败，见 $PG_LOG"
+  if ! pg_ready; then
+    tail -n 20 "$PG_LOG" >&2 || true
+    fail "PostgreSQL 启动失败（日志：$PG_LOG）"
+  fi
+}
+
+# 演示库是否已迁移过（flyway_schema_history 存在且有记录）；已初始化则 start 不再触发 Maven/Flyway。
+db_initialized() {
+  local cp="$ROOT/.m2repo/org/postgresql/postgresql/42.7.5/postgresql-42.7.5.jar"
+  [ -f "$cp" ] || return 1
+  mkdir -p "$PGROOTDIR/java"
+  cat > "$PGROOTDIR/java/CheckDb.java" <<'JAVA'
+import java.sql.*;
+public class CheckDb {
+  public static void main(String[] a) throws Exception {
+    try (Connection c = DriverManager.getConnection(
+        "jdbc:postgresql://127.0.0.1:" + a[0] + "/" + a[2], a[1], "")) {
+      try (ResultSet rs = c.createStatement().executeQuery(
+          "SELECT count(*) FROM flyway_schema_history")) {
+        rs.next();
+        if (rs.getInt(1) > 0) System.exit(0);
+      }
+    } catch (Exception e) {
+      System.exit(1);
+    }
+    System.exit(1);
+  }
+}
+JAVA
+  java -cp "$cp" "$PGROOTDIR/java/CheckDb.java" "$PGPORT" "$DB_USER" "$DB_NAME" >/dev/null 2>&1
 }
 
 ensure_db_and_seed() {
+  if db_initialized; then
+    info "演示库已初始化（Flyway 记录存在），跳过迁移/种子；需要重灌请用：bash scripts/demo-local.sh seed"
+    return 0
+  fi
   # 用 JDBC 创建库（仓库内已有驱动），避免依赖 psql（S0-12 包不含 psql）
   local cp="$ROOT/.m2repo/org/postgresql/postgresql/42.7.5/postgresql-42.7.5.jar"
   [ -f "$cp" ] || fail "缺少 PostgreSQL JDBC 驱动：$cp"
@@ -175,16 +246,23 @@ start_api() {
 }
 
 stop_all() {
-  if [ -f "$API_PID" ] && kill -0 "$(cat "$API_PID")" 2>/dev/null; then
-    info "停止 API（pid=$(cat "$API_PID")）"
-    kill "$(cat "$API_PID")" 2>/dev/null || true
+  if [ -f "$API_PID" ]; then
+    local api_pid; api_pid="$(cat "$API_PID" 2>/dev/null || true)"
+    if [ -n "$api_pid" ] && kill -0 "$api_pid" 2>/dev/null; then
+      info "停止 API（pid=$api_pid）"
+      kill "$api_pid" 2>/dev/null || true
+      for _ in $(seq 1 15); do kill -0 "$api_pid" 2>/dev/null || break; sleep 1; done
+      kill -0 "$api_pid" 2>/dev/null && kill -9 "$api_pid" 2>/dev/null || true
+    fi
     rm -f "$API_PID"
   fi
-  if [ -f "$PID_DIR/pg.pid" ] && kill -0 "$(cat "$PID_DIR/pg.pid")" 2>/dev/null; then
-    info "停止 PostgreSQL（pid=$(cat "$PID_DIR/pg.pid")）"
-    kill "$(cat "$PID_DIR/pg.pid")" 2>/dev/null || true
-    rm -f "$PID_DIR/pg.pid"
+  if pg_ready; then
+    info "停止 PostgreSQL（pg_ctl stop -m fast）"
+    LD_LIBRARY_PATH="$PGLIB" "$PGBIN/pg_ctl" -D "$PGDATA" stop -m fast >/dev/null 2>&1 || true
   fi
+  rm -f "$PID_DIR/pg.pid"
+  cleanup_stale_pg
+  info "已停止（若仍有残留进程：bash scripts/demo-local.sh status 查看）"
 }
 
 status_all() {

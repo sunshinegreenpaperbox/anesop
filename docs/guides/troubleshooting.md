@@ -198,3 +198,38 @@ Base64 解码后必须 ≥32 字节，禁止 `CHANGE_ME` 一类占位值。dev �
   若第三方工具仍报编码错误，可把仓库放到纯 ASCII 路径再试，并在交接单记录。
 - **需要完整重置本地环境**：删除 `node_modules/`、各模块 `target/` 后重跑
   `pnpm install --frozen-lockfile && ./scripts/check.sh`；**不要**删除 `pnpm-lock.yaml`。
+
+## 12. `demo-local.sh start` 报 PostgreSQL 连不上 / 误报“已在运行”
+
+**症状**
+- 输出 `PostgreSQL 已在 127.0.0.1:55432 运行`，紧接着 `CreateDb` 报
+  `Connection refused`、`[demo-local] ERROR: 创建演示库失败`；
+- 或重启电脑后 `start` 一直失败，但端口实际没有监听。
+
+**原因**
+- 上次用 **Ctrl+C/直接关终端/断电** 中断演示，PostgreSQL 未正常关闭，遗留：
+  `.cache/demo-pg/data/postmaster.pid` 与 `.cache/demo-pg/.s.PGSQL.55432*`；
+- 重启后 PID 会被系统复用，旧 pid 文件里的 PID 可能恰好是别的进程，单靠
+  `kill -0` 会误判“PG 还在运行”；
+- 旧版脚本用“socket 文件存在”判断 PG，残留 socket 造成误报，于是跳过启动直接连库。
+
+**处理（新版脚本已自动处理）**
+```bash
+bash scripts/demo-local.sh stop     # 清理残留 pid/socket（若 PG 在跑则正常停止）
+bash scripts/demo-local.sh status   # 应显示 PostgreSQL: DOWN
+bash scripts/demo-local.sh start
+```
+若仍失败，手动删除残留后重试：
+```bash
+rm -f .cache/demo-pg/data/postmaster.pid
+rm -f .cache/demo-pg/.s.PGSQL.55432 .cache/demo-pg/.s.PGSQL.55432.lock
+bash scripts/demo-local.sh start
+```
+> 修复后：`start` 只认真实 TCP 连接，并在启动前校验 pid 文件对应的进程确实是
+> “本数据目录的 postgres”；演示库已初始化（Flyway 记录存在）时**跳过迁移/种子，
+> 不会再触发 Maven 编译**。需要重灌数据用 `bash scripts/demo-local.sh seed`。
+
+**正确的停止方式**
+- 用 `bash scripts/demo-local.sh stop`（会 stop API、`pg_ctl stop -m fast`、清理残留）；
+- 不要直接 Ctrl+C：它只终止前台脚本，后台 PG/API 与可能正在跑的 Maven/Flyway
+  子进程未必立即结束，容易留下脏状态。
